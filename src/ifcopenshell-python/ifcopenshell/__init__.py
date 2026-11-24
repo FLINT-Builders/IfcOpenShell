@@ -56,6 +56,7 @@ Example:
 
 from __future__ import annotations
 
+import builtins
 import os
 import sys
 import tempfile
@@ -150,6 +151,11 @@ def clear_plugin_search_paths() -> None:
     ifcopenshell_wrapper.clear_plugin_search_paths()
 
 
+IFCZIP_MAX_ENTRIES = 512
+IFCZIP_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+IFCZIP_MAX_COMPRESSION_RATIO = 100
+
+
 class Error(Exception):
     """Error used when a generic problem occurs"""
 
@@ -229,13 +235,33 @@ def open(
     if format == ".ifcXML":
         raise NotImplementedError("Reading .ifcXML files is not currently supported.")
     if format == ".ifcZIP":
-        with tempfile.TemporaryDirectory() as unzipped_path:
-            with zipfile.ZipFile(path) as zf:
-                for name in zf.namelist():
-                    if Path(name).suffix.lower() in (".ifc", ".ifcxml"):
-                        return open(zf.extract(name, unzipped_path), logger=logger)
-                else:
-                    raise LookupError(f"No .ifc or .ifcXML file found in {path}")
+        with zipfile.ZipFile(path) as zf:
+            members = zf.infolist()
+            if len(members) > IFCZIP_MAX_ENTRIES:
+                raise ValueError(f"IFC-ZIP archive has more than {IFCZIP_MAX_ENTRIES} entries: {path}")
+            uncompressed_size = sum(member.file_size for member in members)
+            compressed_size = sum(member.compress_size for member in members)
+            if uncompressed_size > IFCZIP_MAX_UNCOMPRESSED_BYTES:
+                raise ValueError(f"IFC-ZIP archive expands to more than {IFCZIP_MAX_UNCOMPRESSED_BYTES} bytes: {path}")
+            if uncompressed_size > compressed_size * IFCZIP_MAX_COMPRESSION_RATIO:
+                raise ValueError(f"IFC-ZIP archive compression ratio exceeds {IFCZIP_MAX_COMPRESSION_RATIO}: {path}")
+            for member in members:
+                suffix = Path(member.filename).suffix.lower()
+                if not member.is_dir() and suffix in (".ifc", ".ifcxml"):
+                    break
+            else:
+                raise LookupError(f"No .ifc or .ifcXML file found in {path}")
+            with tempfile.TemporaryDirectory() as unzipped_path:
+                unzipped_file = os.path.join(unzipped_path, "model" + suffix)
+                # Declared sizes come from the archive itself, so enforce them while decompressing.
+                written = 0
+                with zf.open(member) as source, builtins.open(unzipped_file, "wb") as target:
+                    while chunk := source.read(1024 * 1024):
+                        written += len(chunk)
+                        if written > member.file_size:
+                            raise ValueError(f"IFC-ZIP member is larger than its declared size: {path}")
+                        target.write(chunk)
+                return open(unzipped_file, logger=logger)
     if format == ".ifcSQLite":
         return sqlite(path)
     if should_stream:
