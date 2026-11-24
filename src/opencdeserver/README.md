@@ -60,8 +60,9 @@ This is where methods that read or write data from database are declared.
 Some general methods to interact with database.
 
 /api/app/db_config
-When the Neo4j container is launched it will initialize a database
-with some test data from init.cypher. This initial state does not represent
+When the API starts against a database without any users it will initialize
+it with some test data from init.cypher. Existing data is never deleted or
+reseeded. This initial state does not represent
 all data. Model.cypher contains a more complete model.
 
 /api/app/ifcgraph
