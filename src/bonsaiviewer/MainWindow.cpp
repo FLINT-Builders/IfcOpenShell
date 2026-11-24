@@ -25,6 +25,7 @@
 #include "../ifcviewer/ViewportWindow.h"
 #include "SessionState.h"
 #include "components/Buttons.h"
+#include "components/MessageBox.h"
 #include "components/Panel.h"
 #include "components/Style.h"
 #include "components/Tabs.h"
@@ -56,6 +57,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QProgressBar>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -162,7 +164,7 @@ void MainWindow::populateRecentMenu(QMenu* menu) {
 
     for (const QString& path : recent) {
         QAction* action = menu->addAction(QFileInfo(path).fileName());
-        action->setToolTip(path);
+        action->setToolTip(Qt::convertFromPlainText(path));
         connect(action, &QAction::triggered, this, [this, path]() {
             const bool opened = modules::project::commands::openProjectPath(
                 *session_state_, *this, *viewport_widget_->viewport(), path);
@@ -480,7 +482,9 @@ void MainWindow::setupPanels() {
 
 void MainWindow::setupStatus() {
     status_mode_label_ = new QLabel("Ready", this);
+    status_mode_label_->setTextFormat(Qt::PlainText);
     status_selection_label_ = new QLabel("No selection", this);
+    status_selection_label_->setTextFormat(Qt::PlainText);
     status_perf_label_ = new QLabel(this);
     status_memory_label_ = new QLabel(this);
     status_memory_label_->setVisible(false);
@@ -558,7 +562,7 @@ void MainWindow::setupLoader() {
     // status text + progress are already cleared there, we only show the modal.
     connect(session_state_, &bonsaiviewer::SessionState::loadError, this,
             [this](const QString& message) {
-        QMessageBox::warning(this, "Bonsai Viewer", message);
+        components::message_box::warning(this, "Bonsai Viewer", message);
     });
 
     connect(viewport_widget_->viewport(), &ViewportWindow::frameStatsUpdated, this,

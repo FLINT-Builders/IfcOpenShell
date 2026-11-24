@@ -133,9 +133,13 @@ QFrame* makeEntityBox(const bonsaiviewer::modules::properties::EntitySummary& en
     entity_text_layout->setContentsMargins(0, 0, 0, 0);
     entity_text_layout->setSpacing(2);
 
-    auto* entity_class_label = new QLabel(entity.entity_class, entity_text);
+    auto* entity_class_label = new QLabel(entity_text);
+    entity_class_label->setTextFormat(Qt::PlainText);
+    entity_class_label->setText(entity.entity_class);
     entity_class_label->setObjectName("entityClassLabel");
-    auto* entity_type_label = new QLabel(entity.predefined_type, entity_text);
+    auto* entity_type_label = new QLabel(entity_text);
+    entity_type_label->setTextFormat(Qt::PlainText);
+    entity_type_label->setText(entity.predefined_type);
     entity_type_label->setProperty("textRole", "secondary");
 
     entity_text_layout->addWidget(entity_class_label);

@@ -117,6 +117,7 @@ Eigen::Vector3d parseVector3(const QString& text) {
 
 QLabel* makeReadOnlyValue(QWidget* parent) {
     auto* label = new QLabel(parent);
+    label->setTextFormat(Qt::PlainText);
     label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     label->setWordWrap(true);
     return label;

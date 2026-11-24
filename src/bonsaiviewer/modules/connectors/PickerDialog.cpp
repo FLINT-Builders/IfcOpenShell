@@ -46,7 +46,9 @@ ConnectorPickerDialog::ConnectorPickerDialog(const std::vector<ConnectorManifest
     }
 
     auto* description_section = new components::Section("", components::SectionHeaderMode::Hidden, this);
-    auto* description_label = new QLabel(description, description_section);
+    auto* description_label = new QLabel(description_section);
+    description_label->setTextFormat(Qt::PlainText);
+    description_label->setText(description);
     description_label->setProperty("textRole", "secondary");
     description_label->setWordWrap(true);
     description_label->setAlignment(Qt::AlignCenter);
