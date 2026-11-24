@@ -16,6 +16,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
+import functools
 import re
 from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
@@ -39,6 +40,13 @@ import ifcopenshell.util.shape
 import ifcopenshell.util.shape_builder
 import ifcopenshell.util.system
 import ifcopenshell.util.unit
+
+try:
+    from re import _constants as _sre
+    from re import _parser as _sre_parse
+except ImportError:  # Python < 3.11
+    import sre_constants as _sre
+    import sre_parse as _sre_parse
 
 filter_elements_grammar = lark.Lark("""start: filter_group
     filter_group: facet_list ("+" facet_list)* "+"?
@@ -194,6 +202,262 @@ format_grammar = lark.Lark("""start: expression
 
     %ignore WS // Disregard spaces in text
 """)
+
+
+class BoundedPattern:
+    """A regular expression matched in time linear in the length of the input.
+
+    Selector queries are often read from model data (e.g. drawing filters or
+    text templates), so they must not be able to trigger catastrophic
+    backtracking in Python's ``re`` engine. Patterns are parsed with Python's
+    regex syntax and simulated as an NFA instead. Constructs which require
+    backtracking (backreferences, lookaround, conditionals, atomic groups and
+    possessive quantifiers) raise ``re.error``.
+
+    Matcher states are cached across calls. The work spent building new ones
+    is capped per call to :meth:`match`, which reports no match once the cap
+    is reached.
+    """
+
+    MAX_NODES = 500
+    MAX_WORK = 50_000
+    MAX_CACHE = 10_000
+
+    _CHAR, _SPLIT, _ASSERT, _ACCEPT = range(4)
+
+    def __init__(self, pattern: str):
+        self.pattern = pattern
+        parsed = _sre_parse.parse(pattern)
+        self.nodes: list[tuple] = []
+        self.position_tests: list = []
+        self.position_test_keys: dict = {}
+        self.accept = self._add((self._ACCEPT,))
+        self.start = self._compile(parsed, parsed.state.flags, self.accept)
+        self.closures: dict = {}
+        self.steps: dict = {}
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.pattern!r})"
+
+    def match(self, string: str) -> bool:
+        """Return whether the pattern matches at the start of ``string``."""
+        if not isinstance(string, str):
+            raise TypeError(f"expected string, got '{type(string).__name__}'")
+        n = len(string)
+        work = 0
+        context = ()
+        states = frozenset((self.start,))
+        for pos in range(n + 1):
+            if self.position_tests:
+                prev = string[pos - 1] if pos else None
+                cur = string[pos] if pos < n else None
+                context = tuple(test(prev, cur, pos == n - 1) for test in self.position_tests)
+            states, cost = self._closure(states, context)
+            work += cost
+            if self.accept in states:
+                return True
+            if pos == n or not states:
+                return False
+            states, cost = self._step(states, string[pos])
+            work += cost
+            if work > self.MAX_WORK:
+                return False
+        return False
+
+    def _closure(self, states: frozenset, context: tuple) -> tuple[frozenset, int]:
+        key = (states, context)
+        if (result := self.closures.get(key)) is not None:
+            return result, 0
+        nodes = self.nodes
+        seen = set()
+        found = []
+        stack = list(states)
+        while stack:
+            i = stack.pop()
+            if i in seen:
+                continue
+            seen.add(i)
+            node = nodes[i]
+            kind = node[0]
+            if kind == self._SPLIT:
+                stack.extend(node[1])
+            elif kind == self._ASSERT:
+                if context[node[1]]:
+                    stack.append(node[2])
+            else:
+                found.append(i)
+        result = frozenset(found)
+        if len(self.closures) >= self.MAX_CACHE:
+            self.closures.clear()
+        self.closures[key] = result
+        return result, len(seen)
+
+    def _step(self, states: frozenset, char: str) -> tuple[frozenset, int]:
+        key = (states, char)
+        if (result := self.steps.get(key)) is not None:
+            return result, 0
+        nodes = self.nodes
+        result = frozenset(node[2] for node in (nodes[i] for i in states) if node[0] == self._CHAR and node[1](char))
+        if len(self.steps) >= self.MAX_CACHE:
+            self.steps.clear()
+        self.steps[key] = result
+        return result, len(states) + 1
+
+    def _add(self, node: tuple) -> int:
+        if len(self.nodes) >= self.MAX_NODES:
+            raise re.error("regular expression is too complex")
+        self.nodes.append(node)
+        return len(self.nodes) - 1
+
+    def _compile(self, items, flags: int, next_node: int) -> int:
+        for op, av in reversed(list(items)):
+            next_node = self._compile_item(op, av, flags, next_node)
+        return next_node
+
+    def _compile_item(self, op, av, flags: int, next_node: int) -> int:
+        if op in (_sre.LITERAL, _sre.NOT_LITERAL, _sre.ANY, _sre.IN):
+            return self._add((self._CHAR, self._char_test(op, av, flags), next_node))
+        elif op == _sre.AT:
+            return self._add((self._ASSERT, self._position_test(av, flags), next_node))
+        elif op == _sre.BRANCH:
+            return self._add((self._SPLIT, [self._compile(alternative, flags, next_node) for alternative in av[1]]))
+        elif op == _sre.SUBPATTERN:
+            _, add_flags, del_flags, items = av
+            return self._compile(items, (flags | add_flags) & ~del_flags, next_node)
+        elif op in (_sre.MAX_REPEAT, _sre.MIN_REPEAT):
+            min_count, max_count, items = av
+            is_unbounded = max_count == _sre.MAXREPEAT
+            if min_count > self.MAX_NODES or (not is_unbounded and max_count > self.MAX_NODES):
+                raise re.error("regular expression is too complex")
+            if is_unbounded:
+                loop = self._add((self._SPLIT, []))
+                self.nodes[loop][1].extend((self._compile(items, flags, loop), next_node))
+                tail = loop
+            else:
+                tail = next_node
+                for _ in range(max_count - min_count):
+                    tail = self._add((self._SPLIT, [self._compile(items, flags, tail), next_node]))
+            for _ in range(min_count):
+                tail = self._compile(items, flags, tail)
+            return tail
+        raise re.error(f"unsupported regular expression construct: {str(op).lower()}")
+
+    def _char_test(self, op, av, flags: int):
+        if op == _sre.ANY:
+            if flags & _sre.SRE_FLAG_DOTALL:
+                return lambda c: True
+            return lambda c: c != "\n"
+
+        if op == _sre.IN:
+            test, is_negated = self._set_test(av, flags)
+        else:
+            test, is_negated = chr(av).__eq__, op == _sre.NOT_LITERAL
+
+        if flags & _sre.SRE_FLAG_IGNORECASE:
+            case_sensitive_test = test
+
+            def test(c):
+                return any(case_sensitive_test(v) for v in (c, c.lower(), c.upper()) if len(v) == 1)
+
+        if is_negated:
+            positive_test = test
+            return lambda c: not positive_test(c)
+        return test
+
+    def _set_test(self, items, flags: int):
+        is_negated = False
+        literals = set()
+        ranges = []
+        categories = []
+        for op, av in items:
+            if op == _sre.NEGATE:
+                is_negated = True
+            elif op == _sre.LITERAL:
+                literals.add(chr(av))
+            elif op == _sre.RANGE:
+                ranges.append(av)
+            elif op == _sre.CATEGORY:
+                categories.append(self._category_test(av, flags))
+            else:
+                raise re.error(f"unsupported regular expression construct: {str(op).lower()}")
+
+        def test(c):
+            if c in literals:
+                return True
+            o = ord(c)
+            return any(lo <= o <= hi for lo, hi in ranges) or any(t(c) for t in categories)
+
+        return test, is_negated
+
+    def _category_test(self, category, flags: int):
+        if flags & _sre.SRE_FLAG_ASCII:
+            is_digit = lambda c: c in "0123456789"
+            is_space = lambda c: c in " \t\n\r\f\v"
+            is_word = lambda c: c.isascii() and (c.isalnum() or c == "_")
+        else:
+            is_digit = str.isdecimal
+            is_space = str.isspace
+            is_word = lambda c: c.isalnum() or c == "_"
+        tests = {
+            _sre.CATEGORY_DIGIT: is_digit,
+            _sre.CATEGORY_SPACE: is_space,
+            _sre.CATEGORY_WORD: is_word,
+        }
+        negated_tests = {
+            _sre.CATEGORY_NOT_DIGIT: is_digit,
+            _sre.CATEGORY_NOT_SPACE: is_space,
+            _sre.CATEGORY_NOT_WORD: is_word,
+        }
+        if category in tests:
+            return tests[category]
+        elif category in negated_tests:
+            test = negated_tests[category]
+            return lambda c: not test(c)
+        raise re.error(f"unsupported regular expression construct: {str(category).lower()}")
+
+    def _position_test(self, at, flags: int) -> int:
+        """Return the index of the test in ``self.position_tests``.
+
+        Tests are called with the previous and current characters (``None``
+        at either end of the string) and whether the current one is the last.
+        """
+        is_multiline = bool(flags & _sre.SRE_FLAG_MULTILINE)
+        key = (at, is_multiline, bool(flags & _sre.SRE_FLAG_ASCII))
+        if (index := self.position_test_keys.get(key)) is not None:
+            return index
+
+        if at == _sre.AT_BEGINNING:
+            test = lambda prev, cur, is_last: prev is None or (is_multiline and prev == "\n")
+        elif at == _sre.AT_BEGINNING_STRING:
+            test = lambda prev, cur, is_last: prev is None
+        elif at == _sre.AT_END:
+            test = lambda prev, cur, is_last: cur is None or (cur == "\n" and (is_last or is_multiline))
+        elif at == _sre.AT_END_STRING:
+            test = lambda prev, cur, is_last: cur is None
+        elif at in (_sre.AT_BOUNDARY, _sre.AT_NON_BOUNDARY):
+            is_word = self._category_test(_sre.CATEGORY_WORD, flags)
+            is_boundary = at == _sre.AT_BOUNDARY
+            # Python < 3.14 never matches \B against an empty string.
+            empty_result = bool(re.match(r"\b" if is_boundary else r"\B", ""))
+
+            def test(prev, cur, is_last):
+                if prev is None and cur is None:
+                    return empty_result
+                prev_is_word = prev is not None and is_word(prev)
+                cur_is_word = cur is not None and is_word(cur)
+                return (prev_is_word != cur_is_word) == is_boundary
+
+        else:
+            raise re.error(f"unsupported regular expression construct: {str(at).lower()}")
+
+        self.position_tests.append(test)
+        self.position_test_keys[key] = len(self.position_tests) - 1
+        return self.position_test_keys[key]
+
+
+@functools.lru_cache(maxsize=256)
+def compile_regex(pattern: str) -> BoundedPattern:
+    return BoundedPattern(str(pattern))
 
 
 class FormatTransformer(lark.Transformer):
@@ -398,7 +662,7 @@ class GetElementTransformer(lark.Transformer):
         return str(args[0])
 
     def regex_string(self, args):
-        return re.compile(args[0])
+        return compile_regex(str(args[0]))
 
     def unquoted_string(self, args):
         return str(args[0])
@@ -505,7 +769,7 @@ def _get_element_value(element: ifcopenshell.entity_instance, keys: list[str]) -
             if key == "Name" and value.is_a("IfcMaterialLayerSet"):
                 key = "LayerSetName"  # This oddity in the IFC spec is annoying so we account for it.
 
-            if isinstance(key, re.Pattern):
+            if isinstance(key, BoundedPattern):
                 attribute = None  # Should we support regex attributes? Probably not for now.
             else:
                 attribute = getattr(value, key, None)
@@ -514,7 +778,7 @@ def _get_element_value(element: ifcopenshell.entity_instance, keys: list[str]) -
                 value = attribute
             else:
                 # Try to extract pset
-                if isinstance(key, re.Pattern):
+                if isinstance(key, BoundedPattern):
                     psets = ifcopenshell.util.element.get_psets(value)
                     matching_psets = []
                     for pset_name, pset in psets.items():
@@ -531,7 +795,7 @@ def _get_element_value(element: ifcopenshell.entity_instance, keys: list[str]) -
 
                 value = result
         elif isinstance(value, dict):  # Such as from the result of a prior get_pset
-            if isinstance(key, re.Pattern):
+            if isinstance(key, BoundedPattern):
                 results = []
                 for prop_name, prop_value in value.items():
                     if key.match(prop_name):
@@ -789,7 +1053,7 @@ def set_element_value(
                         return setattr(element, key, value)
             else:
                 # Try to extract pset
-                if isinstance(key, re.Pattern):
+                if isinstance(key, BoundedPattern):
                     psets = ifcopenshell.util.element.get_psets(element)
                     matching_psets = []
                     for pset_name, pset in psets.items():
@@ -811,7 +1075,7 @@ def set_element_value(
                 element = result
         elif isinstance(element, dict):  # Such as from the result of a prior get_pset
             pset = ifc_file.by_id(element["id"])
-            if isinstance(key, re.Pattern):
+            if isinstance(key, BoundedPattern):
                 for prop, prop_value in element.items():
                     if key.match(prop):
                         if pset.is_a("IfcPropertySet") and prop_value != value:
@@ -1044,12 +1308,12 @@ class FacetTransformer(lark.Transformer):
             if isinstance(pset, str) and isinstance(prop, str):
                 element_value = ifcopenshell.util.element.get_pset(element, pset, prop)
                 return self.compare(element_value, comparison, value)
-            elif isinstance(pset, str) and isinstance(prop, re.Pattern):
+            elif isinstance(pset, str) and isinstance(prop, BoundedPattern):
                 element_props = ifcopenshell.util.element.get_pset(element, pset) or {}
                 for element_prop, element_value in element_props.items():
                     if prop.match(element_prop):
                         return self.compare(element_value, comparison, value)
-            elif isinstance(pset, re.Pattern):
+            elif isinstance(pset, BoundedPattern):
                 element_psets = ifcopenshell.util.element.get_psets(element)
                 for element_pset, element_props in element_psets.items():
                     if not pset.match(element_pset):
@@ -1058,7 +1322,7 @@ class FacetTransformer(lark.Transformer):
                         element_value = element_props.get(prop, None)
                         if element_value is not None:
                             return self.compare(element_value, comparison, value)
-                    elif isinstance(prop, re.Pattern):
+                    elif isinstance(prop, BoundedPattern):
                         for element_prop, element_value in element_props.items():
                             if prop.match(element_prop):
                                 return self.compare(element_value, comparison, value)
@@ -1240,7 +1504,7 @@ class FacetTransformer(lark.Transformer):
         elif args[0].data == "quoted_string":
             return args[0].children[0].value[1:-1].replace('\\"', '"')
         elif args[0].data == "regex_string":
-            return re.compile(args[0].children[0].value)
+            return compile_regex(str(args[0].children[0].value))
         elif args[0].data == "special":
             if args[0].children[0].data == "null":
                 return None
@@ -1290,7 +1554,7 @@ class FacetTransformer(lark.Transformer):
                 # be legally casted to the element_value, or cannot use the
                 # `in` or more / less than comparison operators.
                 result = False
-        elif isinstance(value, re.Pattern):
+        elif isinstance(value, BoundedPattern):
             result = bool(value.match(element_value)) if element_value is not None else False
         elif value in (None, True, False):
             result = element_value is value
