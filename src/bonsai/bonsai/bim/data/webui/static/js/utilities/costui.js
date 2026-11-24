@@ -2943,7 +2943,9 @@ export class CostUI {
         const itemDiv = document.createElement("div");
         itemDiv.classList.add("item-container");
         itemDiv.classList.add("row-container");
-        itemDiv.innerHTML = `<span>${item.Identification}: ${item.Name}</span>`;
+        const itemLabel = document.createElement("span");
+        itemLabel.textContent = `${item.Identification}: ${item.Name}`;
+        itemDiv.appendChild(itemLabel);
 
         if (item.has_references && item.references.length > 0) {
           const nextButton = CostUI.createButton(
