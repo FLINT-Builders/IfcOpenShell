@@ -116,15 +116,17 @@ class Ifc(bonsai.core.tool.Ifc):
             return True  # Let's be conservative
 
         # Handle both old float64 and new float32 checksums for version compatibility
-        loc_checksum_bytes: bytes = eval(oprops.location_checksum)
-        loc_check = tool.Blender.np_frombuffer_legacy(loc_checksum_bytes, 3)
+        loc_check = tool.Blender.np_frombuffer_checksum(oprops.location_checksum, 3)
+        if loc_check is None:
+            return True
         loc_real = tool.Blender.np_array_legacy(obj.matrix_world.translation)
         if not np.allclose(loc_check, loc_real, atol=1e-4):  # 0.1 mm
             return True
 
         # Handle both old float64 and new float32 checksums for version compatibility
-        rot_checksum_bytes: bytes = eval(oprops.rotation_checksum)
-        rot_check = tool.Blender.np_frombuffer_legacy(rot_checksum_bytes, 9)
+        rot_check = tool.Blender.np_frombuffer_checksum(oprops.rotation_checksum, 9)
+        if rot_check is None:
+            return True
         rot_check = rot_check.reshape(3, 3)
         rot_real = tool.Blender.np_array_legacy(obj.matrix_world.to_3x3())
         rot_dot = np.dot(rot_check, rot_real.T)

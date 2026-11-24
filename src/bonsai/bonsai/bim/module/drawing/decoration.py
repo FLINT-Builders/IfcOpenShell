@@ -1697,7 +1697,7 @@ class CutDecorator:
         self.fallback_colour = (0.3, 0.3, 0.3, 1)
 
         # Evaluate camera movement once per redraw rather than twice per object: is_camera_moved()
-        # runs eval()/numpy on the camera matrix and, as a side effect, refreshes the stored
+        # decodes the checksum and runs numpy on the camera matrix and, as a side effect, refreshes the stored
         # checksum on the first True result - so calling it per object also made the second call
         # (fill) see an already-updated checksum and skip recalculating when it shouldn't.
         self.camera_moved = self.is_camera_moved()
@@ -1803,16 +1803,18 @@ class CutDecorator:
         obj = bpy.context.scene.camera
 
         # Handle both old float64 and new float32 checksums for version compatibility
-        loc_checksum_bytes: bytes = eval(DecoratorData.camera_location_checksum)
-        loc_check = tool.Blender.np_frombuffer_legacy(loc_checksum_bytes, 3)
+        loc_check = tool.Blender.np_frombuffer_checksum(DecoratorData.camera_location_checksum, 3)
         loc_real = tool.Blender.np_array_legacy(obj.matrix_world.translation)
-        if not np.allclose(loc_check, loc_real, atol=1e-4):  # 0.1 mm
+        if loc_check is None or not np.allclose(loc_check, loc_real, atol=1e-4):  # 0.1 mm
             self.cache_camera_matrix()
             return True
 
         # Handle both old float64 and new float32 checksums for version compatibility
-        rot_checksum_bytes: bytes = eval(DecoratorData.camera_rotation_checksum)
-        rot_check = tool.Blender.np_frombuffer_legacy(rot_checksum_bytes, 9).reshape(3, 3)
+        rot_check = tool.Blender.np_frombuffer_checksum(DecoratorData.camera_rotation_checksum, 9)
+        if rot_check is None:
+            self.cache_camera_matrix()
+            return True
+        rot_check = rot_check.reshape(3, 3)
         rot_real = tool.Blender.np_array_legacy(obj.matrix_world.to_3x3())
         rot_dot = np.dot(rot_check, rot_real.T)
         angle_rad = np.arccos(np.clip((np.trace(rot_dot) - 1) / 2, -1, 1))
