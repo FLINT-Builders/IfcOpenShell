@@ -2,6 +2,7 @@
 
 add_executable(test_ifcopenshell_geometry
     test_ifcopenshell_geometry.cpp
+    test_curve_segment_null_parent.cpp
 )
 list(GET SCHEMA_VERSIONS -1 IFCGEOM_TEST_SCHEMA_VERSION)
 set(IFCGEOM_TEST_SCHEMA_TARGET parse_schema_ifc${IFCGEOM_TEST_SCHEMA_VERSION})
