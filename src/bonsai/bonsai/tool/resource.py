@@ -60,7 +60,8 @@ class Resource(bonsai.core.tool.Resource):
         props = cls.get_resource_props()
         tprops = props.tree
 
-        def create_new_resource_li(resource: ifcopenshell.entity_instance, level_index: int) -> None:
+        def create_new_resource_li(resource: ifcopenshell.entity_instance, level_index: int, visited: set[int]) -> None:
+            visited.add(resource.id())
             new = tprops.resources.add()
             new.ifc_definition_id = resource.id()
             new.is_expanded = resource.id() not in contracted_resources
@@ -70,8 +71,9 @@ class Resource(bonsai.core.tool.Resource):
                 if new.is_expanded:
                     for rel in resource.IsNestedBy:
                         [
-                            create_new_resource_li(nested_resource, level_index + 1)
+                            create_new_resource_li(nested_resource, level_index + 1, visited)
                             for nested_resource in rel.RelatedObjects
+                            if nested_resource.id() not in visited
                         ]
 
         tprops.resources.clear()
@@ -80,7 +82,7 @@ class Resource(bonsai.core.tool.Resource):
         for resource in tool.Ifc.get().by_type("IfcResource"):
             if not resource.HasContext:
                 continue
-            create_new_resource_li(resource, 0)
+            create_new_resource_li(resource, 0, set())
         cls.load_productivity_data()
         cls.load_resource_properties()
         props.is_resource_update_enabled = True
@@ -455,15 +457,18 @@ class Resource(bonsai.core.tool.Resource):
 
     @classmethod
     def go_to_resource(cls, resource: ifcopenshell.entity_instance) -> None:
-        def get_ancestors_ids(resource: ifcopenshell.entity_instance) -> list[int]:
+        def get_ancestors_ids(resource: ifcopenshell.entity_instance, visited: set[int]) -> list[int]:
+            visited.add(resource.id())
             ids: list[int] = []
             for rel in resource.Nests or []:
+                if rel.RelatingObject.id() in visited:
+                    continue
                 ids.append(rel.RelatingObject.id())
-                ids.extend(get_ancestors_ids(rel.RelatingObject))
+                ids.extend(get_ancestors_ids(rel.RelatingObject, visited))
             return ids
 
         props = cls.get_resource_props()
-        ancestors = get_ancestors_ids(resource)
+        ancestors = get_ancestors_ids(resource, set())
         contracted_resources = json.loads(props.contracted_resources)
         for ancestor in ancestors:
             if ancestor in contracted_resources:
