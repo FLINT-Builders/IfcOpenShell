@@ -89,11 +89,15 @@ class SheetsData:
         if tool.Ifc.get():
             project = tool.Ifc.get().by_type("IfcProject")[0]
             titleblocks_dir = ifcopenshell.util.element.get_pset(project, "BBIM_Documentation", "TitleblocksDir")
-            if not titleblocks_dir:
-                prefs = tool.Blender.get_addon_preferences()
-                titleblocks_dir = prefs.doc.titleblocks_dir
-            titleblocks_dir = tool.Ifc.resolve_uri(titleblocks_dir)
-            if os.path.exists(titleblocks_dir):
+            try:
+                if titleblocks_dir:
+                    titleblocks_dir = tool.Ifc.resolve_uri(titleblocks_dir)
+                else:
+                    prefs = tool.Blender.get_addon_preferences()
+                    titleblocks_dir = tool.Ifc.resolve_uri(prefs.doc.titleblocks_dir, trusted=True)
+            except PermissionError:
+                titleblocks_dir = ""
+            if titleblocks_dir and os.path.exists(titleblocks_dir):
                 files.extend([str(f.stem) for f in Path(titleblocks_dir).glob("*.svg")])
 
         return [(f, f, "") for f in sorted(list(set(files)))]

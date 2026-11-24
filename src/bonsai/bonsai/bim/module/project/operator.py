@@ -1539,7 +1539,11 @@ class LoadLink(bpy.types.Operator, tool.Ifc.Operator):
         # still replay the filter the link was created with.
         if not self.query and self.link.query:
             self.query = self.link.query
-        filepath = Path(tool.Ifc.resolve_uri(self.link.filepath))
+        try:
+            filepath = Path(tool.Ifc.resolve_uri(self.link.filepath))
+        except PermissionError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
         if not filepath.exists():
             self.report({"ERROR"}, f"File does not exist: '{filepath}'")
             return {"CANCELLED"}
@@ -1688,8 +1692,7 @@ except Exception as e:
         if not (crs_name := (ifcopenshell.util.geolocation.get_crs(tool.Ifc.get()) or {}).get("Name", "")):
             self.link.georeferenced = "NONE"
             return
-        reference = tool.Ifc.get().by_id(self.link.ifc_definition_id)
-        json_filepath = Path(reference.Location).with_suffix(".ifc.cache.json")
+        json_filepath = self.filepath_.with_suffix(".ifc.cache.json")
         if not json_filepath.exists():
             self.link.georeferenced = "NONE"
             return

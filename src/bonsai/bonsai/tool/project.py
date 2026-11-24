@@ -139,7 +139,7 @@ class Project(bonsai.core.tool.Project):
     @classmethod
     def load_project_pset_templates(cls) -> None:
         props = tool.Blender.get_addon_preferences()
-        pset_dir = tool.Ifc.resolve_uri(props.pset_dir)
+        pset_dir = tool.Ifc.resolve_uri(props.pset_dir, trusted=True)
         if os.path.isdir(pset_dir):
             for path in Path(pset_dir).glob("*.ifc"):
                 bonsai.bim.schema.ifc.psetqto.templates.append(ifcopenshell.open(path))
@@ -336,12 +336,12 @@ class Project(bonsai.core.tool.Project):
                     link.has_transformation = not np.allclose(m, np.eye(4))
                 # The selector query used at link time is persisted only in the
                 # sidecar cache JSON; restore it so Reload/Load replay the filter.
-                json_filepath = Path(tool.Ifc.resolve_uri(filepath)).with_suffix(".ifc.cache.json")
-                if json_filepath.exists():
-                    try:
+                try:
+                    json_filepath = Path(tool.Ifc.resolve_uri(filepath)).with_suffix(".ifc.cache.json")
+                    if json_filepath.exists():
                         link.query = json.loads(json_filepath.read_text()).get("query", "")
-                    except (OSError, json.JSONDecodeError):
-                        pass
+                except (OSError, json.JSONDecodeError):
+                    pass
 
     @classmethod
     def get_project_library_elements(

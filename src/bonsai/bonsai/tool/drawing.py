@@ -715,11 +715,11 @@ class Drawing(bonsai.core.tool.Drawing):
     ) -> Union[str, None]:
         if getattr(document, "Location", None):
             if os.path.isabs(document.Location):
-                return document.Location
+                return tool.Ifc.check_network_access(document.Location)
             ifc_path = tool.Ifc.get_path()
             if os.path.isfile(ifc_path):
                 ifc_path = os.path.dirname(ifc_path)
-            return os.path.abspath(os.path.join(ifc_path, document.Location))
+            return tool.Ifc.check_network_access(os.path.abspath(os.path.join(ifc_path, document.Location)))
         if document.is_a("IfcDocumentInformation"):
             if tool.Ifc.get_schema() == "IFC2X3":
                 references = document.DocumentReferences

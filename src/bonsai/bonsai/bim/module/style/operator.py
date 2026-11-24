@@ -352,7 +352,10 @@ class BrowseExternalStyle(bpy.types.Operator, ImportHelper):
         # if it exists in the file
         if style_elements and self.filepath == "" and tool.Style.has_blender_external_style(style_elements):
             external_style = style_elements["IfcExternallyDefinedSurfaceStyle"]
-            style_path = Path(tool.Ifc.resolve_uri(external_style.Location))
+            try:
+                style_path = Path(tool.Ifc.resolve_uri(external_style.Location))
+            except PermissionError:
+                return ImportHelper.invoke(self, context, event)
             self.directory = str(style_path.parent)
             self.filepath = str(style_path)
 
@@ -440,7 +443,11 @@ class ActivateExternalStyle(bpy.types.Operator):
             identification = external_style.Identification
 
         data_block_type, data_block = identification.split("/")
-        style_path = Path(tool.Ifc.resolve_uri(location))
+        try:
+            style_path = Path(tool.Ifc.resolve_uri(location))
+        except PermissionError as error:
+            self.report({"ERROR"}, f'Error loading external style for "{material.name}" - {error}')
+            return {"CANCELLED"}
 
         if style_path.suffix != ".blend":
             self.report(

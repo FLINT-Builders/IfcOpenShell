@@ -304,6 +304,11 @@ class Loader(bonsai.core.tool.Loader):
                     if is_relative:
                         ifc_path = Path(tool.Ifc.get_path())
                         image_url = ifc_path.parent / image_url
+                    try:
+                        tool.Ifc.check_network_access(image_url.absolute())
+                    except PermissionError as error:
+                        print(f"WARNING. {error} Texture will be skipped.")
+                        return
                     image_url = image_url.absolute().resolve()
 
                     if not image_url.exists():
