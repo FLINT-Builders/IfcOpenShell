@@ -2,6 +2,7 @@
 const connectedClients = {};
 const allDrawings = {};
 let socket;
+let currentSvgUrl = null;
 
 // Document ready function
 $(document).ready(function () {
@@ -163,13 +164,38 @@ function handleDrawingsData(data) {
   }
 }
 
+function getSvgSize(data) {
+  // Documents created by DOMParser are inert: nothing in them is rendered, fetched or run.
+  const root = new DOMParser().parseFromString(data, "image/svg+xml").documentElement;
+  const viewBox = (root.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
+  if (viewBox.length === 4 && viewBox[2] > 0 && viewBox[3] > 0) {
+    return [viewBox[2], viewBox[3]];
+  }
+  const width = parseFloat(root.getAttribute("width"));
+  const height = parseFloat(root.getAttribute("height"));
+  if (width > 0 && height > 0) {
+    return [width, height];
+  }
+  return [300, 150];
+}
+
 function handleSvgData(data) {
   const svgContainer = document.getElementById("svg-container");
   svgContainer.innerHTML = "";
   svgContainer.style.backgroundColor = "white";
 
-  const dom = SVG(svgContainer).svg(data);
-  const svgElement = dom.node.children[0];
+  // Drawing SVGs are files referenced by the IFC and may carry script, so they
+  // must never be inserted into the page DOM. Browsers do not run scripts in an
+  // SVG loaded as an image.
+  if (currentSvgUrl) {
+    URL.revokeObjectURL(currentSvgUrl);
+  }
+  currentSvgUrl = URL.createObjectURL(new Blob([data], { type: "image/svg+xml" }));
+  const [width, height] = getSvgSize(data);
+
+  const dom = SVG().addTo(svgContainer).viewbox(0, 0, width, height);
+  dom.image(currentSvgUrl).size(width, height);
+  const svgElement = dom.node;
 
   // to make the svg not grow outside the svg container
   svgElement.setAttribute("width", "100%");
