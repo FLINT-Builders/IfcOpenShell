@@ -226,7 +226,6 @@ if __name__ == "__main__":
 from __future__ import annotations
 import os
 import sys
-import pickle
 
 import schema
 import mapping
@@ -235,22 +234,13 @@ from pyparsing import *
 from nodes import *
 
 def parse(fn: str) -> mapping.Mapping:
-    cache_file = fn + ".cache.dat"
-    if os.path.exists(cache_file) and os.path.getmtime(cache_file) >= os.path.getmtime(fn):
-        with open(cache_file, "rb") as f:
-            m = pickle.load(f)
-    else:
-        %s
+    %s
 
-        syntax.ignore("--" + restOfLine)
-        syntax.ignore(Regex(r"\((?:\*(?:[^*]*\*+)+?\))"))
-        ast = syntax.parse_file(fn)
-        s = schema.Schema(ast)
-        m = mapping.Mapping(s)
-
-        with open(cache_file, "wb") as f:
-            pickle.dump(m, f, protocol=0)
-    return m
+    syntax.ignore("--" + restOfLine)
+    syntax.ignore(Regex(r"\((?:\*(?:[^*]*\*+)+?\))"))
+    ast = syntax.parse_file(fn)
+    s = schema.Schema(ast)
+    return mapping.Mapping(s)
 
 if __name__ == "__main__":
     m = parse(sys.argv[1])
@@ -260,5 +250,5 @@ if __name__ == "__main__":
         mdl.Generator(m).emit()
     print(m.schema.name)
 """
-        % ("\n        ".join(statements))
+        % ("\n    ".join(statements))
     )
