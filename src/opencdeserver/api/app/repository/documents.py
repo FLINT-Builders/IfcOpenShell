@@ -142,6 +142,20 @@ class DOCDB(MyDB):
     ) -> DocumentUploadSessionInitialization:
         def post_upload_documents_work(tx) -> DocumentUploadSessionInitialization:
 
+            # Stored files are named by document_id, so a new version may only target a document the user can access.
+            for file in upload_documents.files:
+                if not file.document_id:
+                    continue
+                cypher = """
+                    MATCH (u:User)-[r1:HAS_ACTIONS_ON]->(p:Project)-[r2:CONTAINS]->(d:Document)
+                    WHERE u.username = $username
+                    AND d.document_id = $document_id
+                    RETURN d.document_id AS document_id
+                    LIMIT 1
+                """
+                if tx.run(cypher, username=current_user.username, document_id=file.document_id).single() is None:
+                    raise HTTPException(status_code=404, detail="Document not found.")
+
             session_uuid = str(uuid4())
             session_callback_timedelta = int(upload_documents.callback.expires_in)
             session_url_validity_timedelta = 10 + int(os.environ["SESSION_URL_VALIDITY_SECONDS"])
