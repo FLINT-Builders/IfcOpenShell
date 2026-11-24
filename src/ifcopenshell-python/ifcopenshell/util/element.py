@@ -828,8 +828,13 @@ def get_styles(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entit
 
     for representation in [body]:
         queue = list(representation.Items)
+        visited = set()
         while queue:
             item = queue.pop()
+            if item.is_a("IfcMappedItem") or item.is_a("IfcBooleanResult"):
+                if item in visited:
+                    continue
+                visited.add(item)
             if item.is_a("IfcMappedItem"):
                 queue.extend(item.MappingSource.MappedRepresentation.Items)
             if item.is_a("IfcBooleanResult"):

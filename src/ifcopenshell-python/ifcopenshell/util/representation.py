@@ -344,11 +344,15 @@ def resolve_base_items(
 ) -> Generator[ifcopenshell.entity_instance]:
     """Resolve representation to it's base items resolving mapped items and boolean results to it's operands."""
     queue: list[ifcopenshell.entity_instance] = list(representation.Items)
+    visited_booleans: set[ifcopenshell.entity_instance] = set()
     while queue:
         item = queue.pop()
         if item.is_a("IfcMappedItem"):
             yield from resolve_base_items(item.MappingSource.MappedRepresentation)
         elif item.is_a("IfcBooleanResult"):
+            if item in visited_booleans:
+                continue
+            visited_booleans.add(item)
             queue.append(item.FirstOperand)
             queue.append(item.SecondOperand)
         else:
