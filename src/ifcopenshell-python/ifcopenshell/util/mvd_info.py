@@ -130,7 +130,8 @@ if LARK_AVAILABLE:
         return parsed_description
 
     def parse_semicolon_separated_kv(text: str) -> dict[str, str | list[str]] | None:
-        if not re.search(r"\w+\s*:\s*[^:]+", text):
+        # Matches the same texts as r"\w+\s*:\s*[^:]+" without retrying a word from every offset.
+        if not re.search(r"\w\s*:[^:]", text):
             return None
         result = {}
         try:
