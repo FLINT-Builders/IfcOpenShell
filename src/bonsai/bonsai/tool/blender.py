@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib
 import math
@@ -2795,6 +2796,22 @@ class Blender(bonsai.core.tool.Blender):
         if len(bytedata) == (n * 8):  # float64 has 8 bytes per element
             return np.frombuffer(bytedata, dtype=np.float64).astype(np.float32)
         return np.frombuffer(bytedata, dtype=np.float32)
+
+    @classmethod
+    def np_frombuffer_checksum(cls, checksum: str, n: int) -> Optional[npt.NDArray[np.float32]]:
+        """
+        Read ``n`` float values from a ``repr(bytes)`` checksum string without evaluating it as code.
+
+        Checksums can come from untrusted .blend files, so only a bytes literal is accepted.
+        Return ``None`` if ``checksum`` is not a bytes literal holding ``n`` ``float32`` or ``float64`` values.
+        """
+        try:
+            bytedata = ast.literal_eval(checksum)
+        except Exception:
+            return None
+        if not isinstance(bytedata, bytes) or len(bytedata) not in (n * 4, n * 8):
+            return None
+        return cls.np_frombuffer_legacy(bytedata, n)
 
     @classmethod
     def np_array_legacy(cls, mathutils_type: Union[Vector, Matrix]) -> npt.NDArray[np.float32]:
