@@ -115,16 +115,19 @@ def get_local_placement(placement: Optional[ifcopenshell.entity_instance] = None
         placement = file.by_type("IfcBeam")[0].ObjectPlacement
         matrix = ifcopenshell.util.placement.get_local_placement(placement)
 
+    If the ``PlacementRelTo`` chain is cyclic, each placement in the cycle is
+    applied once and the walk stops at the first repeated placement.
+
     :param placement: The IfcLocalPlacement entity
     :return: A 4x4 numpy matrix
     """
-    if placement is None:
-        return np.eye(4)
-    if (rel_to := placement.PlacementRelTo) is None:
-        parent = np.eye(4)
-    else:
-        parent = get_local_placement(rel_to)
-    return np.dot(parent, get_axis2placement(placement.RelativePlacement))
+    matrix = np.eye(4)
+    seen: set[int] = set()
+    while placement is not None and (identity := placement.identity()) not in seen:
+        seen.add(identity)
+        matrix = np.dot(get_axis2placement(placement.RelativePlacement), matrix)
+        placement = placement.PlacementRelTo
+    return matrix
 
 
 def get_cartesiantransformationoperator3d(inst: ifcopenshell.entity_instance) -> MatrixType:

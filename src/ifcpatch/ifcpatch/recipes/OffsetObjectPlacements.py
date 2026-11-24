@@ -145,8 +145,10 @@ class Patcher:
             )
 
     def get_absolute_placement(self, object_placement):
-        if object_placement.PlacementRelTo:
-            return self.get_absolute_placement(object_placement.PlacementRelTo)
+        seen = {object_placement.identity()}
+        while (parent := object_placement.PlacementRelTo) and parent.identity() not in seen:
+            seen.add(parent.identity())
+            object_placement = parent
         return object_placement
 
     def identity_matrix(self):
