@@ -40,6 +40,9 @@ namespace geom {
 		// Set of instances to mark failures that are intended, such as representations not
 		// resulting in any items due to dimensionality filters.
 		std::set<express::base> failed_on_purpose_;
+		// Instances currently being mapped, so that cyclic references (e.g. a boolean
+		// result that is its own operand) terminate instead of recursing endlessly.
+		std::unordered_set<uint32_t> in_progress_;
 		std::set<IfcSchema::IfcRepresentationMap> not_reusable_maps_;
 		std::unordered_set<uint32_t> representation_context_cache_;
 		std::vector<uint32_t> representation_context_priority_cache_;
