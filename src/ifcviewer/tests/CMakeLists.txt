@@ -140,8 +140,19 @@ endif()
 add_ifcviewer_unit_test(test_viewport_camera
     LIBS IfcViewerCore Eigen3::Eigen
 )
+
+# Chunk-table bounds. Runs the production parser plus ViewportCore::applyCachedModel
+# and loadSidecarFromPath. The attacker-mesh_count cases fail until that value
+# is rejected before it is reserved or looped; see the test file.
+add_executable(test_sidecar_mesh_count_bounds test_sidecar_mesh_count_bounds.cpp)
+target_include_directories(test_sidecar_mesh_count_bounds PRIVATE ${IFCVIEWER_SRC})
+target_link_libraries(test_sidecar_mesh_count_bounds PRIVATE IfcViewerCore Eigen3::Eigen)
+add_test(NAME test_sidecar_mesh_count_bounds COMMAND test_sidecar_mesh_count_bounds)
 if(UNIX AND NOT APPLE AND WGPU_NATIVE_LIB_DIR)
     set_target_properties(test_viewport_camera PROPERTIES
+        BUILD_RPATH "${WGPU_NATIVE_LIB_DIR}"
+    )
+    set_target_properties(test_sidecar_mesh_count_bounds PROPERTIES
         BUILD_RPATH "${WGPU_NATIVE_LIB_DIR}"
     )
 endif()
