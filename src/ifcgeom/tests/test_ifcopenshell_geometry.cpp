@@ -382,3 +382,214 @@ TEST_CASE("IfcGeom context priorities create tasks from highest priority represe
     REQUIRE(wall_with_body_only_task != nullptr);
     REQUIRE(wall_with_body_only_task->representation.id() == body_only_representation.id());
 }
+
+namespace {
+
+// IfcPolynomialCurve.CoefficientsY is optional. A 2D curve that supplies it
+// must have at least two coefficients; the third (quadratic) term is optional.
+// Geometry conversion has to reject a missing or short list with a C++
+// exception, or skip the shape, without reading past the coefficient buffer.
+enum class polynomial_y { omitted, one, two, three };
+
+const char* polynomial_y_token(polynomial_y y) {
+    switch (y) {
+    case polynomial_y::omitted:
+        return "$";
+    case polynomial_y::one:
+        return "(1.)";
+    case polynomial_y::two:
+        return "(0.,1.)";
+    case polynomial_y::three:
+        return "(0.,0.,0.)";
+    }
+    return "$";
+}
+
+std::size_t expected_y_count(polynomial_y y) {
+    switch (y) {
+    case polynomial_y::omitted:
+        return 0;
+    case polynomial_y::one:
+        return 1;
+    case polynomial_y::two:
+        return 2;
+    case polynomial_y::three:
+        return 3;
+    }
+    return 0;
+}
+
+// Body solid whose directrix is an IfcCompositeCurve of one IfcCurveSegment.
+// The parent curve is an IfcPolynomialCurve. SegmentStart is 10 so the
+// horizontal slope integral is taken over a non-empty interval.
+std::string horizontal_polynomial_sweep(polynomial_y y) {
+    const std::string coeff_y = polynomial_y_token(y);
+    return std::string(R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,(#6),$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);
+#7=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#6,$,.MODEL_VIEW.,$);
+#8=IFCCARTESIANPOINT((0.,0.));
+#9=IFCAXIS2PLACEMENT2D(#8,$);
+#10=IFCPOLYNOMIALCURVE(#9,(0.,1.),)IFC") +
+        coeff_y + R"IFC(,$);
+#11=IFCCURVESEGMENT(.CONTINUOUS.,#9,IFCLENGTHMEASURE(10.),IFCLENGTHMEASURE(20.),#10);
+#12=IFCCOMPOSITECURVE((#11),.F.);
+#13=IFCCARTESIANPOINT((0.,0.));
+#14=IFCAXIS2PLACEMENT2D(#13,$);
+#15=IFCCIRCLEPROFILEDEF(.AREA.,$,#14,0.5);
+#16=IFCDIRECTION((0.,0.,1.));
+#17=IFCFIXEDREFERENCESWEPTAREASOLID(#15,$,#12,$,$,#16);
+#18=IFCSHAPEREPRESENTATION(#7,'Body','AdvancedSweptSolid',(#17));
+#19=IFCPRODUCTDEFINITIONSHAPE($,$,(#18));
+#20=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'poly',$,$,$,#19,$,$);
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+}
+
+// Same solid, but the polynomial segment belongs to an IfcGradientCurve so
+// the segment is vertical. The base curve is a straight IfcLine segment.
+std::string vertical_polynomial_sweep(polynomial_y y) {
+    const std::string coeff_y = polynomial_y_token(y);
+    return std::string(R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,(#6),$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);
+#7=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#6,$,.MODEL_VIEW.,$);
+#8=IFCCARTESIANPOINT((0.,0.));
+#9=IFCAXIS2PLACEMENT2D(#8,$);
+#30=IFCCARTESIANPOINT((0.,0.));
+#31=IFCDIRECTION((1.,0.));
+#32=IFCVECTOR(#31,1.);
+#33=IFCLINE(#30,#32);
+#34=IFCCURVESEGMENT(.CONTINUOUS.,#9,IFCLENGTHMEASURE(0.),IFCLENGTHMEASURE(30.),#33);
+#35=IFCCOMPOSITECURVE((#34),.F.);
+#10=IFCPOLYNOMIALCURVE(#9,(0.,1.),)IFC") +
+        coeff_y + R"IFC(,$);
+#11=IFCCURVESEGMENT(.CONTINUOUS.,#9,IFCLENGTHMEASURE(0.),IFCLENGTHMEASURE(20.),#10);
+#12=IFCGRADIENTCURVE((#11),.F.,#35,$);
+#13=IFCCARTESIANPOINT((0.,0.));
+#14=IFCAXIS2PLACEMENT2D(#13,$);
+#15=IFCCIRCLEPROFILEDEF(.AREA.,$,#14,0.5);
+#16=IFCDIRECTION((0.,0.,1.));
+#17=IFCFIXEDREFERENCESWEPTAREASOLID(#15,$,#12,$,$,#16);
+#18=IFCSHAPEREPRESENTATION(#7,'Body','AdvancedSweptSolid',(#17));
+#19=IFCPRODUCTDEFINITIONSHAPE($,$,(#18));
+#20=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'poly',$,$,$,#19,$,$);
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+}
+
+void require_polynomial_y(ifcopenshell::file& file, polynomial_y y) {
+    auto polynomials = file.instances_by_type<IfcSchema::IfcPolynomialCurve>();
+    REQUIRE(polynomials.size() == 1);
+    const auto coefficients = polynomials.front().CoefficientsY();
+    if (y == polynomial_y::omitted) {
+        REQUIRE_FALSE(coefficients.has_value());
+    } else {
+        REQUIRE(coefficients.has_value());
+        REQUIRE(coefficients->size() == expected_y_count(y));
+    }
+}
+
+// Runs the same product conversion IfcConvert and ifcopenshell.geom.create_shape
+// use. A C++ exception is a contained failure. Reading off the end of
+// CoefficientsY is not: that signal aborts the test.
+void convert_product_body(const std::string& spf, polynomial_y y) {
+    std::istringstream stream(spf);
+    ifcopenshell::logger log;
+    log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+    ifcopenshell::file file(stream, static_cast<int>(spf.size()), log);
+    REQUIRE(file.good());
+    require_polynomial_y(file, y);
+
+    ifcopenshell::geom::settings settings;
+    settings.set("function-step-param", 1000.0);
+    ifcopenshell::geom::converter converter(
+        ifcopenshell::geom::kernels::construct(&file, "passthrough", settings, log), &file, settings, log);
+
+    std::vector<ifcopenshell::geom::geometry_conversion_task> tasks;
+    std::vector<ifcopenshell::geom::filter_function> filters;
+    converter.mapping()->get_representations(tasks, filters);
+    REQUIRE(!tasks.empty());
+    REQUIRE(!tasks.front().products.empty());
+
+    try {
+        delete converter.create_brep_for_representation_and_product(
+            tasks.front().representation, tasks.front().products.front());
+    } catch (const Catch::TestFailureException&) {
+        throw;
+    } catch (const std::exception&) {
+    }
+}
+
+} // namespace
+
+TEST_CASE("Omitted polynomial Y coefficients do not abort a horizontal sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(horizontal_polynomial_sweep(polynomial_y::omitted), polynomial_y::omitted);
+}
+
+TEST_CASE("One polynomial Y coefficient does not abort a horizontal sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(horizontal_polynomial_sweep(polynomial_y::one), polynomial_y::one);
+}
+
+TEST_CASE("Two polynomial Y coefficients do not abort a horizontal sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(horizontal_polynomial_sweep(polynomial_y::two), polynomial_y::two);
+}
+
+TEST_CASE("Three polynomial Y coefficients still convert a horizontal sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(horizontal_polynomial_sweep(polynomial_y::three), polynomial_y::three);
+}
+
+TEST_CASE("Omitted polynomial Y coefficients do not abort a vertical sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(vertical_polynomial_sweep(polynomial_y::omitted), polynomial_y::omitted);
+}
+
+TEST_CASE("One polynomial Y coefficient does not abort a vertical sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(vertical_polynomial_sweep(polynomial_y::one), polynomial_y::one);
+}
+
+TEST_CASE("Two polynomial Y coefficients do not abort a vertical sweep", "[ifcgeom][polynomial]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+    convert_product_body(vertical_polynomial_sweep(polynomial_y::two), polynomial_y::two);
+}
