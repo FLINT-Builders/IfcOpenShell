@@ -87,6 +87,10 @@
 </head>
 <body>
 <div id="page_layout" class="page_layout">
+    {% if error %}
+    <h1 class="h3 mb-3">kontroll.digital</h1>
+    <div id="result_message">{{error}}</div>
+    {% else %}
     <form action="./code" id="signin_form" name="signin_form">
         <h1 class="h3 mb-3">kontroll.digital</h1>
         <div id="result_message">
@@ -108,6 +112,7 @@
             <button class="btn btn-lg btn-primary btn-block" type="submit" id="signin_button">Sign in</button>
         </div>
     </form>
+    {% endif %}
 </div>
 </body>
 </html>

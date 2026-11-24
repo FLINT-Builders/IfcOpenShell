@@ -15,7 +15,7 @@ secrets = get_secrets()
 
 class FoundationDB(MyDB):
     # implemented
-    def create_authorization_code(self, username, authorization_code, scope) -> bool:
+    def create_authorization_code(self, username, authorization_code, scope, client_id, redirect_uri) -> bool:
         def create_authorization_code_work(tx) -> bool:
             cypher = """
                     MATCH (u:User)
@@ -26,6 +26,8 @@ class FoundationDB(MyDB):
                     MERGE (u)-[r:CAN_USE]->(ac:AuthorizationCode)
                     SET ac.code = $authorization_code
                     SET ac.scope = $scope
+                    SET ac.client_id = $client_id
+                    SET ac.redirect_uri = $redirect_uri
                     WITH ac
                     CALL apoc.ttl.expireIn(ac, $time_delta, 's')
                     RETURN ac AS authorization_code
@@ -35,6 +37,8 @@ class FoundationDB(MyDB):
                 username=username,
                 authorization_code=authorization_code,
                 scope=scope,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
                 time_delta=int(os.environ["SECURITY_AUTHORIZATION_CODE_EXPIRE_SECONDS"]),
             )
             summary = result.consume()
@@ -45,19 +49,23 @@ class FoundationDB(MyDB):
         with self.driver.session() as session:
             return session.execute_write(create_authorization_code_work)
 
-    def use_authorization_code(self, authorization_code) -> TokenInfo:
+    def use_authorization_code(self, authorization_code, client_id, redirect_uri) -> TokenInfo:
         def use_code_to_get_user_info_work(tx) -> TokenData:
             cypher = """
                         MATCH (u:User)-[r1:CAN_USE]->(ac:AuthorizationCode)
                         WHERE ac.code = $authorization_code
+                        AND ac.client_id = $client_id
+                        AND ac.redirect_uri = $redirect_uri
                         WITH u.username AS username, ac.scope AS scope
                         RETURN
                             username, scope
                         """
-            result = tx.run(cypher, authorization_code=authorization_code)
+            result = tx.run(
+                cypher, authorization_code=authorization_code, client_id=client_id, redirect_uri=redirect_uri
+            )
             first = result.single()
             if first is None:
-                raise HTTPException(status_code=404, detail="Authorization code not found.")
+                raise HTTPException(status_code=400, detail="Invalid authorization code.")
             authorized_user = TokenData()
             authorized_user.username = first.get("username")
             authorized_user.scopes = first.get("scope").split(" ")
@@ -78,6 +86,8 @@ class FoundationDB(MyDB):
             cypher = """
                             MATCH (u:User)-[r1:CAN_USE]->(ac1:AuthorizationCode)
                             WHERE ac1.code = $authorization_code
+                            AND ac1.client_id = $client_id
+                            AND ac1.redirect_uri = $redirect_uri
                             AND u.username = $username
                             DETACH DELETE ac1
                             MERGE (u)-[r4:CAN_USE]->(t2:Token:AccessToken)
@@ -90,6 +100,8 @@ class FoundationDB(MyDB):
             result = tx.run(
                 cypher,
                 authorization_code=authorization_code,
+                client_id=client_id,
+                redirect_uri=redirect_uri,
                 username=user_info.username,
                 access_token=token_info.access_token,
                 access_token_hash=hashlib.md5(token_info.access_token.encode("utf-8")).hexdigest(),

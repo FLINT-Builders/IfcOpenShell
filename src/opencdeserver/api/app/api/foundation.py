@@ -26,8 +26,21 @@ clients = {
     os.environ["KONTROLL_CLIENT_ID"]: {
         "name": os.environ["KONTROLL_CLIENT_NAME"],
         "secret": secrets["kontroll_client_secret"],
+        "redirect_uris": os.environ.get("KONTROLL_CLIENT_REDIRECT_URIS", "").split(),
     }
 }
+
+
+invalid_redirect_detail = "Unknown client_id or unregistered redirect_uri"
+
+
+def get_client_for_redirect(client_id: str, redirect_uri: str) -> Optional[dict]:
+    # The authorization code is delivered to redirect_uri, so it must exactly match a URI registered for the client.
+    client = clients.get(client_id)
+    if client is None or redirect_uri not in client.get("redirect_uris", []):
+        return None
+    return client
+
 
 # ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
 #
@@ -139,7 +152,15 @@ def authorization(
     redirect_uri: str,
 ):
 
-    client_name = clients[client_id]["name"]
+    client = get_client_for_redirect(client_id, redirect_uri)
+    if client is None:
+        # RFC 6749 4.1.2.1: inform the user and do not redirect to an invalid redirect_uri.
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": invalid_redirect_detail},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    client_name = client["name"]
 
     print(
         f"Response type: {response_type}, "
@@ -180,6 +201,9 @@ def code(
     scope: str = "",
 ):
 
+    if get_client_for_redirect(client_id, redirect_uri) is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=invalid_redirect_detail)
+
     global oauth2_state
     oauth2_state = state
 
@@ -204,7 +228,7 @@ def code(
     global authorization_code
     new_authorization_code = str(uuid4())
 
-    if foundation_db.create_authorization_code(username, new_authorization_code, scope):
+    if foundation_db.create_authorization_code(username, new_authorization_code, scope, client_id, redirect_uri):
         authorization_code = new_authorization_code
         print(f"Authorization code: {authorization_code}")
 
@@ -214,7 +238,7 @@ def code(
     #   this code-parameter is the access code
     # 7. The state-parameter should also be appended to the redirect_uri as a query parameter
     # 8. If the user denies client access redirect_uri will instead contain an error query parameter
-    return authorization_code
+    return new_authorization_code
 
 
 # /foundation/oauth2/reg is not in use, since registration is not allowed.
@@ -247,6 +271,7 @@ def login_for_access_token(
     grant_type: Optional[str] = Form(None),
     refresh_token: Optional[str] = Form(None),
     code: Optional[str] = Form(None),
+    redirect_uri: Optional[str] = Form(None),
     credentials: HTTPBasicCredentials = Depends(http_basic),
 ):
 
@@ -268,7 +293,13 @@ def login_for_access_token(
         # use authorization code,
         # create access token and refresh token,
         # delete authorization code
-        user_info = foundation_db.use_authorization_code(code)
+        # The code is only redeemable by the client it was issued to, with the redirect_uri it was issued for.
+        if not code or not redirect_uri:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="code and redirect_uri are required",
+            )
+        user_info = foundation_db.use_authorization_code(code, credentials.username, redirect_uri)
 
     elif grant_type == "refresh_token":
         # use refresh token to get access token
