@@ -50,7 +50,9 @@ jobs:
       # .zip archives" step below runs `cargo build --release` via
       # packaging/build.py. Match the dedicated connector workflow's stable
       # toolchain, rather than whatever Rust the runner image happens to ship.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: stable
 
       - name: Install aws cli
         run: |
