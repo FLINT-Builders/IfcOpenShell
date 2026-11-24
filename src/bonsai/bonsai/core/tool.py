@@ -377,6 +377,7 @@ class Drawing:
     def get_default_shading_style(cls): pass
     def get_default_sheet_path(cls, identification, name): pass
     def get_default_titleblock_path(cls, name): pass
+    def get_document_location(cls, document, description=None): pass
     def get_document_references(cls, document): pass
     def get_document_uri(cls, document, description=None): pass
     def get_drawing_collection(cls, drawing): pass
@@ -389,6 +390,7 @@ class Drawing:
     def get_ifc_representation_class(cls, object_type): pass
     def get_name(cls, element): pass
     def get_path_filename(cls, uri): pass
+    def get_project_path(cls, uri, ext=None, base=None): pass
     def get_reference_description(cls, reference): pass
     def get_reference_document(cls, reference): pass
     def get_reference_location(cls, reference): pass

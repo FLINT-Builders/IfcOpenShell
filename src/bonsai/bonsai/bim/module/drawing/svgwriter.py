@@ -254,15 +254,20 @@ class SvgWriter:
             if resource in self.MULTI_PATH_RESOURCES:
                 # Paths need to be split before they're resolved,
                 # otherwise the entire string is resolved as a single path.
-                self.resource_paths[resource] = [
-                    self.prepare_resource_path(resource, p) for p in resource_path.split(",") if p.strip()
-                ]
+                paths = [self.prepare_resource_path(resource, p) for p in resource_path.split(",") if p.strip()]
+                self.resource_paths[resource] = [p for p in paths if p]
                 continue
             self.resource_paths[resource] = self.prepare_resource_path(resource, resource_path)
 
-    def prepare_resource_path(self, resource: tool.Drawing.ResourceType, resource_path: str) -> str:
-        """Resolve resource path relative to the IFC file, copying the OOTB resource, if it's missing."""
-        resource_path = tool.Ifc.resolve_uri(resource_path.strip())
+    def prepare_resource_path(self, resource: tool.Drawing.ResourceType, resource_path: str) -> Union[str, None]:
+        """Resolve resource path relative to the IFC file, copying the OOTB resource, if it's missing.
+
+        :return: Resolved path or ``None`` if the path is outside of the project directory.
+        """
+        if not (resolved_path := tool.Drawing.get_project_path(resource_path.strip())):
+            print(f"WARNING. {resource} path for the drawing must be inside the project directory: {resource_path}")
+            return None
+        resource_path = resolved_path
         os.makedirs(os.path.dirname(resource_path), exist_ok=True)
         if not os.path.exists(resource_path):
             resource_basename = os.path.basename(resource_path)

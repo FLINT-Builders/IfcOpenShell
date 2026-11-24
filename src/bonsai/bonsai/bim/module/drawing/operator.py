@@ -521,7 +521,9 @@ class CreateDrawing(bpy.types.Operator):
                         elif "</svg>" in line:
                             continue
                         outfile.write(line)
-                shutil.copyfile(os.path.splitext(underlay)[0] + ".png", os.path.splitext(svg_path)[0] + "-underlay.png")
+                underlay_png = os.path.splitext(os.path.basename(svg_path))[0] + "-underlay.png"
+                underlay_png = tool.Drawing.ensure_project_path(underlay_png, "png", base=os.path.dirname(svg_path))
+                shutil.copyfile(os.path.splitext(underlay)[0] + ".png", underlay_png)
             if linework:
                 with open(linework) as infile:
                     should_skip = False
@@ -1845,16 +1847,13 @@ class CreateDrawing(bpy.types.Operator):
         return "mat-" + str(element.id())
 
     def get_svg_path(self, cache_type: Optional[str] = None) -> str:
-        drawing_path = tool.Drawing.get_document_uri(self.camera_document)
-        assert drawing_path
-        drawings_dir = os.path.dirname(drawing_path)
-
+        drawing_path = tool.Drawing.ensure_project_path(tool.Drawing.get_document_location(self.camera_document), "svg")
         if cache_type:
-            drawings_dir = os.path.join(drawings_dir, "cache")
-            os.makedirs(drawings_dir, exist_ok=True)
             filename = tool.Drawing.sanitise_filename(f"{self.drawing_name}-{cache_type}.svg")
-            return os.path.join(drawings_dir, filename)
-        os.makedirs(drawings_dir, exist_ok=True)
+            drawing_path = tool.Drawing.ensure_project_path(
+                os.path.join("cache", filename), "svg", base=os.path.dirname(drawing_path)
+            )
+        os.makedirs(os.path.dirname(drawing_path), exist_ok=True)
         return drawing_path
 
 
@@ -2723,7 +2722,12 @@ class ReloadDrawingStyles(bpy.types.Operator):
         rel_path = drawing_pset_data["ShadingStyles"]
         current_style = drawing_pset_data.get("CurrentShadingStyle", None)
 
-        json_path = Path(tool.Ifc.resolve_uri(rel_path))
+        if not (resolved_path := tool.Drawing.get_project_path(rel_path, "json")):
+            self.report(
+                {"ERROR"}, f"Shading styles path '{rel_path}' must be a .json file inside the project directory."
+            )
+            return {"CANCELLED"}
+        json_path = Path(resolved_path)
         if not json_path.exists():
             ootb_resource = tool.Blender.get_data_dir_path(Path("assets") / "shading_styles.json")
             print(
@@ -2873,7 +2877,12 @@ class SaveDrawingStylesData(bpy.types.Operator, tool.Ifc.Operator):
 
         rel_path = drawing_pset_data["ShadingStyles"]
         current_style = drawing_pset_data.get("CurrentShadingStyle", None)
-        json_path = Path(tool.Ifc.resolve_uri(rel_path))
+        if not (resolved_path := tool.Drawing.get_project_path(rel_path, "json")):
+            self.report(
+                {"ERROR"}, f"Shading styles path '{rel_path}' must be a .json file inside the project directory."
+            )
+            return {"CANCELLED"}
+        json_path = Path(resolved_path)
         if not json_path.exists():
             self.report({"ERROR"}, "Shading styles file not found: {}".format(json_path))
             return {"CANCELLED"}

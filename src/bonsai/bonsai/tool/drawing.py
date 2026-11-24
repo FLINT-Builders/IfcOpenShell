@@ -494,18 +494,17 @@ class Drawing(bonsai.core.tool.Drawing):
     def create_svg_schedule(cls, schedule: ifcopenshell.entity_instance) -> None:
         import bonsai.bim.module.drawing.scheduler as scheduler
 
+        location = cls.get_document_location(schedule)
+        outfile = cls.ensure_project_path(cls.get_path_with_ext(location, "svg") if location else None, "svg")
         schedule_creator = scheduler.Scheduler()
-        schedule_creator.schedule(
-            cls.get_document_uri(schedule), cls.get_path_with_ext(cls.get_document_uri(schedule), "svg")
-        )
+        schedule_creator.schedule(cls.get_document_uri(schedule), outfile)
 
     @classmethod
     def create_svg_sheet(cls, document: ifcopenshell.entity_instance, titleblock: str) -> str:
         import bonsai.bim.module.drawing.sheeter as sheeter
 
         sheet_builder = sheeter.SheetBuilder()
-        uri = cls.get_document_uri(document, "LAYOUT")
-        assert uri
+        uri = cls.ensure_project_path(cls.get_document_location(document, "LAYOUT"), "svg")
         sheet_builder.create(uri, titleblock)
         return uri
 
@@ -710,27 +709,97 @@ class Drawing(bonsai.core.tool.Drawing):
         return ifcopenshell.util.representation.get_context(tool.Ifc.get(), "Model", "Body", "MODEL_VIEW")
 
     @classmethod
+    def get_document_location(
+        cls, document: ifcopenshell.entity_instance, description: Optional[str] = None
+    ) -> Union[str, None]:
+        """Get the location as stored in the IFC file, without resolving it."""
+        if getattr(document, "Location", None):
+            return document.Location
+        if document.is_a("IfcDocumentInformation"):
+            for reference in cls.get_document_references(document):
+                if description and cls.get_reference_description(reference) != description:
+                    continue
+                if location := cls.get_document_location(reference):
+                    return location
+
+    @classmethod
     def get_document_uri(
         cls, document: ifcopenshell.entity_instance, description: Optional[str] = None
     ) -> Union[str, None]:
-        if getattr(document, "Location", None):
-            if os.path.isabs(document.Location):
-                return document.Location
-            ifc_path = tool.Ifc.get_path()
-            if os.path.isfile(ifc_path):
-                ifc_path = os.path.dirname(ifc_path)
-            return os.path.abspath(os.path.join(ifc_path, document.Location))
-        if document.is_a("IfcDocumentInformation"):
-            if tool.Ifc.get_schema() == "IFC2X3":
-                references = document.DocumentReferences
-            else:
-                references = document.HasDocumentReferences
-            for reference in references:
-                if description and cls.get_reference_description(reference) != description:
-                    continue
-                location = cls.get_document_uri(reference)
-                if location:
-                    return location
+        location = cls.get_document_location(document, description)
+        if not location:
+            return None
+        if os.path.isabs(location):
+            return location
+        ifc_path = tool.Ifc.get_path()
+        if os.path.isfile(ifc_path):
+            ifc_path = os.path.dirname(ifc_path)
+        return os.path.abspath(os.path.join(ifc_path, location))
+
+    @classmethod
+    def get_preferences_dirs(cls) -> list[str]:
+        """Get absolute directories for drawing files set in the add-on preferences."""
+        doc_prefs = tool.Blender.get_addon_preferences().doc
+        dirs = [getattr(doc_prefs, f"{name}_dir", "") for name in ("drawings", "sheets", "layouts", "titleblocks")]
+        dirs += [os.path.dirname(getattr(doc_prefs, f"{r.lower()}_path", "") or "") for r in cls.RESOURCE_TYPES]
+        return [os.path.realpath(d) for d in dirs if d and os.path.isabs(d)]
+
+    @classmethod
+    def get_project_path(
+        cls, uri: Union[str, None], ext: Optional[str] = None, base: Optional[str] = None
+    ) -> Union[str, None]:
+        """Resolve a path from the IFC file to a real path that drawing files may be written to.
+
+        IFC files may come from untrusted sources, so the resolved path (with symlinks resolved) has to be
+        inside the IFC file's directory. Absolute paths are only allowed inside directories that are set
+        in the add-on preferences.
+
+        :param uri: Path stored in the IFC file, e.g. a document location or a drawing resource path.
+        :param ext: Required file extension, without the dot.
+        :param base: Already resolved directory to resolve the relative ``uri`` against,
+            instead of the IFC file's directory.
+        :return: Resolved path or ``None`` if the path is not allowed.
+        """
+        ifc_path = tool.Ifc.get_path()
+        if not uri or not ifc_path:
+            return None
+        project_dir = os.path.realpath(os.path.dirname(ifc_path) if os.path.isfile(ifc_path) else ifc_path)
+        if base:
+            if os.path.isabs(uri):
+                return None
+            roots = [project_dir, *cls.get_preferences_dirs()]
+            path = os.path.join(base, uri)
+        elif os.path.isabs(uri):
+            roots = cls.get_preferences_dirs()
+            path = uri
+        else:
+            roots = [project_dir]
+            path = os.path.join(project_dir, uri)
+        try:
+            path = os.path.realpath(path)
+        except ValueError:
+            # Embedded null byte.
+            return None
+        if ext and os.path.splitext(path)[1].lower() != f".{ext}":
+            return None
+        for root in roots:
+            try:
+                if os.path.normcase(os.path.commonpath((root, path))) == os.path.normcase(root):
+                    return path
+            except ValueError:
+                # Paths on different drives.
+                continue
+        return None
+
+    @classmethod
+    def ensure_project_path(cls, uri: Union[str, None], ext: Optional[str] = None, base: Optional[str] = None) -> str:
+        """Same as :meth:`get_project_path`, but raises ``ValueError`` if the path is not allowed."""
+        if path := cls.get_project_path(uri, ext, base):
+            return path
+        requirement = f" and be a .{ext} file" if ext else ""
+        raise ValueError(
+            f"Refusing to write to '{uri}': drawing files must be inside the project directory{requirement}."
+        )
 
     @classmethod
     def get_path_filename(cls, path: str) -> str:
@@ -1589,7 +1658,8 @@ class Drawing(bonsai.core.tool.Drawing):
 
     @classmethod
     def setup_shading_styles_path(cls, resource_path: str) -> None:
-        resource_path = tool.Ifc.resolve_uri(resource_path)
+        if not (resource_path := cls.get_project_path(resource_path)):
+            return
         os.makedirs(os.path.dirname(resource_path), exist_ok=True)
         if not os.path.exists(resource_path):
             resource_basename = os.path.basename(resource_path)
