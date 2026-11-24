@@ -20,10 +20,12 @@ import ntpath
 import os
 import re
 import shutil
+import stat
 import urllib.parse
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import BinaryIO, Optional
 from xml.dom import minidom
 
 import ifcopenshell.util.geolocation
@@ -37,6 +39,18 @@ DRAWING_PADDING = 10
 DEFAULT_POSITION = Vector((30, 30))
 SVG = "{http://www.w3.org/2000/svg}"
 XLINK = "{http://www.w3.org/1999/xlink}"
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".svg")
+O_BINARY = getattr(os, "O_BINARY", 0)
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def create_new_file(path: str) -> BinaryIO:
+    """Replace ``path`` with a new regular file, never writing through an existing link at ``path``."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_BINARY, 0o666), "wb")
 
 
 class SheetBuilder:
@@ -293,8 +307,18 @@ class SheetBuilder:
         assert layout_path
         self.layout_dir = os.path.dirname(layout_path)
 
+        # The sheets directory and the files linked from the layout come from the project itself,
+        # so they must stay inside the project directory once symlinks are resolved.
+        self.project_dir = os.path.realpath(tool.Ifc.resolve_uri("."))
         sheet_path = tool.Ifc.resolve_uri(tool.Drawing.get_default_sheet_path(sheet[0], sheet.Name))
-        self.sheets_dir = os.path.dirname(sheet_path)
+        self.sheets_dir = os.path.realpath(os.path.dirname(sheet_path))
+        if not self.is_in_project(self.sheets_dir):
+            print(
+                f"WARNING. Sheet is not built, sheets directory '{self.sheets_dir}' "
+                f"is outside the project directory '{self.project_dir}'."
+            )
+            return {}
+        sheet_path = os.path.join(self.sheets_dir, os.path.basename(sheet_path))
 
         os.makedirs(self.sheets_dir, exist_ok=True)
 
@@ -311,15 +335,25 @@ class SheetBuilder:
         self.build_drawings(root, sheet)
         self.build_documents(root, sheet)
 
-        with open(sheet_path, "wb") as output:
+        with create_new_file(sheet_path) as output:
             tree.write(output)
 
         return {"SHEET": sheet_path}
+
+    def is_in_project(self, path: str) -> bool:
+        project_dir = os.path.normcase(self.project_dir)
+        try:
+            return os.path.commonpath([project_dir, os.path.normcase(path)]) == project_dir
+        except ValueError:
+            return False
 
     def build_titleblock(self, root: ET.Element, sheet: ifcopenshell.entity_instance) -> None:
         titleblock = root.findall(f'{SVG}g[@data-type="titleblock"]')[0]
         image = titleblock.findall(f"{SVG}image")[0]
         g = self.parse_embedded_svg(image, sheet.get_info())
+        if g is None:
+            titleblock.remove(image)
+            return
         grid_north = ifcopenshell.util.geolocation.get_grid_north(tool.Ifc.get()) * -1
         true_north = ifcopenshell.util.geolocation.get_true_north(tool.Ifc.get()) * -1
         for north in g.iterfind(f'.//{SVG}g[@data-type="grid-north"]'):
@@ -426,8 +460,9 @@ class SheetBuilder:
 
             if foreground is not None:
                 svg = self.parse_embedded_svg(foreground, {})
-                svg = self.ensure_drawing_unique_styles(svg, drawing_id)
-                view.append(svg)
+                if svg is not None:
+                    svg = self.ensure_drawing_unique_styles(svg, drawing_id)
+                    view.append(svg)
 
             if view_title is not None:
                 assert foreground is not None
@@ -449,7 +484,8 @@ class SheetBuilder:
 
                 if not is_perspective:
                     data["Scale"] = tool.Drawing.get_drawing_human_scale(drawing)
-                view.append(self.parse_embedded_svg(view_title, data))
+                if (title := self.parse_embedded_svg(view_title, data)) is not None:
+                    view.append(title)
 
             for image in images:
                 view.remove(image)
@@ -477,8 +513,8 @@ class SheetBuilder:
                 elif image.attrib["data-type"] == "view-title":
                     view_title = image
 
-            if table is not None:
-                view.append(self.parse_embedded_svg(table, {}))
+            if table is not None and (content := self.parse_embedded_svg(table, {})) is not None:
+                view.append(content)
 
             if view_title is not None:
                 path = self.get_href(table)
@@ -486,7 +522,8 @@ class SheetBuilder:
                 data.update({"Sheet" + k: v for k, v in sheet.get_info().items()})
                 if not data["Name"]:
                     data["Name"] = document.Name or "Unnamed"
-                view.append(self.parse_embedded_svg(view_title, data))
+                if (title := self.parse_embedded_svg(view_title, data)) is not None:
+                    view.append(title)
 
             for image in images:
                 view.remove(image)
@@ -494,7 +531,14 @@ class SheetBuilder:
     def get_href(self, element: ET.Element) -> str:
         return urllib.parse.unquote(element.attrib[f"{XLINK}href"]).replace("\\", "/")
 
-    def parse_embedded_svg(self, image: ET.Element, data: dict) -> ET.Element:
+    def parse_embedded_svg(self, image: ET.Element, data: dict) -> Optional[ET.Element]:
+        svg_path = os.path.realpath(os.path.join(self.layout_dir, self.get_href(image)))
+        if not self.is_in_project(svg_path):
+            print(
+                f"WARNING. Skipping '{svg_path}' in the sheet, it is outside the project directory '{self.project_dir}'."
+            )
+            return None
+
         group = ET.Element("g")
         x, y = self.convert_to_mm(image.attrib["x"]), self.convert_to_mm(image.attrib["y"])
         group.attrib["transform"] = f"translate({x},{y})"
@@ -512,8 +556,7 @@ class SheetBuilder:
         clip_path.append(rect)
         self.defs.append(clip_path)
 
-        svg_path = self.get_href(image)
-        with open(os.path.join(self.layout_dir, svg_path), "r") as template:
+        with open(svg_path, "r") as template:
             embedded = ET.fromstring(pystache.render(template.read(), data))
             # viewBox should not be nested
             embedded.attrib["viewBox"] = ""
@@ -521,19 +564,42 @@ class SheetBuilder:
             self.scale = embedded.attrib.get("data-scale")
             images = embedded.findall(f"{SVG}image")
             for image in images:
-                old_href = Path(image.attrib[f"{XLINK}href"])
-                if not os.path.isabs(old_href):
-                    template_dir = Path(os.path.join(self.layout_dir, svg_path)).resolve().parent
-                    old_href = Path(os.path.join(template_dir, old_href))
-                old_href = old_href.absolute().resolve().as_posix()
-                new_href = Path(os.path.join(self.sheets_dir, Path(old_href).name)).absolute().resolve().as_posix()
-                shutil.copy(old_href, new_href)
-                image.attrib[f"{XLINK}href"] = Path(old_href).name
+                href = image.attrib[f"{XLINK}href"]
+                name = self.copy_image(href, os.path.dirname(svg_path))
+                if name is None:
+                    print(f"WARNING. Skipping image '{href}' in '{svg_path}', only images in the project are copied.")
+                    embedded.remove(image)
+                    continue
+                image.attrib[f"{XLINK}href"] = name
         for child in embedded:
             if "namedview" in child.tag:
                 continue
             group.append(child)
         return group
+
+    def copy_image(self, href: str, template_dir: str) -> Optional[str]:
+        """Copy an image linked from a template into the sheets directory.
+
+        :return: Name of the copied image in the sheets directory, ``None`` if the link was refused.
+        """
+        if os.path.isabs(href) or os.path.splitdrive(href)[0]:
+            return None
+        src = os.path.realpath(os.path.join(template_dir, href))
+        name = os.path.basename(src)
+        if not self.is_in_project(src) or not name.lower().endswith(IMAGE_EXTENSIONS):
+            return None
+        dest = os.path.join(self.sheets_dir, name)
+        try:
+            src_file = os.fdopen(os.open(src, os.O_RDONLY | O_BINARY | O_NOFOLLOW), "rb")
+        except OSError:
+            return None
+        with src_file:
+            if not stat.S_ISREG(os.fstat(src_file.fileno()).st_mode):
+                return None
+            if os.path.normcase(src) != os.path.normcase(dest):
+                with create_new_file(dest) as dest_file:
+                    shutil.copyfileobj(src_file, dest_file)
+        return name
 
     def change_titleblock(self, sheet: ifcopenshell.entity_instance, titleblock_name: str) -> None:
         ootb_titleblock_path = tool.Blender.get_data_dir_path(

@@ -2033,6 +2033,9 @@ class OpenSheet(bpy.types.Operator):
                 continue
             sheet_builder = sheeter.SheetBuilder()
             references = sheet_builder.build(sheet)
+            if "SHEET" not in references:
+                warnings.append(tool.Drawing.get_sheets_dir_outside_project_warning(sheet))
+                continue
             sheet_uri = references["SHEET"]
             if svg2pdf_command:
                 sheet_uri = os.path.splitext(sheet_uri)[0] + ".pdf"
@@ -2222,6 +2225,9 @@ class CreateSheets(bpy.types.Operator, tool.Ifc.Operator):
             sheet_builder = sheeter.SheetBuilder()
 
             references = sheet_builder.build(sheet)
+            if "SHEET" not in references:
+                warnings.append(tool.Drawing.get_sheets_dir_outside_project_warning(sheet))
+                continue
 
             # These variables will be made available to the evaluated commands
             svg = references["SHEET"]
