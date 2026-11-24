@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import importlib
+import numbers
 import os
 import re
 from collections import defaultdict
@@ -60,6 +61,15 @@ __version__ = version = "0.0.0"
 ParserPreset = Literal["basic", "cobie24", "cobie24legacy"]
 GetElementDataCallBack = Callable[[ifcopenshell.file, ifcopenshell.entity_instance], dict[str, Any]]
 _parser_presets_configs = {}
+
+# Spreadsheet applications evaluate cells starting with these as formulas.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def neutralize_formula(value: str) -> str:
+    if value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 def get_presets_configs() -> dict[ParserPreset, dict[str, Any]]:
@@ -210,7 +220,9 @@ class Writer:
                     elif value is False:
                         value = bool_false
                     elif isinstance(value, (list, tuple)):
-                        value = list_separator.join([str(v) for v in value])
+                        value = neutralize_formula(list_separator.join([str(v) for v in value]))
+                    elif not isinstance(value, numbers.Number):
+                        value = neutralize_formula(str(value))
                     processed_row.append(value)
                 rows.append(processed_row)
 
@@ -229,6 +241,7 @@ class Writer:
                     i = headers.index(sort_data["name"])
                     reverse = sort_data["order"] == "DESC"
                     rows = sorted(rows, key=lambda x: natural_sort(x[i]), reverse=reverse)
+            headers = [neutralize_formula(h) if isinstance(h, str) else h for h in headers]
             self.categories[category] = {"headers": headers, "rows": rows}
 
     def write_csv(self, output_folder: str, delimiter: str = ",") -> None:
@@ -319,6 +332,8 @@ class Writer:
             c = 1
             for header in data["headers"]:
                 cell = worksheet.cell(row=r, column=c, value=header)
+                if isinstance(header, str):
+                    cell.data_type = "s"
                 cell.fill = cell_formats["h"]
                 c += 1
 
@@ -331,6 +346,7 @@ class Writer:
                     else:
                         cell_format = colours[c - 1]  # Adjusted the indexing
                     cell = worksheet.cell(row=r, column=c, value=str(col))
+                    cell.data_type = "s"
                     cell.fill = cell_formats[cell_format]
                     c += 1
                 r += 1
