@@ -24,6 +24,7 @@
 #include "../../ViewerSettings.h"
 #include "../../../ifcviewer/AppSettings.h"
 #include "../../components/Dialog.h"
+#include "../../components/MessageBox.h"
 #include "../../components/Section.h"
 #include "../../components/SvgIcon.h"
 #include "../../components/Style.h"
@@ -483,7 +484,7 @@ QWidget* SettingsDialog::buildConnectorsTab() {
             if (!session_state_) return;
             auto* proc = session_state_->connectorRegistry()->get(connector_id);
             if (!proc) {
-                QMessageBox::warning(this, "Connector",
+                components::message_box::warning(this, "Connector",
                     QString("Could not launch connector '%1':\n%2")
                         .arg(connector_id,
                              session_state_->connectorRegistry()->lastError()));
@@ -502,10 +503,10 @@ QWidget* SettingsDialog::buildConnectorsTab() {
                     // -32601 = JSON-RPC "Method not found": connector opted
                     // out of the optional open_settings handler per spec.
                     if (code == -32601) {
-                        QMessageBox::information(self, "Connector",
+                        components::message_box::information(self, "Connector",
                             "Settings not available.");
                     } else {
-                        QMessageBox::warning(self, "Connector",
+                        components::message_box::warning(self, "Connector",
                             QString("Connector '%1' failed to open settings:\n%2")
                                 .arg(connector_id, message));
                     }

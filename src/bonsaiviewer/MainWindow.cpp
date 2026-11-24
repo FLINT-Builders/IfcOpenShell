@@ -25,6 +25,7 @@
 #include "../ifcviewer/ViewportWindow.h"
 #include "SessionState.h"
 #include "components/Buttons.h"
+#include "components/MessageBox.h"
 #include "components/Panel.h"
 #include "components/Style.h"
 #include "components/Tabs.h"
@@ -558,7 +559,7 @@ void MainWindow::setupLoader() {
     // status text + progress are already cleared there, we only show the modal.
     connect(session_state_, &bonsaiviewer::SessionState::loadError, this,
             [this](const QString& message) {
-        QMessageBox::warning(this, "Bonsai Viewer", message);
+        components::message_box::warning(this, "Bonsai Viewer", message);
     });
 
     connect(viewport_widget_->viewport(), &ViewportWindow::frameStatsUpdated, this,

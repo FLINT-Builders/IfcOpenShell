@@ -22,6 +22,7 @@
 
 #include "SaveProjectDialog.h"
 
+#include "../../components/MessageBox.h"
 #include "../../ElementRegistry.h"
 #include "../../SessionState.h"
 #include "../connectors/PickerDialog.h"
@@ -68,7 +69,7 @@ void clearScene(SessionState& session, ViewportWindow& viewport) {
 // op). Handles the Save → Discard → Cancel branch including a follow-on save.
 bool confirmDiscardIfDirty(SessionState& session, QWidget& host) {
     if (!session.federation()->isDirty()) return true;
-    const auto result = QMessageBox::question(
+    const auto result = components::message_box::question(
         &host, "Unsaved Project",
         "The current project has unsaved changes. Save before continuing?",
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
@@ -206,7 +207,7 @@ bool isIfcfedUnchanged(const QString& current_path, const QString& candidate_pat
 bool openProjectAt(SessionState& session, QWidget& host, ViewportWindow& viewport, const QString& path) {
     SceneLoader* loader = session.loader();
     if (loader && loader->isLoading()) {
-        QMessageBox::information(
+        components::message_box::information(
             &host, "Open Project",
             "Wait until the current model load finishes before opening another project.");
         return false;
@@ -216,8 +217,8 @@ bool openProjectAt(SessionState& session, QWidget& host, ViewportWindow& viewpor
     QStringList warnings;
     QString err;
     if (!session.federation()->load(path, &warnings, &err)) {
-        QMessageBox::warning(&host, "Open Project",
-                             QString("Could not open project:\n%1").arg(err));
+        components::message_box::warning(&host, "Open Project",
+                                         QString("Could not open project:\n%1").arg(err));
         return false;
     }
 
@@ -237,8 +238,8 @@ bool openProjectAt(SessionState& session, QWidget& host, ViewportWindow& viewpor
     modules::models::commands::detail::loadModels(session, paths, model_ids);
 
     if (!warnings.isEmpty()) {
-        QMessageBox::warning(&host, "Open Project",
-                             "Project opened with warnings:\n\n" + warnings.join("\n"));
+        components::message_box::warning(&host, "Open Project",
+                                         "Project opened with warnings:\n\n" + warnings.join("\n"));
     }
 
     session.federation()->markClean();
@@ -257,8 +258,8 @@ bool openProjectAt(SessionState& session, QWidget& host, ViewportWindow& viewpor
 bool saveProjectTo(SessionState& session, QWidget& host, const QString& path) {
     QString err;
     if (!session.federation()->save(path, &err)) {
-        QMessageBox::warning(&host, "Save Project",
-                             QString("Could not save project:\n%1").arg(err));
+        components::message_box::warning(&host, "Save Project",
+                                         QString("Could not save project:\n%1").arg(err));
         return false;
     }
     session.setStatusMessage("Project", QFileInfo(path).fileName());
@@ -271,7 +272,7 @@ bool saveProjectTo(SessionState& session, QWidget& host, const QString& path) {
 bool newProject(SessionState& session, QWidget& host, ViewportWindow& viewport) {
     SceneLoader* loader = session.loader();
     if (loader && loader->isLoading()) {
-        QMessageBox::information(
+        components::message_box::information(
             &host, "New Project",
             "Wait until the current model load finishes before creating a new project.");
         return false;
@@ -305,7 +306,7 @@ bool openProjectPath(SessionState& session, QWidget& host, ViewportWindow& viewp
 bool openCloudProject(SessionState& session, QWidget& host, ViewportWindow& viewport) {
     SceneLoader* loader = session.loader();
     if (loader && loader->isLoading()) {
-        QMessageBox::information(
+        components::message_box::information(
             &host, "Open from Cloud",
             "Wait until the current model load finishes before opening another project.");
         return false;
@@ -315,7 +316,7 @@ bool openCloudProject(SessionState& session, QWidget& host, ViewportWindow& view
     auto* registry = session.connectorRegistry();
     const auto& manifests = registry->available();
     if (manifests.empty()) {
-        QMessageBox::information(&host, "Open from Cloud",
+        components::message_box::information(&host, "Open from Cloud",
             "No connectors are installed. Install one under your user connectors "
             "directory.");
         return false;
@@ -330,7 +331,7 @@ bool openCloudProject(SessionState& session, QWidget& host, ViewportWindow& view
 
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Open from Cloud",
+        components::message_box::warning(&host, "Open from Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return false;
@@ -350,7 +351,7 @@ bool openCloudProject(SessionState& session, QWidget& host, ViewportWindow& view
             const QString path = result.toObject().value("path").toString();
             if (path.isEmpty()) {
                 if (hguard) {
-                    QMessageBox::warning(hguard, "Open from Cloud",
+                    components::message_box::warning(hguard, "Open from Cloud",
                         QString("Connector '%1' returned no path.").arg(connector_id));
                 }
                 return;
@@ -383,14 +384,14 @@ bool syncCloudProject(SessionState& session, QWidget& host, ViewportWindow& view
         if (model.source_connector != "local") { has_cloud_models = true; break; }
     }
     if (!has_manifest && !has_cloud_models) {
-        QMessageBox::information(&host, "Sync From Cloud",
+        components::message_box::information(&host, "Sync From Cloud",
             "Nothing to sync — this project has no cloud resources.");
         return false;
     }
 
     SceneLoader* loader = session.loader();
     if (loader && loader->isLoading()) {
-        QMessageBox::information(&host, "Sync From Cloud",
+        components::message_box::information(&host, "Sync From Cloud",
             "Wait until the current model load finishes before syncing.");
         return false;
     }
@@ -411,14 +412,14 @@ bool syncCloudProject(SessionState& session, QWidget& host, ViewportWindow& view
 
     const QString connector_id = federation->manifestConnectorId();
     if (connector_id.isEmpty()) {
-        QMessageBox::warning(&host, "Sync From Cloud",
+        components::message_box::warning(&host, "Sync From Cloud",
             "The project's manifest does not name a connector.");
         return false;
     }
     auto* registry = session.connectorRegistry();
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Sync From Cloud",
+        components::message_box::warning(&host, "Sync From Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return false;
@@ -439,7 +440,7 @@ bool syncCloudProject(SessionState& session, QWidget& host, ViewportWindow& view
             const QString new_path = result.toObject().value("path").toString();
             if (new_path.isEmpty()) {
                 if (hguard) {
-                    QMessageBox::warning(hguard, "Sync From Cloud",
+                    components::message_box::warning(hguard, "Sync From Cloud",
                         QString("Connector '%1' returned no path.").arg(connector_id));
                 }
                 return;
@@ -511,7 +512,7 @@ TempProjectFile writeProjectToTemp(SessionState& session, QWidget& host, const Q
     TempProjectFile out;
     out.dir = std::make_shared<QTemporaryDir>();
     if (!out.dir->isValid()) {
-        QMessageBox::warning(&host, op_title,
+        components::message_box::warning(&host, op_title,
             QString("Could not create a temporary directory:\n%1")
                 .arg(out.dir->errorString()));
         out.dir.reset();
@@ -523,7 +524,7 @@ TempProjectFile writeProjectToTemp(SessionState& session, QWidget& host, const Q
     const QString tmp_path = QDir(out.dir->path()).filePath(name);
     QString err;
     if (!session.federation()->writeCopyTo(tmp_path, &err)) {
-        QMessageBox::warning(&host, op_title,
+        components::message_box::warning(&host, op_title,
             QString("Failed to write temporary project:\n%1").arg(err));
         out.dir.reset();
         return out;
@@ -542,7 +543,7 @@ void onPushIfcfedResult(SessionState& session,
     session.endProgress();
     const QString new_path = result.toObject().value("path").toString();
     if (new_path.isEmpty()) {
-        QMessageBox::warning(&host, op_title,
+        components::message_box::warning(&host, op_title,
             QString("Connector '%1' returned no path.").arg(connector_id));
         return;
     }
@@ -559,7 +560,7 @@ void onPushIfcfedResult(SessionState& session,
 bool saveCloudProject(SessionState& session, QWidget& host) {
     auto* federation = session.federation();
     if (!federation->hasManifest()) {
-        QMessageBox::information(&host, "Save To Cloud",
+        components::message_box::information(&host, "Save To Cloud",
             "This project has no cloud target. Use \"Save As To Cloud\" first.");
         return false;
     }
@@ -567,7 +568,7 @@ bool saveCloudProject(SessionState& session, QWidget& host) {
     auto* registry = session.connectorRegistry();
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Save To Cloud",
+        components::message_box::warning(&host, "Save To Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return false;
@@ -609,7 +610,7 @@ bool saveAsCloudProject(SessionState& session, QWidget& host) {
     auto* registry = session.connectorRegistry();
     const auto& manifests = registry->available();
     if (manifests.empty()) {
-        QMessageBox::information(&host, "Save As To Cloud",
+        components::message_box::information(&host, "Save As To Cloud",
             "No connectors are installed.");
         return false;
     }
@@ -623,7 +624,7 @@ bool saveAsCloudProject(SessionState& session, QWidget& host) {
 
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Save As To Cloud",
+        components::message_box::warning(&host, "Save As To Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return false;

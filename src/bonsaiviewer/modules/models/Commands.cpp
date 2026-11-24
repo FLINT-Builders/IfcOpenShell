@@ -23,6 +23,7 @@
 #include "AddModelDialog.h"
 #include "SettingsDialog.h"
 
+#include "../../components/MessageBox.h"
 #include "../../ElementRegistry.h"
 #include "../../SessionState.h"
 #include "../connectors/PickerDialog.h"
@@ -221,7 +222,7 @@ void removeGroup(SessionState& session, QWidget& host, const QString& group_id) 
     const Federation::Group* group = session.federation()->findGroupById(group_id);
     if (!group) return;
 
-    const auto choice = QMessageBox::question(
+    const auto choice = components::message_box::question(
         &host, "Remove Group",
         QString("Remove group '%1'? Models inside it will move to the parent.").arg(group->display_name),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
@@ -235,7 +236,7 @@ void removeGroup(SessionState& session, QWidget& host, const QString& group_id) 
 void removeModel(SessionState& session, ViewportWindow& viewport, QWidget& host, const QString& model_id) {
     const Federation::Model* model = session.federation()->findById(model_id);
     const QString label = model ? model->display_name : model_id;
-    const auto choice = QMessageBox::question(
+    const auto choice = components::message_box::question(
         &host, "Remove Model",
         QString("Remove model '%1' from the federation?").arg(label),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
@@ -424,7 +425,7 @@ void addModelFromCloud(SessionState& session, QWidget& host) {
     auto* registry = session.connectorRegistry();
     const auto& manifests = registry->available();
     if (manifests.empty()) {
-        QMessageBox::information(&host, "Add From Cloud",
+        components::message_box::information(&host, "Add From Cloud",
             "No connectors are installed.");
         return;
     }
@@ -438,7 +439,7 @@ void addModelFromCloud(SessionState& session, QWidget& host) {
 
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Add From Cloud",
+        components::message_box::warning(&host, "Add From Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return;
@@ -519,13 +520,13 @@ void saveModelToCloud(SessionState& session, QWidget& host, const QString& model
     const Federation::Model* model = federation->findById(model_id);
     if (!model) return;
     if (model->source_connector == "local") {
-        QMessageBox::information(&host, "Save Model To Cloud",
+        components::message_box::information(&host, "Save Model To Cloud",
             "This model has no cloud target. Use \"Save As To Cloud\" first.");
         return;
     }
     const QString local_path = localPathForModel(session, model_id);
     if (local_path.isEmpty()) {
-        QMessageBox::warning(&host, "Save Model To Cloud",
+        components::message_box::warning(&host, "Save Model To Cloud",
             "Cannot find a local copy of this model to push.");
         return;
     }
@@ -533,7 +534,7 @@ void saveModelToCloud(SessionState& session, QWidget& host, const QString& model
     auto* registry = session.connectorRegistry();
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Save Model To Cloud",
+        components::message_box::warning(&host, "Save Model To Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return;
@@ -577,7 +578,7 @@ void saveModelAsToCloud(SessionState& session, QWidget& host, const QString& mod
     if (!model) return;
     const QString local_path = localPathForModel(session, model_id);
     if (local_path.isEmpty()) {
-        QMessageBox::warning(&host, "Save Model As To Cloud",
+        components::message_box::warning(&host, "Save Model As To Cloud",
             "Cannot find a local copy of this model to push.");
         return;
     }
@@ -585,7 +586,7 @@ void saveModelAsToCloud(SessionState& session, QWidget& host, const QString& mod
     auto* registry = session.connectorRegistry();
     const auto& manifests = registry->available();
     if (manifests.empty()) {
-        QMessageBox::information(&host, "Save Model As To Cloud",
+        components::message_box::information(&host, "Save Model As To Cloud",
             "No connectors are installed.");
         return;
     }
@@ -600,7 +601,7 @@ void saveModelAsToCloud(SessionState& session, QWidget& host, const QString& mod
 
     auto* proc = registry->get(connector_id);
     if (!proc) {
-        QMessageBox::warning(&host, "Save Model As To Cloud",
+        components::message_box::warning(&host, "Save Model As To Cloud",
             QString("Could not launch connector '%1':\n%2")
                 .arg(connector_id, registry->lastError()));
         return;
@@ -673,8 +674,8 @@ void convertIfcToDatabase(SessionState& session, QWidget& host) {
     const QFileInfo output_info(output_path);
     if (output_info.exists()) {
         const QString message = QString("'%1' already exists. Overwrite?").arg(output_info.fileName());
-        if (QMessageBox::question(&host, "Convert IFC to Database", message,
-                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+        if (components::message_box::question(&host, "Convert IFC to Database", message,
+                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
             return;
         }
     }
@@ -725,8 +726,8 @@ void convertIfcToDatabase(SessionState& session, QWidget& host) {
 
         if (!error_message->isEmpty()) {
             session.setStatusMessage("Error", *error_message);
-            QMessageBox::warning(host_ptr, "Convert IFC to Database",
-                                 QString("Conversion failed:\n%1").arg(*error_message));
+            components::message_box::warning(host_ptr, "Convert IFC to Database",
+                                             QString("Conversion failed:\n%1").arg(*error_message));
             return;
         }
 
@@ -736,8 +737,8 @@ void convertIfcToDatabase(SessionState& session, QWidget& host) {
                 .arg(QFileInfo(input_path).fileName(),
                      QFileInfo(output_path).fileName(),
                      formatElapsed(elapsed)));
-        QMessageBox::information(host_ptr, "Convert IFC to Database",
-                                 QString("Database written to:\n%1").arg(output_path));
+        components::message_box::information(host_ptr, "Convert IFC to Database",
+                                             QString("Database written to:\n%1").arg(output_path));
     });
 
     thread->start();
@@ -893,8 +894,8 @@ void exportGeometryDatabase(SessionState& session, QWidget& host) {
 
         if (!error_message->isEmpty()) {
             session.setStatusMessage("Error", *error_message);
-            QMessageBox::warning(host_ptr, "Export Geometry Database",
-                                 QString("Export failed:\n%1").arg(*error_message));
+            components::message_box::warning(host_ptr, "Export Geometry Database",
+                                             QString("Export failed:\n%1").arg(*error_message));
             return;
         }
 
@@ -904,8 +905,8 @@ void exportGeometryDatabase(SessionState& session, QWidget& host) {
                 .arg(QFileInfo(input_path).fileName(),
                      QFileInfo(output_path).fileName(),
                      formatElapsed(elapsed)));
-        QMessageBox::information(host_ptr, "Export Geometry Database",
-                                 QString("Geometry database written to:\n%1").arg(output_path));
+        components::message_box::information(host_ptr, "Export Geometry Database",
+                                             QString("Geometry database written to:\n%1").arg(output_path));
     });
 
     thread->start();

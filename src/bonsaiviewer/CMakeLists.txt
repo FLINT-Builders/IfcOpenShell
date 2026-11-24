@@ -53,6 +53,8 @@ set(BONSAIVIEWER_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/components/Tabs.h
     ${CMAKE_CURRENT_SOURCE_DIR}/components/KeyValueTable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/components/KeyValueTable.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/components/MessageBox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/components/MessageBox.h
     ${CMAKE_CURRENT_SOURCE_DIR}/components/Buttons.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/components/Buttons.h
     ${CMAKE_CURRENT_SOURCE_DIR}/components/Section.cpp
