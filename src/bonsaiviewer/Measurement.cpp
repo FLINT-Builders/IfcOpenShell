@@ -35,15 +35,35 @@
 
 namespace {
 
+// Indices originate in the .ifcview sidecar and are untrusted. Drop every
+// triangle that does not address three vertices of `positions`, so the
+// loops below can index positions[3 * i] without a per-access check.
+void dropOutOfRangeTriangles(ViewportWindow::MeshTriangles& tris) {
+    const size_t n_verts = tris.positions.size() / 3;
+    size_t out = 0;
+    for (size_t i = 0; i + 2 < tris.indices.size(); i += 3) {
+        const uint32_t ia = tris.indices[i + 0];
+        const uint32_t ib = tris.indices[i + 1];
+        const uint32_t ic = tris.indices[i + 2];
+        if (ia >= n_verts || ib >= n_verts || ic >= n_verts) continue;
+        tris.indices[out++] = ia;
+        tris.indices[out++] = ib;
+        tris.indices[out++] = ic;
+    }
+    tris.indices.resize(out);
+}
+
 double meshLocalVolume(const ViewportWindow::MeshTriangles& tris) {
     // Signed tetrahedra from the origin: V = sum( a · (b × c) ) / 6.
     // Absolute value at the end so winding convention doesn't matter.
     double sum = 0.0;
     const size_t n = tris.indices.size();
+    const size_t n_verts = tris.positions.size() / 3;
     for (size_t i = 0; i + 2 < n; i += 3) {
         const uint32_t ia = tris.indices[i + 0];
         const uint32_t ib = tris.indices[i + 1];
         const uint32_t ic = tris.indices[i + 2];
+        if (ia >= n_verts || ib >= n_verts || ic >= n_verts) continue;
         const float* a = &tris.positions[3 * ia];
         const float* b = &tris.positions[3 * ib];
         const float* c = &tris.positions[3 * ic];
@@ -370,6 +390,7 @@ AreaMeasurement::MeshCache* AreaMeasurement::meshCache(ViewportWindow& vp,
 
     ViewportWindow::MeshTriangles tris;
     if (!vp.readbackMeshTriangles(session_model_id, mesh_id, tris)) return nullptr;
+    dropOutOfRangeTriangles(tris);
 
     MeshCache c;
     c.positions = std::move(tris.positions);
@@ -877,6 +898,7 @@ void LengthMeasurement::rebuildLaserOverlay(ViewportWindow& vp) {
     bool have_extent = false;
     double min_t1 = 0.0, max_t1 = 0.0, min_t2 = 0.0, max_t2 = 0.0;
     if (vp.readbackMeshTriangles(first_pick_.session_model_id, first_pick_.mesh_id, tris)) {
+        dropOutOfRangeTriangles(tris);
         const size_t n_verts = tris.positions.size() / 3;
         const size_t n_tris  = tris.indices.size() / 3;
         if (n_tris > 0) {

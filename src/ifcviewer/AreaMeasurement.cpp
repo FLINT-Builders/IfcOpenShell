@@ -40,6 +40,24 @@ uint64_t edgeKey(uint32_t a, uint32_t b) {
     return (uint64_t(a) << 32) | uint64_t(b);
 }
 
+// Indices originate in the .ifcview sidecar and are untrusted. Drop every
+// triangle that does not address three vertices of `positions`, so the
+// loops below can index positions[3 * i] without a per-access check.
+void dropOutOfRangeTriangles(ViewportWindow::MeshTriangles& tris) {
+    const size_t n_verts = tris.positions.size() / 3;
+    size_t out = 0;
+    for (size_t i = 0; i + 2 < tris.indices.size(); i += 3) {
+        const uint32_t ia = tris.indices[i + 0];
+        const uint32_t ib = tris.indices[i + 1];
+        const uint32_t ic = tris.indices[i + 2];
+        if (ia >= n_verts || ib >= n_verts || ic >= n_verts) continue;
+        tris.indices[out++] = ia;
+        tris.indices[out++] = ib;
+        tris.indices[out++] = ic;
+    }
+    tris.indices.resize(out);
+}
+
 // Triangle area = 0.5 * |(b - a) × (c - a)|. Also returns the unit
 // normal (zeroed for degenerate tris).
 double triAreaAndNormal(const float* a, const float* b, const float* c,
@@ -161,6 +179,7 @@ AreaMeasurement::meshAdj(ViewportWindow& vp,
     // each time the user picks a brand-new mesh.
     ViewportWindow::MeshTriangles tris;
     if (!vp.readbackMeshTriangles(session_model_id, mesh_id, tris)) return nullptr;
+    dropOutOfRangeTriangles(tris);
     if (tris.indices.size() < 3) return nullptr;
 
     MeshAdj a;
@@ -172,9 +191,9 @@ AreaMeasurement::meshAdj(ViewportWindow& vp,
         const uint32_t ia = tris.indices[3 * t + 0];
         const uint32_t ib = tris.indices[3 * t + 1];
         const uint32_t ic = tris.indices[3 * t + 2];
-        if (3 * ia + 2 >= tris.positions.size()
-         || 3 * ib + 2 >= tris.positions.size()
-         || 3 * ic + 2 >= tris.positions.size()) continue;
+        if (size_t(ia) * 3 + 2 >= tris.positions.size()
+         || size_t(ib) * 3 + 2 >= tris.positions.size()
+         || size_t(ic) * 3 + 2 >= tris.positions.size()) continue;
         const float* pa = &tris.positions[3 * ia];
         const float* pb = &tris.positions[3 * ib];
         const float* pc = &tris.positions[3 * ic];
@@ -197,6 +216,7 @@ void AreaMeasurement::onPick(ViewportWindow& vp,
 
     ViewportWindow::MeshTriangles tris;
     if (!vp.readbackMeshTriangles(pick.session_model_id, pick.mesh_id, tris)) return;
+    dropOutOfRangeTriangles(tris);
     const size_t n_tris = tris.indices.size() / 3;
     if (n_tris == 0) return;
 
@@ -305,6 +325,7 @@ void AreaMeasurement::rebuildHighlightAndLabels(ViewportWindow& vp) {
         if (it != tris_cache.end()) return &it->second;
         ViewportWindow::MeshTriangles tris;
         if (!vp.readbackMeshTriangles(session_model_id, mesh_id, tris)) return nullptr;
+        dropOutOfRangeTriangles(tris);
         return &tris_cache.emplace(k, std::move(tris)).first->second;
     };
 
@@ -315,7 +336,7 @@ void AreaMeasurement::rebuildHighlightAndLabels(ViewportWindow& vp) {
         const float* M = sel.composed_transform;  // column-major
         for (int e = 0; e < 3; ++e) {
             const uint32_t vi = tris->indices[3 * sel.tri + e];
-            if (3 * vi + 2 >= tris->positions.size()) continue;
+            if (size_t(vi) * 3 + 2 >= tris->positions.size()) continue;
             const float* p = &tris->positions[3 * vi];
             // World = M * (p, 1). Column-major: M[col*4 + row].
             const float wx = M[0]*p[0] + M[4]*p[1] + M[8]*p[2]  + M[12];

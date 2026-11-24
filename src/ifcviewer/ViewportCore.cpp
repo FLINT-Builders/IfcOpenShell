@@ -2270,6 +2270,11 @@ double computeMeshLocalVolumeQuantised(
         positions[3 * v + 2] = az + float(qz) * inv_q * ez;
     }
 
+    // Sidecar indices are untrusted: only triangles whose three indices
+    // address a vertex of this mesh reach the volume sum or the CPU
+    // triangle cache that the pick / measurement code indexes into.
+    std::vector<std::uint32_t> kept;
+    if (out_tris) kept.reserve(n_indices - n_indices % 3);
     double sum = 0.0;
     for (std::uint32_t i = 0; i + 2 < n_indices; i += 3) {
         const std::uint32_t i0 = ibase[i + 0];
@@ -2277,9 +2282,14 @@ double computeMeshLocalVolumeQuantised(
         const std::uint32_t i2 = ibase[i + 2];
         if (i0 >= mesh.vertex_count || i1 >= mesh.vertex_count
          || i2 >= mesh.vertex_count) continue;
-        const float* p0 = &positions[3 * i0];
-        const float* p1 = &positions[3 * i1];
-        const float* p2 = &positions[3 * i2];
+        if (out_tris) {
+            kept.push_back(i0);
+            kept.push_back(i1);
+            kept.push_back(i2);
+        }
+        const float* p0 = &positions[std::size_t(i0) * 3];
+        const float* p1 = &positions[std::size_t(i1) * 3];
+        const float* p2 = &positions[std::size_t(i2) * 3];
         const double cx = double(p1[1]) * p2[2] - double(p1[2]) * p2[1];
         const double cy = double(p1[2]) * p2[0] - double(p1[0]) * p2[2];
         const double cz = double(p1[0]) * p2[1] - double(p1[1]) * p2[0];
@@ -2288,7 +2298,7 @@ double computeMeshLocalVolumeQuantised(
 
     if (out_tris) {
         out_tris->positions = std::move(positions);
-        out_tris->indices.assign(ibase, ibase + n_indices);
+        out_tris->indices = std::move(kept);
     }
     return std::abs(sum) / 6.0;
 }
@@ -7257,12 +7267,12 @@ bool ViewportCore::pickMeshLocalAt(int x, int y, MeshLocalPick& out) {
                                     const std::uint32_t ia = tris.indices[3 * t + 0];
                                     const std::uint32_t ib = tris.indices[3 * t + 1];
                                     const std::uint32_t ic = tris.indices[3 * t + 2];
-                                    if (3 * ia + 2 >= tris.positions.size()
-                                     || 3 * ib + 2 >= tris.positions.size()
-                                     || 3 * ic + 2 >= tris.positions.size()) continue;
-                                    const float* va = &tris.positions[3 * ia];
-                                    const float* vb = &tris.positions[3 * ib];
-                                    const float* vc = &tris.positions[3 * ic];
+                                    if (std::size_t(ia) * 3 + 2 >= tris.positions.size()
+                                     || std::size_t(ib) * 3 + 2 >= tris.positions.size()
+                                     || std::size_t(ic) * 3 + 2 >= tris.positions.size()) continue;
+                                    const float* va = &tris.positions[std::size_t(ia) * 3];
+                                    const float* vb = &tris.positions[std::size_t(ib) * 3];
+                                    const float* vc = &tris.positions[std::size_t(ic) * 3];
                                     float t_local = 0.0f;
                                     if (!rayTriMT(ro_l, rd_l, va, vb, vc, t_local)) continue;
                                     const float t_world = t_local / ldn;
@@ -7276,9 +7286,9 @@ bool ViewportCore::pickMeshLocalAt(int x, int y, MeshLocalPick& out) {
                                     const std::uint32_t ia = tris.indices[3 * best_tri + 0];
                                     const std::uint32_t ib = tris.indices[3 * best_tri + 1];
                                     const std::uint32_t ic = tris.indices[3 * best_tri + 2];
-                                    const float* va = &tris.positions[3 * ia];
-                                    const float* vb = &tris.positions[3 * ib];
-                                    const float* vc = &tris.positions[3 * ic];
+                                    const float* va = &tris.positions[std::size_t(ia) * 3];
+                                    const float* vb = &tris.positions[std::size_t(ib) * 3];
+                                    const float* vc = &tris.positions[std::size_t(ic) * 3];
                                     const float bax = vb[0]-va[0], bay = vb[1]-va[1], baz = vb[2]-va[2];
                                     const float cax = vc[0]-va[0], cay = vc[1]-va[1], caz = vc[2]-va[2];
                                     float n_local[3] = {
@@ -7371,12 +7381,12 @@ bool ViewportCore::raycast(const float origin[3], const float dir[3],
                 const std::uint32_t ia = tris.indices[3 * t + 0];
                 const std::uint32_t ib = tris.indices[3 * t + 1];
                 const std::uint32_t ic = tris.indices[3 * t + 2];
-                if (3 * ia + 2 >= tris.positions.size()
-                 || 3 * ib + 2 >= tris.positions.size()
-                 || 3 * ic + 2 >= tris.positions.size()) continue;
-                const float* va = &tris.positions[3 * ia];
-                const float* vb = &tris.positions[3 * ib];
-                const float* vc = &tris.positions[3 * ic];
+                if (std::size_t(ia) * 3 + 2 >= tris.positions.size()
+                 || std::size_t(ib) * 3 + 2 >= tris.positions.size()
+                 || std::size_t(ic) * 3 + 2 >= tris.positions.size()) continue;
+                const float* va = &tris.positions[std::size_t(ia) * 3];
+                const float* vb = &tris.positions[std::size_t(ib) * 3];
+                const float* vc = &tris.positions[std::size_t(ic) * 3];
                 float t_local = 0.0f;
                 if (!rayTriMT(ro_local, rd_local, va, vb, vc, t_local)) continue;
                 const float ldn = std::sqrt(rd_local[0]*rd_local[0]
