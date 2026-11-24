@@ -137,6 +137,25 @@ class DOCDB(MyDB):
 
     # ---- UPLOAD FUNCTIONS ----
 
+    @staticmethod
+    def get_updatable_project_of_document(tx, document_id, current_user: User) -> str:
+        cypher = """
+            MATCH (p:Project)-[r1:CONTAINS]->(d:Document)
+            WHERE d.document_id = $document_id
+            WITH collect(DISTINCT p) AS projects
+            WHERE size(projects) = 1
+            UNWIND projects AS p
+            MATCH (u:User)-[r2:HAS_ACTIONS_ON]->(p)
+            WHERE u.username = $username
+            AND r2.update = True
+            RETURN p.project_id AS project_id
+            LIMIT 1
+        """
+        first = tx.run(cypher, document_id=document_id, username=current_user.username).single()
+        if first is None:
+            raise HTTPException(status_code=403, detail="Not allowed to add a version to this document.")
+        return first.get("project_id")
+
     def post_upload_documents(
         self, upload_documents: UploadDocuments, current_user: User
     ) -> DocumentUploadSessionInitialization:
@@ -147,6 +166,17 @@ class DOCDB(MyDB):
             session_url_validity_timedelta = 10 + int(os.environ["SESSION_URL_VALIDITY_SECONDS"])
             if not hasattr(upload_documents, "server_context") or not upload_documents.server_context:
                 upload_documents.server_context = False
+
+            # A new version is only accepted for a document that lives in exactly one project,
+            # on which the user has update rights. That project is bound to the upload.
+            versioned_projects = [
+                (
+                    self.get_updatable_project_of_document(tx, file.document_id, current_user)
+                    if hasattr(file, "document_id") and file.document_id
+                    else None
+                )
+                for file in upload_documents.files
+            ]
 
             cypher = """
                 MATCH (u:User)
@@ -177,7 +207,7 @@ class DOCDB(MyDB):
             if summary.counters.nodes_created < 2:
                 raise HTTPException(status_code=400, detail="Session or link node was not created.")
 
-            for file in upload_documents.files:
+            for file, version_of_project in zip(upload_documents.files, versioned_projects):
                 cypher = """
                     MATCH (u:User)-[r1:HAS]->(us:Session:Upload)-[r2:HAS]->(l:Link)
                     WHERE u.username = $username
@@ -193,21 +223,26 @@ class DOCDB(MyDB):
                         d.creation_date = $creation_date,
                         d.file_ending = $file_ending,
                         d.mime_type = $mime_type,
-                        d.file_type = $file_type
+                        d.file_type = $file_type,
+                        d.version_of_project = $version_of_project
                 """
 
-                if not hasattr(file, "document_id") or not file.document_id:
+                if version_of_project is None:
                     # When document_id is present, this indicates that
                     # this upload is a new version of an existing document.
                     # When not present, we create a new uuid as new document_id.
                     file.document_id = doc_db.new_uuid()
+                    stored_name = file.document_id
+                else:
+                    # Stored files of earlier versions must never be overwritten.
+                    stored_name = doc_db.new_uuid()
 
                 if file.file_name.lower().endswith(tuple(file_types)):
                     file_ending = file.file_name.split(".")[-1].lower()
-                    name = file.document_id + "." + file_ending
+                    name = stored_name + "." + file_ending
                 else:
                     file_ending = ""
-                    name = file.document_id
+                    name = stored_name
 
                 print("File ending: ", file_ending)
 
@@ -233,6 +268,7 @@ class DOCDB(MyDB):
                     file_ending=file_ending,
                     mime_type=mime_type,
                     file_type=file_type,
+                    version_of_project=version_of_project,
                 )
 
                 summary = result.consume()
@@ -588,6 +624,20 @@ class DOCDB(MyDB):
                 MATCH (proj:Project)
                 WHERE
                     proj.project_id = $project
+                    AND (
+                        d.version_of_project IS NULL
+                        OR (
+                            d.version_of_project = proj.project_id
+                            AND EXISTS {
+                                MATCH (u)-[r5:HAS_ACTIONS_ON]->(proj)
+                                WHERE r5.update = True
+                            }
+                            AND EXISTS {
+                                MATCH (proj)-[r6:CONTAINS]->(previous:Document)
+                                WHERE previous.document_id = d.document_id
+                            }
+                        )
+                    )
                 DETACH DELETE part
                 DELETE r2
                 CREATE (proj)-[r4:CONTAINS]->(d)

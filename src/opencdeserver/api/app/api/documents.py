@@ -232,9 +232,8 @@ async def upload_part(part_id: str, request: Request, current_user: User = Depen
         try:
             print("File contents: ", request_body)
 
-            # use document_id instead as dir_name
-            # dir_name = doc_db.safe_path(document.document_id)
-            dir_name = document.document_id
+            # use the server generated storage name of this upload as dir_name
+            dir_name = doc_db.safe_path(document.file_description.name)
 
             path = "./data/document_parts/" + dir_name + "/"
 
@@ -291,8 +290,8 @@ def upload_completion(
     print("Number of parts: " + str(len(parts)))
     document = doc_db.get_document_from_session(upload_session, current_user)
 
-    # check if all parts really are uploaded to document_id-dir
-    document_name = doc_db.safe_path(document.document_id)
+    # check if all parts really are uploaded to the dir of this upload
+    document_name = doc_db.safe_path(document.file_description.name)
 
     path = "./data/document_parts/" + document_name + "/"
 
@@ -306,41 +305,35 @@ def upload_completion(
         else:
             print(part + " is in dir " + path)
 
-    # merge parts to a new temporary document
-    temp_doc_path = path
-    temp_doc_file_name = path + document_name
-    if not os.path.exists(temp_doc_path):
-        os.makedirs(temp_doc_path)
+    # clean database and create new document node under correct project
+    if not doc_db.document_upload_finish(upload_session, current_user, document.project):
+        return False
 
     new_doc_path = "./data/documents/"
     new_doc_path_name = new_doc_path + document.file_description.name
 
-    # Read parts and write to temp doc.
-    with open(temp_doc_file_name, "ab") as temp_doc:
-        for part in parts:
-            part = doc_db.safe_path(part)
-            with open(temp_doc_path + part, "rb") as part_doc:
-                temp_doc.write(part_doc.read())
-
-    # move document to new location in documents dir
-    os.rename(temp_doc_file_name, new_doc_path_name)
+    # Merge parts into the document. Mode "x" refuses to replace an existing stored file.
+    try:
+        with open(new_doc_path_name, "xb") as new_doc:
+            for part in parts:
+                part = doc_db.safe_path(part)
+                with open(path + part, "rb") as part_doc:
+                    new_doc.write(part_doc.read())
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Document file already exists.")
 
     # remove temp parts
     for part in parts:
-        os.remove(temp_doc_path + part)
+        os.remove(path + doc_db.safe_path(part))
 
     # remove temp path
-    os.rmdir(temp_doc_path)
+    os.rmdir(path)
 
-    # clean database and create new document node under correct project
-    if doc_db.document_upload_finish(upload_session, current_user, document.project):
-        # get DocumentVersion
-        document = doc_db.get_document_version(document.document_id, document.version_index, current_user)
+    # get DocumentVersion
+    document = doc_db.get_document_version(document.document_id, document.version_index, current_user)
 
-        doc_db.debug(endpoint="upload_completion", request={"upload_session": upload_session}, response=document.dict())
-        return document
-    else:
-        return False
+    doc_db.debug(endpoint="upload_completion", request={"upload_session": upload_session}, response=document.dict())
+    return document
 
 
 # ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ---- ----
@@ -361,7 +354,7 @@ def upload_cancellation(upload_session: str, current_user: User = Depends(get_cu
         document = doc_db.get_upload_cancellation(upload_session, current_user)
 
         # clean temp dir
-        document_name = doc_db.safe_path(document.document_id)
+        document_name = doc_db.safe_path(document.file_description.name)
         path = "./data/document_parts/" + document_name + "/"
         shutil.rmtree(path)
 
