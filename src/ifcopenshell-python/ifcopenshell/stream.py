@@ -273,15 +273,19 @@ try:
         ) -> list[stream_entity]:
             results = [inst]
             queue = [inst]
+            visited = {inst.id()}
             while queue:
                 if max_levels is not None:
                     max_levels -= 1
 
                 cur = queue.pop()
-                level_results = set()
 
                 for reference_id in self.reference_pattern.findall(str(cur)[1:]):
-                    result = self.by_id(int(reference_id))
+                    reference_id = int(reference_id)
+                    if reference_id in visited:
+                        continue
+                    visited.add(reference_id)
+                    result = self.by_id(reference_id)
                     results.append(result)
                     if max_levels is None or max_levels:
                         queue.append(result)
