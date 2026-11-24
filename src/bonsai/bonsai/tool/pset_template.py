@@ -139,7 +139,7 @@ class PsetTemplate(bonsai.core.tool.PsetTemplate):
             paths.append((f, "Global Pset Template"))
 
         props = tool.Blender.get_addon_preferences()
-        pset_dir = Path(tool.Ifc.resolve_uri(props.pset_dir))
+        pset_dir = Path(tool.Ifc.resolve_uri(props.pset_dir, trusted=True))
         if pset_dir.is_dir():
             for path in Path(pset_dir).glob("*.ifc"):
                 paths.append((path, "Project Pset Template"))

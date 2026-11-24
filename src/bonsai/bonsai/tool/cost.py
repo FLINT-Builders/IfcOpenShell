@@ -585,7 +585,7 @@ class Cost(bonsai.core.tool.Cost):
 
         start = time.time()
 
-        resolved_path = tool.Ifc.resolve_uri(file_path)
+        resolved_path = tool.Ifc.resolve_uri(file_path, trusted=True)
 
         csv2ifc = Csv2Ifc(resolved_path, tool.Ifc.get(), is_schedule_of_rates=is_schedule_of_rates)
         csv2ifc.execute()

@@ -341,18 +341,62 @@ class Ifc(bonsai.core.tool.Ifc):
         return Path(os.path.normpath(path)).as_posix()
 
     @classmethod
-    def resolve_uri(cls, uri: str | Path) -> str:
-        """Get absolute path based on the active IFC file."""
+    def is_network_path(cls, path: str | Path) -> bool:
+        """Check if ``path`` is a Windows UNC or device path, e.g. ``//server/share`` or ``\\\\?\\UNC\\server``.
+
+        Only the string is inspected: on Windows any filesystem call on such
+        a path, even a ``stat``, connects and authenticates to the server.
+        """
+        path = os.fspath(path).replace("\\", "/")
+        return path.startswith("//") or path.startswith("/??/")
+
+    @classmethod
+    def get_network_share(cls, path: str | Path) -> Union[tuple[str, str], None]:
+        """Get the ``(server, share)`` of a plain ``//server/share/...`` path, ``None`` for anything else."""
+        parts = os.fspath(path).replace("\\", "/").split("/")
+        if len(parts) < 4 or parts[0] or parts[1] or not parts[2] or not parts[3]:
+            return None
+        if parts[2] == "?" or any(p in (".", "..") for p in parts[2:]):
+            return None
+        return parts[2].casefold(), parts[3].casefold()
+
+    @classmethod
+    def check_network_access(cls, path: str | Path) -> str:
+        """Return ``path`` unchanged, or raise ``PermissionError`` if it is a network path.
+
+        Paths stored in an IFC file are untrusted, so a network path is only
+        allowed on the same share as the active IFC file itself.
+        """
+        path = os.fspath(path)
+        if not cls.is_network_path(path):
+            return path
+        share = cls.get_network_share(path)
+        if share is not None and share == cls.get_network_share(cls.get_path() or ""):
+            return path
+        raise PermissionError(
+            f"Network path '{path}' is not on the same share as the IFC file. Map it to a drive letter instead."
+        )
+
+    @classmethod
+    def resolve_uri(cls, uri: str | Path, trusted: bool = False) -> str:
+        """Get absolute path based on the active IFC file.
+
+        :param trusted: ``uri`` was chosen by the user and not read from an IFC file.
+            Otherwise, raise ``PermissionError`` if it resolves to a network path
+            (see :meth:`check_network_access`).
+        """
         uri = Path(uri)
         if uri.is_absolute():
-            return cls.normalize_path(uri)
+            path = cls.normalize_path(uri)
+            return path if trusted else cls.check_network_access(path)
         ifc_path = Path(cls.get_path())
         if ifc_path.is_file():
             ifc_path = ifc_path.parent
         if not str(uri):
             # TODO: When does it occur and why we return empty path in this case?
             return str(uri)
-        return cls.normalize_path(ifc_path / uri)
+        path = cls.normalize_path(ifc_path / uri)
+        return path if trusted else cls.check_network_access(path)
 
     @classmethod
     def get_uri(cls, uri: str | Path, use_relative_path: bool) -> str:

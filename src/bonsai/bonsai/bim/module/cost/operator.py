@@ -586,7 +586,7 @@ class ImportCostScheduleCsv(bpy.types.Operator, ImportHelper, tool.Ifc.Operator)
         if self.use_relative_path:
             store_path = tool.Ifc.get_uri(self.filepath, use_relative_path=True)
 
-        resolved_path = Path(tool.Ifc.resolve_uri(self.filepath))
+        resolved_path = Path(tool.Ifc.resolve_uri(self.filepath, trusted=True))
         if not resolved_path.exists():
             self.report({"ERROR"}, f"File does not exist: '{store_path}' (resolved to '{resolved_path}')")
             return {"CANCELLED"}
