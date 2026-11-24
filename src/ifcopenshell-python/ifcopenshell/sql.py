@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import re
 import types
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, Optional, TypedDict, Union
 
@@ -231,30 +232,27 @@ class sqlite(file):
     def traverse(
         self, inst: sqlite_entity, max_levels: Optional[int] = None, breadth_first: bool = False
     ) -> list[sqlite_entity]:
+        # Same semantics as ifcopenshell::traverse: each entity is returned once, and a
+        # max_levels of None or <= 0 means unlimited depth.
         results = [inst]
-        queue = [inst]
+        visited = {inst.id()}
+        queue = deque([(inst, 0)])
         while queue:
-            if max_levels is not None:
-                max_levels -= 1
-
-            cur = queue.pop()
-            reference_attributes = self.ifc_class_references[cur.sqlite_wrapper.ifc_class]
-            attributes = reference_attributes["entity"] + reference_attributes["entity_list"]
-            if not attributes:
+            cur, level = queue.popleft()
+            if max_levels is not None and 0 < max_levels <= level:
                 continue
 
-            for attribute in attributes:
-                result = getattr(cur, attribute, [])
+            reference_attributes = self.ifc_class_references[cur.sqlite_wrapper.ifc_class]
+            for attribute in reference_attributes["entity"] + reference_attributes["entity_list"]:
+                result = getattr(cur, attribute, None)
                 if not result:
                     continue
-                elif isinstance(result, tuple):
-                    results.extend(result)
-                    if max_levels is None or max_levels:
-                        queue.extend(result)
-                else:
-                    results.append(result)
-                    if max_levels is None or max_levels:
-                        queue.append(result)
+                for referenced in result if isinstance(result, tuple) else (result,):
+                    if referenced is None or referenced.id() in visited:
+                        continue
+                    visited.add(referenced.id())
+                    results.append(referenced)
+                    queue.append((referenced, level + 1))
         return results
 
     def get_inverse(

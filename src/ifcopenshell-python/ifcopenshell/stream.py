@@ -21,6 +21,7 @@ from __future__ import annotations
 try:
     import os
     import re
+    from collections import deque
     from typing import Any, NoReturn, Optional, Union
 
     from lark import Lark, Transformer
@@ -271,20 +272,26 @@ try:
         def traverse(
             self, inst: stream_entity, max_levels: Optional[int, None] = None, breadth_first: bool = False
         ) -> list[stream_entity]:
+            # Same semantics as ifcopenshell::traverse: each entity is returned once, and a
+            # max_levels of None or <= 0 means unlimited depth.
             results = [inst]
-            queue = [inst]
+            visited = {inst.id()}
+            queue = deque([(inst, 0)])
             while queue:
-                if max_levels is not None:
-                    max_levels -= 1
-
-                cur = queue.pop()
-                level_results = set()
+                cur, level = queue.popleft()
+                if max_levels is not None and 0 < max_levels <= level:
+                    continue
 
                 for reference_id in self.reference_pattern.findall(str(cur)[1:]):
-                    result = self.by_id(int(reference_id))
+                    reference_id = int(reference_id)
+                    if reference_id in visited:
+                        continue
+                    result = self.by_id(reference_id)
+                    if result is None:
+                        continue
+                    visited.add(reference_id)
                     results.append(result)
-                    if max_levels is None or max_levels:
-                        queue.append(result)
+                    queue.append((result, level + 1))
 
             return results
 
