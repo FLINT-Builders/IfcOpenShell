@@ -39,10 +39,26 @@ except:
 
 try:
     import odf.namespaces as odf_ns
+    from odf.element import Text
     from odf.opendocument import OpenDocumentSpreadsheet
     from odf.style import Style, TableCellProperties, TableProperties
     from odf.table import Table, TableCell, TableRow
     from odf.text import P
+
+    class OdsText(Text):
+        # XML readers normalise a literal carriage return to a line feed, so it must be a character reference.
+        def toXml(self, level, f):
+            for i, part in enumerate(self.data.split("\r")):
+                if i:
+                    f.write("&#13;")
+                Text(part).toXml(level, f)
+
+    def ods_paragraph(text: str) -> P:
+        p = P()
+        if text:
+            p.appendChild(OdsText(text))
+        return p
+
 except:
     pass  # No ODF support
 
@@ -297,7 +313,7 @@ class Writer:
                     else:
                         cell_format = colours[c]
                     tc = TableCell(valuetype="string", stylename=cell_format)
-                    tc.addElement(P(text=str(col)))
+                    tc.addElement(ods_paragraph(str(col)))
                     tr.addElement(tc)
                     c += 1
                 table.addElement(tr)
