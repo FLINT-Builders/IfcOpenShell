@@ -489,7 +489,11 @@ namespace {
             return item;
         }
 
+        std::unordered_set<uint32_t> visited;
         while (auto booleanresult = item.as<IfcSchema::IfcBooleanClippingResult>()) {
+            if (!visited.insert(booleanresult.identity()).second) {
+                break;
+            }
             // All instantiations of IfcBooleanOperand (type of FirstOperand) are subtypes of
             // IfcGeometricRepresentationItem
             // @nb this is not really how the select hierarchy is structured, not all representation items are selected here
