@@ -1,17 +1,18 @@
 import math
 import os
+import subprocess
+import sys
 from typing import Union
 from uuid import UUID, uuid4
 
-import ifcopenshell
 from database.neo4j import MyDB, driver
 from fastapi import HTTPException
-from ifcgraph.ifcgraph import create_full_graph
 from models.documents_common import *
 from models.documents_other import *
 from models.documents_request import *
 from models.documents_response import *
-from py2neo import Graph
+
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class DOCDB(MyDB):
@@ -131,9 +132,13 @@ class DOCDB(MyDB):
 
     def create_ifc_graph_for_document(self, document_id):
         document = self.get_document(document_id)
-        my_ifc_file = ifcopenshell.open("./data/documents/" + document.file_description.name)
-        my_graph = Graph(os.environ["NEO4J_URI"], auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_INITIAL_PASSWORD"]))
-        create_full_graph(my_graph, my_ifc_file)
+        file_path = os.path.abspath(os.path.join("./data/documents/", document.file_description.name))
+        # Uploaded files are untrusted: parse them in a child process so a parser crash cannot kill the API.
+        result = subprocess.run([sys.executable, "-m", "ifcgraph.ifcgraph", file_path], cwd=APP_DIR, check=False)
+        if result.returncode != 0:
+            print("Could not create IFC graph for document id: " + str(document_id))
+            return False
+        return True
 
     # ---- UPLOAD FUNCTIONS ----
 
