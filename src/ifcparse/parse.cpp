@@ -3607,6 +3607,11 @@ void express::base::unset_attribute_value(size_t index) {
 }
 
 attribute_value express::base::get_attribute_value(size_t index) const {
+#ifndef IFOPSH_SAFE_INSTANCE
+    if (data_ == nullptr) {
+        throw std::runtime_error("Trying to read an attribute of a null instance reference");
+    }
+#endif
     return data()->get_attribute_value(index);
 }
 

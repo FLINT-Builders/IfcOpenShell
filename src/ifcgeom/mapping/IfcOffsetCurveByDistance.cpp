@@ -34,6 +34,22 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
     auto offset_values = inst.OffsetValues();
     if (offset_values.empty()) {
         logger_.error("GEO", 270, "IfcOffsetCurveByDistances must have at least one offset value");
+        return nullptr;
+    }
+
+    std::vector<double> distances;
+    distances.reserve(offset_values.size());
+    for (auto& offset_value : offset_values) {
+#if defined SCHEMA_HAS_IfcDistanceExpression
+        distances.push_back(offset_value.DistanceAlong() * length_unit_);
+#else
+        auto distance_along = offset_value.DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
+        if (!distance_along) {
+            logger_.warning("GEO", 333, "IfcOffsetCurveByDistances is only implemented for OffsetValues with an IfcLengthMeasure DistanceAlong", inst);
+            return nullptr;
+        }
+        distances.push_back((double) distance_along * length_unit_);
+#endif
     }
 
     auto& first_offset_value = offset_values.front();
@@ -65,12 +81,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
 
     taxonomy::piecewise_function::span_list offset_spans;
 
-#if defined SCHEMA_HAS_IfcDistanceExpression
-   double first_distance = first_offset_value.DistanceAlong();
-#else
-   double first_distance = first_offset_value.DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
-#endif
-   first_distance *= length_unit_;
+   double first_distance = distances.front();
 
    if (first_distance < 0.0) {
         logger_.warning("GEO", 272, "IfcOffsetCurveByDistance first offset value is before the start of the curve.");
@@ -97,16 +108,9 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
     auto next = std::next(iter);
     auto prev = std::prev(next);
     auto end = offset_values.end();
-    for (; next != end; prev++, next++) {
-#if defined SCHEMA_HAS_IfcDistanceExpression
-        double dp = (*prev).DistanceAlong();
-        double dn = (*next).DistanceAlong();
-#else
-        double dp = prev->DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
-        double dn = next->DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
-#endif
-        dp *= length_unit_;
-        dn *= length_unit_;
+    for (size_t i = 0; next != end; prev++, next++, i++) {
+        double dp = distances[i];
+        double dn = distances[i + 1];
 
         if (dn < dp) // next is before previous
         {
@@ -157,11 +161,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
     }
 
 	 // at this point, next == end and prev == end-1
-    #if defined SCHEMA_HAS_IfcDistanceExpression
-    double last_distance = prev->DistanceAlong() * length_unit_;
-    #else
-    double last_distance = (double) prev->DistanceAlong().as<IfcSchema::IfcLengthMeasure>() * length_unit_;
-    #endif
+    double last_distance = distances.back();
 
     if (last_distance < basis_curve_length) {
          // Last offset is defined before the end of the curve so the lateral and vertical offsets

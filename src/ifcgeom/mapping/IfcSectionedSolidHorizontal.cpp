@@ -59,8 +59,17 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcSectionedSolidHorizontal& in
 #if defined(SCHEMA_HAS_IfcPointByDistanceExpression) && !defined(SCHEMA_IfcSectionedSurface_HAS_FixedAxisVertical)
 	for (auto& csp : csps) {
 		auto pbde = csp.Location().as<IfcSchema::IfcPointByDistanceExpression>();
+		if (!pbde) {
+			logger_.warning("GEO", 328, "IfcSectionedSolidHorizontal requires CrossSectionPositions with an IfcPointByDistanceExpression Location", inst);
+			return nullptr;
+		}
+		auto distance_along = pbde.DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
+		if (!distance_along) {
+			logger_.warning("GEO", 329, "IfcSectionedSolidHorizontal is only implemented for CrossSectionPositions with an IfcLengthMeasure DistanceAlong", inst);
+			return nullptr;
+		}
 
-		longitudes.push_back((double) pbde.DistanceAlong().as<IfcSchema::IfcLengthMeasure>() * length_unit_);
+		longitudes.push_back((double) distance_along * length_unit_);
 
 		// Corresponds to the profile X, Y directions (hopefully).
 		Eigen::Vector3d po(
