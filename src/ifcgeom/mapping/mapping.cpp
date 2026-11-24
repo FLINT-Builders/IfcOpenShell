@@ -22,9 +22,11 @@
 #include <cctype>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "mapping.h"
 
@@ -467,7 +469,11 @@ namespace {
             return item;
         }
 
+        std::set<uint32_t> visited;
         while (auto booleanresult = item.as<IfcSchema::IfcBooleanClippingResult>()) {
+            if (!visited.insert(booleanresult.identity()).second) {
+                break;
+            }
             // All instantiations of IfcBooleanOperand (type of FirstOperand) are subtypes of
             // IfcGeometricRepresentationItem
             // @nb this is not really how the select hierarchy is structured, not all representation items are selected here
@@ -758,6 +764,21 @@ taxonomy::ptr mapping::map(const express::base& inst) {
             return it->second;
         }
     }
+
+    // Instances currently being mapped on this thread. Invalid input can reference an
+    // instance from within its own definition (e.g. a boolean operand pointing back to
+    // the boolean), which would otherwise recurse until the stack overflows.
+    static thread_local std::vector<std::pair<const void*, uint32_t>> in_progress;
+    const auto key = std::make_pair(static_cast<const void*>(this), iden);
+    if (std::find(in_progress.begin(), in_progress.end(), key) != in_progress.end()) {
+        logger_.message(ifcopenshell::logger::LOG_ERROR, "GEO", 328, "Cyclic reference encountered while converting:", inst);
+        return nullptr;
+    }
+    in_progress.push_back(key);
+    struct pop_on_exit {
+        ~pop_on_exit() { in_progress.pop_back(); }
+    } pop_guard;
+
     taxonomy::ptr item = nullptr;
 
     // @todo we should check whether there is a notice performance impact on the large sequence
