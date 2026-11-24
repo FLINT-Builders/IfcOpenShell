@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +12,7 @@ from models.other import TokenData
 from models.request import User
 from passlib.context import CryptContext
 from security.secrets import get_secrets
+from security.signin_throttle import account_key, address_key, signin_throttle
 
 secrets = get_secrets()
 
@@ -45,7 +47,25 @@ def verify_password(plain_password, hashed_password):
 
 
 # see if given password matches password of username
-def authenticate_user(username_to_authenticate: str, plain_password: str) -> dict or False:
+def authenticate_user(username_to_authenticate: str, plain_password: str, client_host: str | None) -> dict or False:
+    keys = (account_key(username_to_authenticate), address_key(client_host))
+    retry_after = signin_throttle.reserve(keys)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed sign-in attempts",
+            headers={"Retry-After": str(math.ceil(retry_after))},
+        )
+    try:
+        user = _check_password(username_to_authenticate, plain_password)
+    except BaseException:
+        signin_throttle.release(keys, failed=False)
+        raise
+    signin_throttle.release(keys, failed=not user, reset_keys=keys[:1])
+    return user
+
+
+def _check_password(username_to_authenticate: str, plain_password: str) -> dict or False:
     # maybe put an exception around this code below
     user = db.get_user(username_to_authenticate)
     if not user:
