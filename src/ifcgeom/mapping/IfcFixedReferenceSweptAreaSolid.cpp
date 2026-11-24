@@ -26,6 +26,9 @@ using namespace ifcopenshell::geom;
 
 taxonomy::ptr mapping::map_impl(const IfcSchema::IfcFixedReferenceSweptAreaSolid& inst) {
     auto dir = map(inst.Directrix());
+    if (!dir) {
+        return nullptr;
+    }
     auto ref = taxonomy::cast<taxonomy::direction3>(map(inst.FixedReference()));
     auto profile = taxonomy::cast<taxonomy::face>(map(inst.SweptArea()));
 
