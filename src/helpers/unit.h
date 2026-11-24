@@ -37,7 +37,8 @@ class file;
 // Returns the SI scale for an IfcNamedUnit such that
 //   value_in_unit * scale == value_in_si_base
 // Walks IfcConversionBasedUnit chains down to IfcSIUnit.  Returns nullopt
-// when the chain bottoms out in IfcContextDependentUnit (cannot convert).
+// when the chain bottoms out in IfcContextDependentUnit (cannot convert),
+// is cyclic or too deep, or the scale is not finite.
 std::optional<double> si_scale_from_named_unit(express::base named_unit);
 
 // IfcProject.UnitsInContext (the IfcUnitAssignment).  Returns nullopt if

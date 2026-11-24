@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 
 namespace {
 
@@ -51,13 +52,28 @@ std::optional<double> numeric_value(const express::base& value) {
     return std::nullopt;
 }
 
+// UnitComponent references are not checked for cycles by the parser, so the
+// chain walk must be bounded. Real files nest at most a couple of levels.
+constexpr int MAX_CONVERSION_DEPTH = 16;
+
+std::optional<double> finite_or_nullopt(double value) {
+    if (!std::isfinite(value)) {
+        return std::nullopt;
+    }
+    return value;
+}
+
 template <typename Schema>
 std::optional<double> si_scale_from_named_unit_s(express::base unit) {
     double scale = 1.0;
+    int depth = 0;
     while (auto conversion = unit.template as<typename Schema::IfcConversionBasedUnit>()) {
         if (const auto it = SI_CONVERSIONS.find(to_lower(conversion.Name()));
             it != SI_CONVERSIONS.end()) {
-            return scale * it->second;
+            return finite_or_nullopt(scale * it->second);
+        }
+        if (++depth > MAX_CONVERSION_DEPTH) {
+            return std::nullopt;
         }
         const auto factor = conversion.ConversionFactor();
         const auto value = numeric_value(factor.ValueComponent().concrete());
@@ -65,6 +81,9 @@ std::optional<double> si_scale_from_named_unit_s(express::base unit) {
             return std::nullopt;
         }
         scale *= *value;
+        if (!std::isfinite(scale)) {
+            return std::nullopt;
+        }
         const auto component = factor.UnitComponent();
         if (!component) {
             return std::nullopt;
@@ -84,7 +103,7 @@ std::optional<double> si_scale_from_named_unit_s(express::base unit) {
         } else if (name.find("CUBIC") != std::string::npos) {
             multiplier *= get_prefix_multiplier(prefix) * get_prefix_multiplier(prefix);
         }
-        return scale * multiplier;
+        return finite_or_nullopt(scale * multiplier);
     }
     if (unit.template as<typename Schema::IfcContextDependentUnit>()) {
         return std::nullopt;
