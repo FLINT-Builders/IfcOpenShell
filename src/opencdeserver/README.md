@@ -102,6 +102,8 @@ To get this code running properly you need:
 - a favicon at /favicon.ico
 - to run "bash restart.sh" to start and restart containers
 - a BCF client, registered with client ID and secret
+- to set KONTROLL_CLIENT_REDIRECT_URIS in your .env file to the client's exact OAuth2 redirect URIs,
+  separated by spaces; authorization requests with any other redirect_uri are rejected
 
 This code was developed and tested using Solibri Office as BCF client, however:
 Solibri Office can only connect to pre-registered servers. This means that you cannot
