@@ -348,16 +348,19 @@ class EnableEditingBooleans(bpy.types.Operator):
         representation = ifcopenshell.util.representation.resolve_representation(representation)
         props.booleans.clear()
 
-        def load_boolean(item: ifcopenshell.entity_instance, level: int = 0) -> None:
+        def load_boolean(
+            item: ifcopenshell.entity_instance, level: int = 0, ancestors: frozenset = frozenset()
+        ) -> None:
             new = props.booleans.add()
             new.name = f"{item.is_a()}/{item.id()}"
             new.ifc_definition_id = item.id()
             new.level = level
-            if item.is_a("IfcBooleanResult"):
+            if item.is_a("IfcBooleanResult") and item not in ancestors:
                 new.name += f"/{item.Operator}"
                 new.operator = item.Operator
-                load_boolean(item.FirstOperand, level + 1)
-                load_boolean(item.SecondOperand, level + 1)
+                ancestors = ancestors | {item}
+                load_boolean(item.FirstOperand, level + 1, ancestors)
+                load_boolean(item.SecondOperand, level + 1, ancestors)
 
         for item in representation.Items:
             if item.is_a("IfcBooleanResult"):

@@ -3216,13 +3216,18 @@ class SelectRepresentationItem(bpy.types.Operator):
                 tool.Blender.select_object(obj_)
         return {"FINISHED"}
 
-    def get_nested_item_ids(self, item):
+    def get_nested_item_ids(self, item, visited=None):
+        if visited is None:
+            visited = set()
         results = set()
         if item.is_a("IfcBooleanResult"):
-            results.update(self.get_nested_item_ids(item.FirstOperand))
-            results.update(self.get_nested_item_ids(item.SecondOperand))
+            if item in visited:
+                return results
+            visited.add(item)
+            results.update(self.get_nested_item_ids(item.FirstOperand, visited))
+            results.update(self.get_nested_item_ids(item.SecondOperand, visited))
         elif item.is_a("IfcCsgSolid"):
-            results.update(self.get_nested_item_ids(item.TreeRootExpression))
+            results.update(self.get_nested_item_ids(item.TreeRootExpression, visited))
         else:
             results.add(item.id())
         return results
