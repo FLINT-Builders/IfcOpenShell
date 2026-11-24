@@ -204,9 +204,13 @@ class application(QtWidgets.QApplication):
 
         def get_children(self, inst):
             c = [inst]
+            seen = {inst}
             i = 0
             while i < len(c):
-                c.extend(self.children[c[i]])
+                for child in self.children[c[i]]:
+                    if child not in seen:
+                        seen.add(child)
+                        c.append(child)
                 i += 1
             return c
 
@@ -263,14 +267,19 @@ class application(QtWidgets.QApplication):
             products = list(f.by_type("IfcProduct")) + list(f.by_type("IfcProject"))
             parents = list(map(self.parent, products))
             items = {}
-            skipped = 0
             ATTRS = self.ATTRIBUTES
-            while len(items) + skipped < len(products):
-                for product, parent in zip(products, parents):
-                    if parent is None and not product.is_a("IfcProject"):
-                        skipped += 1
+            pending = [
+                (product, parent)
+                for product, parent in zip(products, parents)
+                if parent is not None or product.is_a("IfcProject")
+            ]
+            # Products whose parent chain is cyclic or never reaches a placed root stay pending forever.
+            while pending:
+                remaining = []
+                for product, parent in pending:
+                    if product in items:
                         continue
-                    if (parent is None or parent in items) and product not in items:
+                    if parent is None or parent in items:
                         sl = []
                         for attr in ATTRS:
                             if attr == "Entity":
@@ -280,6 +289,11 @@ class application(QtWidgets.QApplication):
                         itm = items[product] = QtWidgets.QTreeWidgetItem(items.get(parent, self), sl)
                         itm.setData(0, QtCore.Qt.UserRole, product)
                         self.children[parent].append(product)
+                    else:
+                        remaining.append((product, parent))
+                if len(remaining) == len(pending):
+                    break
+                pending = remaining
             self.product_to_item = dict(zip(items.keys(), map(self.indexFromItem, items.values())))
             self.clicked.connect(self.clicked_)
             self.expandAll()
