@@ -13,13 +13,20 @@ def log_info(req_body, res_body, route_url):
 
 
 class LoggingRoute(APIRoute):
+    log_bodies = True
+
     def get_route_handler(self) -> Callable:
         original_route_handler = super().get_route_handler()
+        log_bodies = self.log_bodies
 
         async def custom_route_handler(request: Request) -> Response:
-            req_body = await request.body()
+            req_body = await request.body() if log_bodies else b"<not logged>"
             response = await original_route_handler(request)
-            route_url = str(request.url)
+            # Query strings are left out because they can carry credentials and session identifiers.
+            route_url = request.method + " " + request.url.path
+            if not log_bodies:
+                response.background = BackgroundTask(log_info, req_body, response.status_code, route_url)
+                return response
             if isinstance(response, StreamingResponse):
                 res_body = b""
                 async for item in response.body_iterator:
@@ -41,6 +48,12 @@ class LoggingRoute(APIRoute):
                 return response
 
         return custom_route_handler
+
+
+class CredentialRoute(LoggingRoute):
+    """For routes whose request or response bodies carry passwords, authorization codes or tokens."""
+
+    log_bodies = False
 
 
 logging.basicConfig(filename="logs/info.log", level=logging.DEBUG)

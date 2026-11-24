@@ -10,11 +10,12 @@ from models.request import *
 from repository.foundation import foundation_db
 from security.secure import authenticate_user, get_current_active_user, get_secrets
 
-from api.logging import LoggingRoute
+from api.logging import CredentialRoute, LoggingRoute
 
 secrets = get_secrets()
 
 router = APIRouter(route_class=LoggingRoute)
+credential_router = APIRouter(route_class=CredentialRoute)
 
 http_basic = HTTPBasic()
 oauth2_state = None
@@ -168,7 +169,7 @@ def authorization(
     )
 
 
-@router.post("/foundation/oauth2/code")
+@credential_router.post("/foundation/oauth2/code")
 def code(
     username: str = Form(...),
     password: str = Form(...),
@@ -183,7 +184,6 @@ def code(
     global oauth2_state
     oauth2_state = state
 
-    print("Username: " + username + ". Password: " + password)
     user = authenticate_user(username, password)
 
     if not user:
@@ -206,7 +206,6 @@ def code(
 
     if foundation_db.create_authorization_code(username, new_authorization_code, scope):
         authorization_code = new_authorization_code
-        print(f"Authorization code: {authorization_code}")
 
     # 5. When the access code is returned, the server redirects the user to redirect_uri.
     #   http://localhost:10445/Callback&scope=test&code=xxx&state=xxx
@@ -242,7 +241,7 @@ def code(
 # POST https://example.com/foundation/oauth2/token?grant_type=authorization_code&code=<your_authorization_code>
 
 
-@router.post("/foundation/oauth2/token", tags=["login_for_access_token_post"], status_code=201)
+@credential_router.post("/foundation/oauth2/token", tags=["login_for_access_token_post"], status_code=201)
 def login_for_access_token(
     grant_type: Optional[str] = Form(None),
     refresh_token: Optional[str] = Form(None),
@@ -251,9 +250,6 @@ def login_for_access_token(
 ):
 
     print("grant_type: ", grant_type)
-    print("refresh_token: ", refresh_token)
-    print("code: ", code)
-    print("credentials: ", credentials)
 
     # The API should check that the credentials (client_id and client_secret) are correct
     # credentials.username contains the client_id
@@ -279,8 +275,10 @@ def login_for_access_token(
 
     user_info.token_type = "Bearer"
     user_info.expires_in = int(os.environ["SECURITY_ACCESS_TOKEN_EXPIRE_SECONDS"])
-    print("user_info: ", user_info)
     return user_info
+
+
+router.include_router(credential_router)
 
 
 # 3.1.1 Get current user
