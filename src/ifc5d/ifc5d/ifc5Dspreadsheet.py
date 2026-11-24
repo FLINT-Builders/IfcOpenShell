@@ -24,6 +24,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import time
 from collections import Counter
 from typing import Optional, Union
@@ -34,6 +35,26 @@ import ifcopenshell.util.date
 import ifcopenshell.util.element
 import ifcopenshell.util.unit
 from typing_extensions import TypedDict
+
+# Leading characters that make spreadsheet applications evaluate CSV text as a formula.
+FORMULA_PREFIX = re.compile(r"[\t\r]|\s*[=+\-@＝＋－＠]")
+
+
+def is_formula_like(value: str) -> bool:
+    return bool(FORMULA_PREFIX.match(value.lstrip("'")))
+
+
+def escape_formula(value):
+    """Prefix formula-like text with a single quote so it is read as text. Reversed by ``unescape_formula``."""
+    if isinstance(value, str) and is_formula_like(value):
+        return "'" + value
+    return value
+
+
+def unescape_formula(value: str) -> str:
+    if value.startswith("'") and is_formula_like(value):
+        return value[1:]
+    return value
 
 
 class CostItem(TypedDict, extra_items=float):
@@ -468,8 +489,13 @@ class Ifc5Dwriter:
 
 
 class Ifc5DCsvWriter(Ifc5Dwriter):
+    escape_formulas: bool = True
+    """Quote text that spreadsheet applications would evaluate as a formula. ``Csv2Ifc`` undoes it on import."""
+
     def write(self) -> None:
         import csv
+
+        escape = escape_formula if self.escape_formulas else lambda value: value
 
         super().write()
         os.makedirs(self.output, exist_ok=True)
@@ -478,10 +504,10 @@ class Ifc5DCsvWriter(Ifc5Dwriter):
                 os.path.join(self.output, "{}.csv".format(data["Name"])), "w", newline="", encoding="utf-8"
             ) as file:
                 writer = csv.writer(file)
-                writer.writerow(data["headers"])
+                writer.writerow([escape(column) for column in data["headers"]])
                 row = []
                 for cost_item_data in data["cost_items"]:
-                    writer.writerow([cost_item_data.get(column, "") for column in data["headers"]])
+                    writer.writerow([escape(cost_item_data.get(column, "")) for column in data["headers"]])
 
 
 class Ifc5DOdsWriter(Ifc5Dwriter):
@@ -619,8 +645,6 @@ class Ifc5DXlsxWriter(Ifc5Dwriter):
         self.workbook.save(self.file_path)
 
     def write_table(self, cost_schedule):
-        import re
-
         sheet_id = cost_schedule.id()
         title = re.sub(r"[\[\]:*?/\\]", "_", self.sheet_data[sheet_id]["Name"])[:31]
         worksheet = self.workbook.create_sheet(title)
@@ -629,14 +653,17 @@ class Ifc5DXlsxWriter(Ifc5Dwriter):
 
         first_data_row = 2  # Row 1 is the header.
         for i, cost_item_data in enumerate(self.sheet_data[sheet_id]["cost_items"]):
-            row = []
-            for header in headers:
+            for column, header in enumerate(headers, 1):
                 formula = None
                 if header == "TotalPrice":
                     formula = self.get_total_price_formula(sheet_id, i, first_data_row)
-                # openpyxl treats strings starting with "=" as formulas.
-                row.append(formula if formula else cost_item_data.get(header, None))
-            worksheet.append(row)
+                if formula:
+                    worksheet.cell(first_data_row + i, column, formula)
+                    continue
+                cell = worksheet.cell(first_data_row + i, column, cost_item_data.get(header, None))
+                # openpyxl stores strings starting with "=" as formulas, IFC text must stay text.
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
 
 
 class Ifc5DPdfWriter(Ifc5Dwriter):
@@ -719,6 +746,8 @@ class Ifc5DPdfWriter(Ifc5Dwriter):
 
             # export csv file
             csv_file_writer = Ifc5DCsvWriter(file=self.file, output=temp_dir, cost_schedule=self.cost_schedule)
+            # Only read by typst, which shows cell text verbatim.
+            csv_file_writer.escape_formulas = False
             csv_file_writer.write()
             csv_file_name = cost_schedule_name + ".csv"
 
