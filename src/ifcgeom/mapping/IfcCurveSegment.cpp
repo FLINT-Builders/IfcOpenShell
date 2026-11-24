@@ -987,9 +987,12 @@ class curve_segment_evaluator {
     void operator()(const IfcSchema::IfcLine& l) {
        projected_length_ = length_;
 
-       auto c = l.Pnt().Coordinates();
-       auto pcX = c[0] * length_unit_;
-       auto pcY = c[1] * length_unit_;
+       auto pnt = taxonomy::dcast<taxonomy::point3>(mapping_->map(l.Pnt()));
+       if (!pnt) {
+          throw ifcopenshell::exception("Unable to map IfcLine.Pnt");
+       }
+       auto pcX = pnt->ccomponents()(0);
+       auto pcY = pnt->ccomponents()(1);
 
        // 8.9.3.75 IfcVector https://standards.buildingsmart.org/IFC/RELEASE/IFC4_3/HTML/lexical/IfcVector.htm
        // 8.9.3.30 IfcDirection https://standards.buildingsmart.org/IFC/RELEASE/IFC4_3/HTML/lexical/IfcDirection.htm
@@ -999,14 +1002,20 @@ class curve_segment_evaluator {
        //
        // Magnitude is not used because it relates to the parameterization of the line, which isn't currently done for IfcCurveSegment
        // @todo - parameterization was recently added so Magnitude needs to be taking into consideration
-       auto dr = l.Dir().Orientation().DirectionRatios();
+       auto dir = taxonomy::dcast<taxonomy::direction3>(mapping_->map(l.Dir().Orientation()));
+       if (!dir) {
+          throw ifcopenshell::exception("Unable to map IfcLine.Dir.Orientation");
+       }
+       Eigen::Vector3d dr = dir->ccomponents();
 
        // normalize the direction ratios
-       double m_squared = std::inner_product(dr.begin(), dr.end(), dr.begin(), 0.0);
-       double m = sqrt(m_squared);
-       std::transform(dr.begin(), dr.end(), dr.begin(), [m](auto& d) { return d / m; });
-       auto pcDXx = dr[0];
-       auto pcDXy = dr[1];
+       double m = dr.stableNorm();
+       if (!(m > 0.0) || !std::isfinite(m)) {
+          throw ifcopenshell::exception("IfcLine direction has zero or non-finite length");
+       }
+       dr /= m;
+       auto pcDXx = dr(0);
+       auto pcDXy = dr(1);
 
        if (segment_type_ == ST_VERTICAL && curve_segment_placement_) {
           // the general algorithm for mapping parent curve onto curve segment doesn't
