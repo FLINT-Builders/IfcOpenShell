@@ -116,6 +116,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import importlib.util
 import json
 import logging
@@ -127,6 +128,7 @@ import subprocess as sp
 import sys
 import sysconfig
 import tarfile
+import tempfile
 import textwrap
 import threading
 import time
@@ -134,7 +136,7 @@ from collections.abc import Generator, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import IO, Literal, NamedTuple, TypeAlias
-from urllib.request import urlretrieve
+from urllib.request import urlopen
 
 from common import (
     ADD_COMMIT_SHA_DEFAULT,
@@ -160,6 +162,16 @@ USE_OCCT = is_on_off(os.getenv("USE_OCCT"), default=True)
 PYTHON_USER_SITE = is_on_off(os.getenv("PYTHON_USER_SITE"), default=False)
 
 PYTHON_VERSIONS = ["3.10.3", "3.11.8", "3.12.1", "3.13.6", "3.14.0", "3.15.0"]
+PYTHON_SHA256S = {
+    "3.10.3": "5a3b029bad70ba2a019ebff08a65060a8b9b542ffc1a83c697f1449ecca9813b",
+    "3.11.8": "d3019a613b9e8761d260d9ebe3bd4df63976de30464e5c0189566e1ae3f61889",
+    "3.12.1": "d01ec6a33bc10009b09c17da95cc2759af5a580a7316b3a446eb4190e13f97b2",
+    "3.13.6": "6cf50672cc03928488817d45af24bc927a48f910fe7893d6f388130e59ba98d7",
+    "3.14.0": "88d2da4eed42fa9a5f42ff58a8bc8988881bd6c547e297e46682c2687638a851",
+    "3.15.0rc2": "164dbb80f5e1fdd8768387724bfa014da1000401b2015d872a2396c8b858b829",
+    "3.15.0": "438596cac081036d3c1d532ab7e7335eeb35567bc961749a0d5797176db0db68",
+}
+"""SHA-256 of ``Python-{version}.tgz``, keyed by the version after ``python_consider_rc``."""
 JSON_VERSION = "3.11.3"
 OCE_VERSION = "0.18.3"
 OCCT_VERSION = "7.8.1"
@@ -709,7 +721,13 @@ def restore_env(var_name: str, old_value: str | None) -> None:
         os.environ[var_name] = old_value
 
 
-def run(cmds: Sequence[str], cwd: str | None = None, can_fail: bool = False, env: dict[str, str] | None = None) -> str:
+def run(
+    cmds: Sequence[str],
+    cwd: str | None = None,
+    can_fail: bool = False,
+    env: dict[str, str] | None = None,
+    stdin: IO[bytes] | None = None,
+) -> str:
     """
     Wraps `subprocess.Popen.communicate()` and logs the command being executed,
     sets up logging `stderr` to `LOG_FILE` (in append mode) and returns stdout
@@ -733,7 +751,7 @@ def run(cmds: Sequence[str], cwd: str | None = None, can_fail: bool = False, env
     # Ensure both live logs available in the log file
     # and the putput.
     with open(LOG_FILE, "a", encoding="utf-8") as log_file_handle:
-        proc = sp.Popen(cmds, cwd=cwd, stdout=sp.PIPE, stderr=sp.PIPE, encoding="utf-8", env=env)
+        proc = sp.Popen(cmds, cwd=cwd, stdin=stdin, stdout=sp.PIPE, stderr=sp.PIPE, encoding="utf-8", env=env)
         assert proc.stdout and proc.stderr
 
         t_out = threading.Thread(target=stream_reader, args=(proc.stdout, stdout, log_file_handle))
@@ -879,6 +897,100 @@ def git_clone_or_pull_repository(clone_url: str, target_dir: str, revision: str 
         run([git, "checkout", revision], cwd=target_dir)
 
 
+TAR_COMPRESSIONS = {
+    ".tar.gz": ("gz", "z"),
+    ".tgz": ("gz", "z"),
+    ".tar.bz2": ("bz2", "j"),
+    ".tar.xz": ("xz", "J"),
+}
+"""Archive suffix -> (``tarfile`` compression, ``tar`` decompression flag)."""
+
+
+def open_verified_archive(url: str, download_path: str, expected_sha256: str | None) -> IO[bytes]:
+    """Return an anonymous temporary file holding archive bytes whose SHA-256 is ``expected_sha256``.
+
+    The bytes are read from ``download_path`` if it exists, otherwise fetched from ``url``.
+    Only the returned file was hashed, so the archive must be read from it and never from
+    ``download_path`` again. ``download_path`` is written only after the digest matched.
+    """
+    archive = tempfile.TemporaryFile()
+    try:
+        cached = os.path.exists(download_path)
+        digest = hashlib.sha256()
+        if cached:
+            logger.info(f"Reusing download '{download_path}'")
+            with open(download_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    digest.update(chunk)
+                    archive.write(chunk)
+        else:
+            for attempt in range(3):
+                archive.seek(0)
+                archive.truncate()
+                digest = hashlib.sha256()
+                try:
+                    with urlopen(url) as response:
+                        for chunk in iter(lambda: response.read(1 << 20), b""):
+                            digest.update(chunk)
+                            archive.write(chunk)
+                    break
+                except ConnectionError as e:
+                    if attempt == 2:
+                        raise
+                    logger.warning(f"{e} ... retrying...")
+                    time.sleep(30.0)
+
+        actual_sha256 = digest.hexdigest()
+        source = download_path if cached else url
+        if not expected_sha256:
+            raise RuntimeError(
+                f"No sha256 pinned for '{source}' (got {actual_sha256}). "
+                "Pin the digest published by upstream, not this one, unless they match."
+            )
+        if actual_sha256 != expected_sha256:
+            hint = f" Delete '{download_path}' to download it again." if cached else ""
+            raise RuntimeError(
+                f"sha256 mismatch for '{source}': expected {expected_sha256}, got {actual_sha256}.{hint}"
+            )
+
+        if not cached:
+            partial_path = f"{download_path}.part"
+            archive.seek(0)
+            with open(partial_path, "wb") as f:
+                shutil.copyfileobj(archive, f)
+            os.replace(partial_path, download_path)
+        archive.seek(0)
+        return archive
+    except BaseException:
+        archive.close()
+        raise
+
+
+def extract_verified_archive(archive: IO[bytes], download_name: str, build_dir: str) -> str:
+    """Extract ``archive`` into ``build_dir``, replacing any earlier extraction, and return its root directory."""
+    for suffix, (compression, tar_flag) in TAR_COMPRESSIONS.items():
+        if download_name.endswith(suffix):
+            break
+    else:
+        raise RuntimeError("fix source for new download type")
+
+    with tarfile.open(fileobj=archive, mode=f"r:{compression}") as download_tarfile:
+        roots = {n.split("/", 1)[0] for n in download_tarfile.getnames() if n != "."}
+    if len(roots) != 1 or next(iter(roots)) in ("", ".", ".."):
+        raise RuntimeError(f"Expected a single top-level directory in '{download_name}', found {sorted(roots)}")
+    extract_dir = os.path.join(build_dir, roots.pop())
+
+    # A tree left from an earlier run was never checked against the digest.
+    if os.path.islink(extract_dir) or os.path.isfile(extract_dir):
+        os.unlink(extract_dir)
+    elif os.path.isdir(extract_dir):
+        shutil.rmtree(extract_dir)
+
+    archive.seek(0)
+    run([tar, f"-x{tar_flag}f", "-"], cwd=build_dir, stdin=archive)
+    return extract_dir
+
+
 def build_dependency(
     name: str,
     mode: Literal[
@@ -891,6 +1003,7 @@ def build_dependency(
     download_name: str,
     *,
     download_tool: Literal["py", "git"] = download_tool_default,
+    sha256: str | None = None,
     revision: str | None = None,
     patch: list[str] | None = None,
     pre_compile_subs: Sequence[tuple[str, str, str]] = (),
@@ -902,6 +1015,7 @@ def build_dependency(
     a list which is necessary in order to not mess up quoting of compiler and
     linker flags.
 
+    :param sha256: Expected SHA-256 hex digest of the archive, required for ``download_tool="py"``.
     :param pre_compile_subs: A sequence of ``(fn, before, after)``
     :param cmake_native: For ``mode="cmake"``, force a native (host) build
         even when building for WASM. Needed for build-time tools like swig.
@@ -918,53 +1032,15 @@ def build_dependency(
 
     if download_tool == download_tool_py:
         url = os.path.join(download_url, download_name)
-
         download_path = os.path.join(build_dir, download_name)
-        if not os.path.exists(download_path):
-            for _ in range(3):
-                try:
-                    urlretrieve(url, os.path.join(build_dir, download_path))
-                    break
-                except ConnectionError as e:
-                    logger.warning(f"{e} ... retrying...")
-                    time.sleep(30.0)
-                    continue
-        else:
-            logger.info(
-                f"Download '{download_path}' already exists, assuming it's an undamaged download and that it has been extracted if possible, skipping"
-            )
+        with open_verified_archive(url, download_path, sha256) as archive:
+            extract_dir = extract_verified_archive(archive, download_name, build_dir)
     elif download_tool == download_tool_git:
         logger.info(f"\rChecking {name}...   ")
-        git_clone_or_pull_repository(download_url, target_dir=os.path.join(build_dir, download_name), revision=revision)
+        extract_dir = os.path.join(build_dir, download_name)
+        git_clone_or_pull_repository(download_url, target_dir=extract_dir, revision=revision)
     else:
         assert_never(download_tool)
-    download_dir = os.path.join(build_dir, download_name)
-
-    if os.path.isdir(download_dir):
-        extract_dir_name = download_name
-        extract_dir = os.path.join(build_dir, extract_dir_name)
-    else:
-        download_tarfile_path = os.path.join(build_dir, download_name)
-        if download_name.endswith(".tar.gz") or download_name.endswith(".tgz"):
-            compr = "gz"
-        elif download_name.endswith(".tar.bz2"):
-            compr = "bz2"
-        elif download_name.endswith(".tar.xz"):
-            compr = "xz"
-        else:
-            raise RuntimeError("fix source for new download type")
-        # ty: false positive bug upstream.
-        download_tarfile = tarfile.open(name=download_tarfile_path, mode=f"r:{compr}")  # ty:ignore[no-matching-overload]
-        # tarfile seriously doesn't have a function to retrieve the root directory more easily
-        extract_dir_name = os.path.commonprefix([x for x in download_tarfile.getnames() if x != "."])
-        # run([tar, "--exclude=\"*/*\"", "-tf", download_name], cwd=build_dir).strip() no longer works
-        if extract_dir_name is None:
-            extract_dir_name = run(
-                [bash, "-c", f"tar -tf {download_name} 2> /dev/null | head -n 1 | cut -f1 -d /"], cwd=build_dir
-            )
-        extract_dir = os.path.join(build_dir, extract_dir_name)
-        if not os.path.exists(extract_dir):
-            run([tar, "-xf", download_name], cwd=build_dir)
 
     if patch is not None:
         for p in patch:
@@ -1241,6 +1317,7 @@ if "json" in targets:
         ],
         download_url=f"https://github.com/nlohmann/json/releases/download/v{JSON_VERSION}",
         download_name="json.tar.xz",
+        sha256="d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d",
     )
 
 if "eigen" in targets:
@@ -1258,6 +1335,7 @@ if "eigen" in targets:
         build_tool_args=[],
         download_url=f"https://gitlab.com/libeigen/eigen/-/archive/{EIGEN_VERSION}/",
         download_name=f"eigen-{EIGEN_VERSION}.tar.gz",
+        sha256="8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
     )
 
 if "pcre" in targets:
@@ -1275,6 +1353,7 @@ if "pcre" in targets:
         build_tool_args=[DISABLE_FLAG],
         download_url=f"https://downloads.sourceforge.net/project/pcre/pcre/{PCRE_VERSION}/",
         download_name=f"pcre-{PCRE_VERSION}.tar.bz2",
+        sha256="e62c7eac5ae7c0e7286db61ff82912e1c0b7a0c13706616e94a7dd729321b530",
     )
     if MAC_CROSS_COMPILE_INTEL:
         restore_env("CC", OLD_CC)
@@ -1372,6 +1451,7 @@ elif "occ" in targets:
         ],
         download_url="https://github.com/tpaviot/oce/archive/",
         download_name=f"OCE-{OCE_VERSION}.tar.gz",
+        sha256="c553d6a7bf52f790abc3b6bb7a1e91a65947e92a426bb1a88a11960c31f0966c",
     )
 
 if "manifold" in targets:
@@ -1415,6 +1495,7 @@ if "proj" in targets:
         ],
         download_url="https://download.osgeo.org/proj/",
         download_name=f"proj-{PROJ_VERSION}.tar.gz",
+        sha256="ffe20170ee2b952207adf8a195e2141eab12cda181e49fdeb54425d98c7171d7",
     )
 
 if "libxml2" in targets:
@@ -1439,6 +1520,7 @@ if "libxml2" in targets:
         build_tool_args=build_tool_args,
         download_url=f"https://download.gnome.org/sources/libxml2/{'.'.join(LIBXML2_VERSION.split('.')[0:2])}/",
         download_name=f"libxml2-{LIBXML2_VERSION}.tar.xz",
+        sha256="277294cb33119ab71b2bc81f2f445e9bc9435b893ad15bb2cd2b0e859a0ee84a",
     )
     if MAC_CROSS_COMPILE_INTEL:
         if OLD_CC is None:
@@ -1526,8 +1608,9 @@ if "python" in targets and not USE_CURRENT_PYTHON_VERSION and not WASM:
             python_name,
             "autoconf",
             PYTHON_CONFIGURE_ARGS,
-            f"http://www.python.org/ftp/python/{python_version_url}/",
+            f"https://www.python.org/ftp/python/{python_version_url}/",
             f"Python-{PYTHON_VERSION}.tgz",
+            sha256=PYTHON_SHA256S[PYTHON_VERSION],
         )
         python_install = Dependencies.get_install_dir("python")
         python_bin = python_install / "bin" / "python3"
@@ -1585,6 +1668,7 @@ if "boost" in targets:
         # don't remember what this is, but fail on 1.86
         # patch="./patches/boost/boostorg_regex_62.patch",
         download_name=f"boost-{BOOST_VERSION}-b2-nodocs.tar.gz",
+        sha256="2128a4c96862b5c0970c1e34d76b1d57e4a1016b80df85ad39667f30b1deba26",
     )
     if WASM:
         # only supported on nix for now
@@ -1636,6 +1720,7 @@ if "cgal" in targets:
         # - ftp.gnu.org
         download_url="https://mirrors.kernel.org/gnu/gmp/",
         download_name=f"gmp-{GMP_VERSION}.tar.bz2",
+        sha256="ac28211a7cfb609bae2e2c8d6058d66c8fe96434f740cf6fe2e47b000d1c20cb",
     )
 
     if WASM and APPLE:
@@ -1651,8 +1736,9 @@ if "cgal" in targets:
             *mpfr_args,
             f"--with-gmp={Dependencies.get_install_dir('gmp')}",
         ],
-        download_url=f"http://www.mpfr.org/mpfr-{MPFR_VERSION}/",
+        download_url=f"https://www.mpfr.org/mpfr-{MPFR_VERSION}/",
         download_name=f"mpfr-{MPFR_VERSION}.tar.bz2",
+        sha256="cf4f4b2d80abb79e820e78c8077b6725bbbb4e8f41896783c899087be0e94068",
     )
 
     if MAC_CROSS_COMPILE_INTEL:
