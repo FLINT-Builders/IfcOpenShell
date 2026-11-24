@@ -1,3 +1,4 @@
+import hmac
 import os
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -118,6 +119,23 @@ class MyDB:
 
         with self.driver.session() as session:
             return session.execute_read(get_user_work, username_work=username)
+
+    def is_current_access_token(self, username: str, access_token: str) -> bool:
+        def get_access_tokens_work(tx, username_work: str):
+            cypher = """
+                MATCH (u:User)-[:CAN_USE]->(at:AccessToken)
+                WHERE u.username = $username
+                RETURN at.value AS access_token
+                """
+            result = tx.run(cypher, username=username_work)
+            return [record.get("access_token") for record in result]
+
+        with self.driver.session() as session:
+            stored_tokens = session.execute_read(get_access_tokens_work, username_work=username)
+        return any(
+            isinstance(stored, str) and hmac.compare_digest(stored.encode("utf-8"), access_token.encode("utf-8"))
+            for stored in stored_tokens
+        )
 
 
 db = MyDB(driver)
