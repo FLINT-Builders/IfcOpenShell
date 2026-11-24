@@ -32,6 +32,7 @@
 #include <cstddef>
 #include <sstream>
 #include <type_traits>
+#include <unordered_set>
 
 namespace {
 
@@ -180,17 +181,19 @@ std::vector<express::base> get_spatial_children_s(const express::base& element) 
 
 // ifcopenshell.util.element.get_container (should_get_direct=false, no
 // ifc_class): the directly containing spatial element, or the container of the
-// aggregate parent for an aggregated part.
+// aggregate parent for an aggregated part. The parser accepts cyclic
+// aggregation, so the chain is walked iteratively and a cycle has no container.
 template <typename Schema>
 express::base get_container_s(const express::base& element) {
-    if (const auto product = element.template as<typename Schema::IfcElement>()) {
-        const auto relationships = product.ContainedInStructure();
-        if (!relationships.empty()) {
-            return relationships.front().RelatingStructure();
+    std::unordered_set<express::base> visited;
+    for (express::base current = element; current && visited.insert(current).second;
+         current = get_aggregate_s<Schema>(current)) {
+        if (const auto product = current.template as<typename Schema::IfcElement>()) {
+            const auto relationships = product.ContainedInStructure();
+            if (!relationships.empty()) {
+                return relationships.front().RelatingStructure();
+            }
         }
-    }
-    if (const express::base aggregate = get_aggregate_s<Schema>(element)) {
-        return get_container_s<Schema>(aggregate);
     }
     return {};
 }

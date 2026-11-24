@@ -26,8 +26,11 @@
 #include "../ifcparse/instance_data.h"
 #include "schema_dispatch.i"
 
+#include <algorithm>
 #include <boost/logic/tribool.hpp>
+#include <cstddef>
 #include <type_traits>
+#include <vector>
 
 namespace {
 
@@ -185,14 +188,53 @@ property_value verbose_value(const express::base& instance,
     return result;
 }
 
-template <typename Schema>
-property_map get_properties_s(const std::vector<typename Schema::IfcProperty>& properties, bool verbose);
+// The parser accepts complex properties and quantities that contain themselves,
+// directly or through each other, and children shared between complex values
+// make the expanded tree grow exponentially with depth. A complex value that is
+// already being expanded is skipped, and the nesting depth and the number of
+// nested values are capped far above what real property sets use.
+struct nesting_guard {
+    static constexpr std::size_t max_depth = 32;
+    static constexpr std::size_t max_nested_values = 100000;
+
+    std::vector<express::base> expanding;
+    std::size_t nested_values = 0;
+
+    bool admit_value() {
+        return expanding.empty() || ++nested_values <= max_nested_values;
+    }
+
+    bool enter(const express::base& complex) {
+        if (expanding.size() >= max_depth ||
+            std::find(expanding.begin(), expanding.end(), complex) != expanding.end()) {
+            return false;
+        }
+        expanding.push_back(complex);
+        return true;
+    }
+
+    void leave() {
+        expanding.pop_back();
+    }
+};
 
 template <typename Schema>
-property_map get_quantities_s(const std::vector<typename Schema::IfcPhysicalQuantity>& quantities, bool verbose);
+property_map get_properties_s(const std::vector<typename Schema::IfcProperty>& properties,
+                              bool verbose,
+                              nesting_guard& guard);
 
 template <typename Schema>
-std::optional<property_value> property_value_s(const typename Schema::IfcProperty& property, bool verbose) {
+property_map get_quantities_s(const std::vector<typename Schema::IfcPhysicalQuantity>& quantities,
+                              bool verbose,
+                              nesting_guard& guard);
+
+template <typename Schema>
+std::optional<property_value> property_value_s(const typename Schema::IfcProperty& property,
+                                               bool verbose,
+                                               nesting_guard& guard) {
+    if (!guard.admit_value()) {
+        return std::nullopt;
+    }
     property_value result;
     std::optional<std::string> value_type;
 
@@ -241,11 +283,16 @@ std::optional<property_value> property_value_s(const typename Schema::IfcPropert
         }
         result = std::move(data);
     } else if (auto complex = property.template as<typename Schema::IfcComplexProperty>()) {
+        if (!guard.enter(complex)) {
+            return std::nullopt;
+        }
+        auto properties = get_properties_s<Schema>(complex.HasProperties(), verbose, guard);
+        guard.leave();
         result = property_map{
             {"id", complex.id()},
             {"type", complex.declaration().name()},
             {"UsageName", complex.UsageName()},
-            {"properties", get_properties_s<Schema>(complex.HasProperties(), verbose)},
+            {"properties", std::move(properties)},
         };
     } else {
         return std::nullopt;
@@ -260,20 +307,23 @@ std::optional<property_value> property_value_s(const typename Schema::IfcPropert
 template <typename Schema>
 std::optional<property_value> get_property_s(const std::vector<typename Schema::IfcProperty>& properties,
                                              const std::string& name,
-                                             bool verbose) {
+                                             bool verbose,
+                                             nesting_guard& guard) {
     for (const auto& property : properties) {
         if (property.Name() == name) {
-            return property_value_s<Schema>(property, verbose);
+            return property_value_s<Schema>(property, verbose, guard);
         }
     }
     return std::nullopt;
 }
 
 template <typename Schema>
-property_map get_properties_s(const std::vector<typename Schema::IfcProperty>& properties, bool verbose) {
+property_map get_properties_s(const std::vector<typename Schema::IfcProperty>& properties,
+                              bool verbose,
+                              nesting_guard& guard) {
     property_map result;
     for (const auto& property : properties) {
-        if (auto value = property_value_s<Schema>(property, verbose)) {
+        if (auto value = property_value_s<Schema>(property, verbose, guard)) {
             result[property.Name()] = std::move(*value);
         }
     }
@@ -282,16 +332,25 @@ property_map get_properties_s(const std::vector<typename Schema::IfcProperty>& p
 
 template <typename Schema>
 std::optional<property_value> quantity_value_s(const typename Schema::IfcPhysicalQuantity& quantity,
-                                               bool verbose) {
+                                               bool verbose,
+                                               nesting_guard& guard) {
+    if (!guard.admit_value()) {
+        return std::nullopt;
+    }
     property_value result;
     if (quantity.template as<typename Schema::IfcPhysicalSimpleQuantity>()) {
         result = from_attribute(quantity.get_attribute_value(3));
     } else if (auto complex = quantity.template as<typename Schema::IfcPhysicalComplexQuantity>()) {
+        if (!guard.enter(complex)) {
+            return std::nullopt;
+        }
+        auto quantities = get_quantities_s<Schema>(complex.HasQuantities(), verbose, guard);
+        guard.leave();
         result = property_map{
             {"id", complex.id()},
             {"type", complex.declaration().name()},
             {"Discrimination", complex.Discrimination()},
-            {"properties", get_quantities_s<Schema>(complex.HasQuantities(), verbose)},
+            {"properties", std::move(quantities)},
         };
     } else {
         return std::nullopt;
@@ -306,20 +365,23 @@ template <typename Schema>
 std::optional<property_value> get_quantity_s(
     const std::vector<typename Schema::IfcPhysicalQuantity>& quantities,
     const std::string& name,
-    bool verbose) {
+    bool verbose,
+    nesting_guard& guard) {
     for (const auto& quantity : quantities) {
         if (quantity.Name() == name) {
-            return quantity_value_s<Schema>(quantity, verbose);
+            return quantity_value_s<Schema>(quantity, verbose, guard);
         }
     }
     return std::nullopt;
 }
 
 template <typename Schema>
-property_map get_quantities_s(const std::vector<typename Schema::IfcPhysicalQuantity>& quantities, bool verbose) {
+property_map get_quantities_s(const std::vector<typename Schema::IfcPhysicalQuantity>& quantities,
+                              bool verbose,
+                              nesting_guard& guard) {
     property_map result;
     for (const auto& quantity : quantities) {
-        if (auto value = quantity_value_s<Schema>(quantity, verbose)) {
+        if (auto value = quantity_value_s<Schema>(quantity, verbose, guard)) {
             result[quantity.Name()] = std::move(*value);
         }
     }
@@ -361,37 +423,38 @@ std::optional<property_value> get_property_definition_s(
     if (!definition) {
         return std::nullopt;
     }
+    nesting_guard guard;
     if (auto quantity = definition.template as<typename Schema::IfcElementQuantity>()) {
         if (property_name) {
-            return get_quantity_s<Schema>(quantity.Quantities(), *property_name, verbose);
+            return get_quantity_s<Schema>(quantity.Quantities(), *property_name, verbose, guard);
         }
-        auto result = get_quantities_s<Schema>(quantity.Quantities(), verbose);
+        auto result = get_quantities_s<Schema>(quantity.Quantities(), verbose, guard);
         result["id"] = definition.id();
         return result;
     }
     if (auto pset = definition.template as<typename Schema::IfcPropertySet>()) {
         if (property_name) {
-            return get_property_s<Schema>(pset.HasProperties(), *property_name, verbose);
+            return get_property_s<Schema>(pset.HasProperties(), *property_name, verbose, guard);
         }
-        auto result = get_properties_s<Schema>(pset.HasProperties(), verbose);
+        auto result = get_properties_s<Schema>(pset.HasProperties(), verbose, guard);
         result["id"] = definition.id();
         return result;
     }
     if constexpr (is_ifc4_or_higher<Schema>::value) {
         if (auto extended = definition.template as<typename Schema::IfcExtendedProperties>()) {
             if (property_name) {
-                return get_property_s<Schema>(extended.Properties(), *property_name, verbose);
+                return get_property_s<Schema>(extended.Properties(), *property_name, verbose, guard);
             }
-            auto result = get_properties_s<Schema>(extended.Properties(), verbose);
+            auto result = get_properties_s<Schema>(extended.Properties(), verbose, guard);
             result["id"] = definition.id();
             return result;
         }
     } else {
         if (auto extended = definition.template as<typename Schema::IfcExtendedMaterialProperties>()) {
             if (property_name) {
-                return get_property_s<Schema>(extended.ExtendedProperties(), *property_name, verbose);
+                return get_property_s<Schema>(extended.ExtendedProperties(), *property_name, verbose, guard);
             }
-            auto result = get_properties_s<Schema>(extended.ExtendedProperties(), verbose);
+            auto result = get_properties_s<Schema>(extended.ExtendedProperties(), verbose, guard);
             result["id"] = definition.id();
             return result;
         }
@@ -741,11 +804,13 @@ std::optional<property_value> get_quantity(const std::vector<express::base>& qua
         return std::nullopt;
     }
     const auto schema = schema_name(quantities.front());
+    nesting_guard guard;
 #define IFCOPENSHELL_DISPATCH(Schema, Identifier)                                                              \
     if (schema == Identifier) {                                                                                \
         return get_quantity_s<Schema>(cast_entities<Schema, typename Schema::IfcPhysicalQuantity>(quantities), \
                                       name,                                                                    \
-                                      verbose);                                                                \
+                                      verbose,                                                                 \
+                                      guard);                                                                  \
     }
     IFCOPENSHELL_HELPER_FOR_EACH_SCHEMA(IFCOPENSHELL_DISPATCH)
 #undef IFCOPENSHELL_DISPATCH
@@ -757,10 +822,12 @@ property_map get_quantities(const std::vector<express::base>& quantities, bool v
         return {};
     }
     const auto schema = schema_name(quantities.front());
+    nesting_guard guard;
 #define IFCOPENSHELL_DISPATCH(Schema, Identifier)                                                                \
     if (schema == Identifier) {                                                                                  \
         return get_quantities_s<Schema>(cast_entities<Schema, typename Schema::IfcPhysicalQuantity>(quantities), \
-                                        verbose);                                                                \
+                                        verbose,                                                                 \
+                                        guard);                                                                  \
     }
     IFCOPENSHELL_HELPER_FOR_EACH_SCHEMA(IFCOPENSHELL_DISPATCH)
 #undef IFCOPENSHELL_DISPATCH
@@ -774,11 +841,13 @@ std::optional<property_value> get_property(const std::vector<express::base>& pro
         return std::nullopt;
     }
     const auto schema = schema_name(properties.front());
+    nesting_guard guard;
 #define IFCOPENSHELL_DISPATCH(Schema, Identifier)                                                      \
     if (schema == Identifier) {                                                                        \
         return get_property_s<Schema>(cast_entities<Schema, typename Schema::IfcProperty>(properties), \
                                       name,                                                            \
-                                      verbose);                                                        \
+                                      verbose,                                                         \
+                                      guard);                                                          \
     }
     IFCOPENSHELL_HELPER_FOR_EACH_SCHEMA(IFCOPENSHELL_DISPATCH)
 #undef IFCOPENSHELL_DISPATCH
@@ -790,10 +859,12 @@ property_map get_properties(const std::vector<express::base>& properties, bool v
         return {};
     }
     const auto schema = schema_name(properties.front());
+    nesting_guard guard;
 #define IFCOPENSHELL_DISPATCH(Schema, Identifier)                                                        \
     if (schema == Identifier) {                                                                          \
         return get_properties_s<Schema>(cast_entities<Schema, typename Schema::IfcProperty>(properties), \
-                                        verbose);                                                        \
+                                        verbose,                                                         \
+                                        guard);                                                          \
     }
     IFCOPENSHELL_HELPER_FOR_EACH_SCHEMA(IFCOPENSHELL_DISPATCH)
 #undef IFCOPENSHELL_DISPATCH

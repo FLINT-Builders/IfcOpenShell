@@ -26,6 +26,7 @@
 
 #include <cstddef>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -112,20 +113,33 @@ Eigen::Matrix4d get_axis2_placement_s(const express::base& placement) {
     return Eigen::Matrix4d::Identity();
 }
 
+// The parser accepts cyclic PlacementRelTo chains, so the chain is walked
+// iteratively and stops at the first repeat: the placement that closes a cycle
+// is treated as having no parent.
 template <typename Schema>
 Eigen::Matrix4d get_local_placement_s(const express::base& placement) {
-    if (auto local = placement.template as<typename Schema::IfcLocalPlacement>()) {
-        Eigen::Matrix4d parent = Eigen::Matrix4d::Identity();
-        if (const auto relative_to = local.PlacementRelTo()) {
-            parent = get_local_placement_s<Schema>(relative_to);
+    std::vector<express::base> chain;
+    std::unordered_set<express::base> visited;
+    for (express::base current = placement; current && visited.insert(current).second;) {
+        chain.push_back(current);
+        const auto local = current.template as<typename Schema::IfcLocalPlacement>();
+        if (!local) {
+            break;
         }
-        const auto relative = local.RelativePlacement();
-        if (!relative) {
-            return parent;
-        }
-        return parent * get_axis2_placement_s<Schema>(relative.concrete());
+        current = local.PlacementRelTo();
     }
-    return get_axis2_placement_s<Schema>(placement);
+
+    Eigen::Matrix4d result = Eigen::Matrix4d::Identity();
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        if (const auto local = it->template as<typename Schema::IfcLocalPlacement>()) {
+            if (const auto relative = local.RelativePlacement()) {
+                result = result * get_axis2_placement_s<Schema>(relative.concrete());
+            }
+        } else {
+            result = result * get_axis2_placement_s<Schema>(*it);
+        }
+    }
+    return result;
 }
 
 // ifcopenshell.util.placement.get_storey_elevation: the Z of the storey's
