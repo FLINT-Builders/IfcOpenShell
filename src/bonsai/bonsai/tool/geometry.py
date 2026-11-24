@@ -1577,10 +1577,14 @@ class Geometry(bonsai.core.tool.Geometry):
     def resolve_mapped_representation(
         cls, representation: ifcopenshell.entity_instance
     ) -> ifcopenshell.entity_instance:
-        if representation.RepresentationType == "MappedRepresentation":
-            if not representation.Items:
-                return representation
-            return cls.resolve_mapped_representation(representation.Items[0].MappingSource.MappedRepresentation)
+        visited = set()
+        while (
+            representation.RepresentationType == "MappedRepresentation"
+            and representation.Items
+            and representation not in visited
+        ):
+            visited.add(representation)
+            representation = representation.Items[0].MappingSource.MappedRepresentation
         return representation
 
     @classmethod
@@ -1727,11 +1731,15 @@ class Geometry(bonsai.core.tool.Geometry):
             # IfcShapeRepresentation or IfcTopologyRepresentation.
             if not representation.is_a("IfcShapeModel"):
                 return
-            queue = list(representation.Items)
+            ancestors = frozenset((representation,))
+            queue = [(item, ancestors) for item in representation.Items]
             while queue:
-                item = queue.pop()
+                item, ancestors = queue.pop()
                 if item.is_a("IfcMappedItem"):
-                    queue.extend(item.MappingSource.MappedRepresentation.Items)
+                    mapped_rep = item.MappingSource.MappedRepresentation
+                    if mapped_rep not in ancestors:
+                        mapped_ancestors = ancestors | {mapped_rep}
+                        queue.extend((i, mapped_ancestors) for i in mapped_rep.Items)
                 else:
                     new = props.items.add()
                     new.name = item.is_a()
