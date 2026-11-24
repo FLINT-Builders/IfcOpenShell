@@ -48,8 +48,12 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcBooleanResult& inst) {
 	if (op == taxonomy::boolean_result::SUBTRACTION) {
 		int n_half_space_operands = 0;
 		bool process_as_list = true;
+		std::unordered_set<uint32_t> visited = {inst.identity()};
 		while (true) {
 			auto res1 = operand1.as<IfcSchema::IfcBooleanResult>();
+			if (res1 && !visited.insert(res1.identity()).second) {
+				throw ifcopenshell::exception("Cyclic FirstOperand reference in IfcBooleanResult");
+			}
 			if (res1 && res1.SecondOperand().as<IfcSchema::IfcHalfSpaceSolid>() && ++n_half_space_operands > 8) {
 				// There is something peculiar about many half space subtraction operands that OCCT does not like.
 				// Often these are used to create a semi-curved arch, as is the case in 693. Supplying all these
