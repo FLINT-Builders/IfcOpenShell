@@ -46,6 +46,7 @@
 
 #endif
 
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <vector>
@@ -508,6 +509,22 @@ void ttl_wkt_serializer::write(const ifcopenshell::geom::native_element* brep_ob
 std::string ttl_wkt_serializer::ttl_object_id(const ifcopenshell::geom::element* o, const char* const postfix)
 {
 	auto oid = boost::replace_all_copy(object_id(o), "-", "_");
+	// The id is built from text in the IFC file (names, GUIDs, representation
+	// identifiers). Unless it is limited to [A-Za-z0-9_$], every byte is
+	// percent-encoded so that none of that text is copied into the document.
+	bool is_plain = std::all_of(oid.begin(), oid.end(), [](unsigned char c) {
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+	});
+	if (!is_plain) {
+		static const char hex[] = "0123456789ABCDEF";
+		std::string encoded;
+		for (unsigned char c : oid) {
+			encoded.push_back('%');
+			encoded.push_back(hex[c >> 4]);
+			encoded.push_back(hex[c & 0xF]);
+		}
+		oid = encoded;
+	}
 	if (oid.find('$') == std::string::npos) {
 		return "base:" + oid + (postfix ? postfix : "");
 	} else {
