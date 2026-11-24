@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 namespace {
 
@@ -54,7 +55,11 @@ std::optional<double> numeric_value(const express::base& value) {
 template <typename Schema>
 std::optional<double> si_scale_from_named_unit_s(express::base unit) {
     double scale = 1.0;
+    std::set<uint32_t> visited;
     while (auto conversion = unit.template as<typename Schema::IfcConversionBasedUnit>()) {
+        if (!visited.insert(unit.id()).second) {
+            return std::nullopt;
+        }
         if (const auto it = SI_CONVERSIONS.find(to_lower(conversion.Name()));
             it != SI_CONVERSIONS.end()) {
             return scale * it->second;
