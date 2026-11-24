@@ -467,7 +467,11 @@ namespace {
             return item;
         }
 
+        std::unordered_set<uint32_t> visited;
         while (auto booleanresult = item.as<IfcSchema::IfcBooleanClippingResult>()) {
+            if (!visited.insert(booleanresult.identity()).second) {
+                break;
+            }
             // All instantiations of IfcBooleanOperand (type of FirstOperand) are subtypes of
             // IfcGeometricRepresentationItem
             // @nb this is not really how the select hierarchy is structured, not all representation items are selected here
@@ -758,6 +762,16 @@ taxonomy::ptr mapping::map(const express::base& inst) {
             return it->second;
         }
     }
+    if (!in_progress_.insert(iden).second) {
+        logger_.message(ifcopenshell::logger::LOG_ERROR, "GEO", 328, "Cyclic reference encountered while converting:", inst);
+        return nullptr;
+    }
+    struct in_progress_entry {
+        std::unordered_set<uint32_t>& in_progress;
+        uint32_t iden;
+        ~in_progress_entry() { in_progress.erase(iden); }
+    } entry{in_progress_, iden};
+
     taxonomy::ptr item = nullptr;
 
     // @todo we should check whether there is a notice performance impact on the large sequence

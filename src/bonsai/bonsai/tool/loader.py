@@ -1152,7 +1152,9 @@ class Loader(bonsai.core.tool.Loader):
     def get_extrusion_vector(cls, wall):
         if body := ifcopenshell.util.representation.get_representation(wall, "Model", "Body", "MODEL_VIEW"):
             for item in ifcopenshell.util.representation.resolve_representation(body).Items:
-                while item.is_a("IfcBooleanResult"):
+                seen = set()
+                while item.is_a("IfcBooleanResult") and item.id() not in seen:
+                    seen.add(item.id())
                     item = item.FirstOperand
                 if item.is_a("IfcExtrudedAreaSolid"):
                     return Vector(item.ExtrudedDirection.DirectionRatios)
