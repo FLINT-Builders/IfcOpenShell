@@ -225,11 +225,26 @@
       const tr = document.createElement('tr');
       tr.dataset.id = o.objectId;
       tr.classList.toggle('selected', selected.has(o.objectId));
-      tr.innerHTML =
-        `<td class="mono">${o.guid}</td><td>${o.name || '—'}</td>` +
-        `<td>${o.type || '—'}</td><td>${models[o.model] || o.model}</td>` +
-        `<td><input type="checkbox" ${hidden.has(o.objectId) ? '' : 'checked'}></td>` +
-        `<td><input type="color" class="swatch" value="#cccccc"></td>`;
+      // GlobalId, name, type and file name come from the loaded model: insert them as text.
+      const cells = [o.guid, o.name || '—', o.type || '—', models[o.model] || o.model];
+      cells.forEach((text, i) => {
+        const td = document.createElement('td');
+        if (i === 0) td.className = 'mono';
+        td.textContent = String(text ?? '');
+        tr.appendChild(td);
+      });
+      const shown = document.createElement('input');
+      shown.type = 'checkbox';
+      shown.checked = !hidden.has(o.objectId);
+      const swatch = document.createElement('input');
+      swatch.type = 'color';
+      swatch.className = 'swatch';
+      swatch.value = '#cccccc';
+      for (const input of [shown, swatch]) {
+        const td = document.createElement('td');
+        td.appendChild(input);
+        tr.appendChild(td);
+      }
 
       // Click the row to select it; shift-click adds, as in the viewport.
       tr.onclick = (ev) => {
