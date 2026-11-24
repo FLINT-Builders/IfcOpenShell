@@ -1081,6 +1081,10 @@ class curve_segment_evaluator {
         }
 
         if (segment_type_ == ST_HORIZONTAL || segment_type_ == ST_VERTICAL) {
+            if (coeffY.size() < 2) {
+                throw std::runtime_error("IfcPolynomialCurve.CoefficientsY must have at least two coefficients");
+            }
+
             projected_length_ = length_;
 
             // There is one significant difference between IfcPolynomialCurve used for horizontal and vertical alignments.
@@ -1098,6 +1102,9 @@ class curve_segment_evaluator {
 
             // This functor is the derivative of y(x) => dy/dx = f'(x)
             auto df = [lu=length_unit_,coeffY,mapping=mapping_](double x) -> double {
+                if (coeffY.size() < 2) {
+                    return 0.0;
+                }
                 auto begin = coeffY.begin();
                 auto iter = std::next(begin);
                 auto end = coeffY.end();
@@ -1196,7 +1203,7 @@ class curve_segment_evaluator {
                 },
                 [coeffY](double) -> Eigen::Matrix4d {
                     Eigen::Matrix4d c = Eigen::Matrix4d::Zero();
-                    c(3, 0) = coeffY[2]; // this may need a unit conversion (also assume there is only 3 coefficients)
+                    c(3, 0) = coeffY.size() > 2 ? coeffY[2] : 0.0; // this may need a unit conversion (also assume there is only 3 coefficients)
                      return c;
                 }
             );
