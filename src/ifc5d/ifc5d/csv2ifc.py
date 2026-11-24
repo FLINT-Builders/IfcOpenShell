@@ -33,6 +33,8 @@ import ifcopenshell.util.selector
 import ifcopenshell.util.unit
 from typing_extensions import NotRequired
 
+from ifc5d.ifc5Dspreadsheet import unescape_formula
+
 
 class CsvHeader(TypedDict):
     Index: int
@@ -175,6 +177,7 @@ class Csv2Ifc:
             for row in reader:
                 if not row[0]:
                     continue
+                row = [unescape_formula(value) for value in row]
                 # parse header
                 if not self.headers:
                     self.has_categories = True

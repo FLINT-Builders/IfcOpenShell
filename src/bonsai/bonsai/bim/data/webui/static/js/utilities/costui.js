@@ -555,9 +555,17 @@ export class CostUI {
 
   static tableToCsv(table) {
     const escapeCsvCell = (value) => {
-      const text = (value === null || value === undefined ? "" : value)
+      let text = (value === null || value === undefined ? "" : value)
         .toString()
         .trim();
+      // Same rule as ifc5d's escape_formula, which csv2ifc reverses on import.
+      // Plain numbers such as negative amounts are left as numbers.
+      if (
+        /^(?:[\t\r]|\s*[=+\-@＝＋－＠])/.test(text.replace(/^'+/, "")) &&
+        !/^[+-]?[\d\s.,]+%?$/.test(text)
+      ) {
+        text = "'" + text;
+      }
       if (/[",\n]/.test(text)) {
         return '"' + text.replace(/"/g, '""') + '"';
       }
