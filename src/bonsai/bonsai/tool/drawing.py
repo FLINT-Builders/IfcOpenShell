@@ -1464,7 +1464,7 @@ class Drawing(bonsai.core.tool.Drawing):
     # TODO below this point is highly experimental prototype code with no tests
 
     class SheetWarningType(NamedTuple):
-        warning_type: Literal["MISSING_LAYOUT", "MISSING_TITLEBLOCK"]
+        warning_type: Literal["MISSING_LAYOUT", "MISSING_TITLEBLOCK", "SHEETS_DIR_OUTSIDE_PROJECT"]
         message: str
 
         def __str__(self) -> str:
@@ -1491,6 +1491,14 @@ class Drawing(bonsai.core.tool.Drawing):
                 )
             )
         return warnings
+
+    @classmethod
+    def get_sheets_dir_outside_project_warning(cls, sheet: ifcopenshell.entity_instance) -> SheetWarningType:
+        sheet_id = cls.get_sheet_identification(sheet)
+        return cls.SheetWarningType(
+            "SHEETS_DIR_OUTSIDE_PROJECT",
+            f"Sheet '{sheet_id}' - sheets directory must be inside the IFC project directory.",
+        )
 
     @classmethod
     def does_file_exist(cls, uri: str) -> bool:
