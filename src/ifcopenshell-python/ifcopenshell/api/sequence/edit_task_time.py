@@ -131,6 +131,7 @@ class Usecase:
         finish = ifcopenshell.util.date.ifc2datetime(self.task_time.ScheduleFinish)
         current_date = datetime.date(start.year, start.month, start.day)
         finish_date = datetime.date(finish.year, finish.month, finish.day)
+        ifcopenshell.util.sequence.check_day_span(current_date, finish_date)
         duration = datetime.timedelta(days=1)
         while current_date < finish_date:
             if self.task_time.DurationType == "ELAPSEDTIME" or not self.calendar:

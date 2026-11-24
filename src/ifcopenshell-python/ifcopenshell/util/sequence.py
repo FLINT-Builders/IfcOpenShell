@@ -18,7 +18,7 @@
 
 import datetime
 from collections.abc import Generator
-from functools import cache
+from functools import lru_cache
 from math import floor
 from typing import Literal, Optional, Union
 
@@ -36,6 +36,10 @@ RECURRENCE_TYPE = Literal[
     "YEARLY_BY_DAY_OF_MONTH",
     "YEARLY_BY_POSITION",
 ]
+
+# Calendars come from untrusted files and may have few or no working days, so
+# every day-by-day walk over a calendar must give up after a bounded number of days.
+MAX_WALK_DAYS = 366 * 10
 
 
 def derive_date(
@@ -99,6 +103,7 @@ def count_working_days(start, finish, calendar: ifcopenshell.entity_instance) ->
         return 0
     current_date = datetime.date(start.year, start.month, start.day)
     finish_date = datetime.date(finish.year, finish.month, finish.day)
+    check_day_span(current_date, finish_date)
     while current_date <= finish_date:
         if calendar and calendar.WorkingTimes and is_working_day(current_date, calendar):
             result += 1
@@ -138,8 +143,14 @@ def offset_date(start, duration, duration_type: DURATION_TYPE, calendar: ifcopen
     years = getattr(duration, "years", 0)
 
     abs_duration = abs(duration.days + months * 30 + years * 12 * 30)
+    if abs_duration > MAX_WALK_DAYS:
+        raise ValueError(f"Cannot offset a date by more than {MAX_WALK_DAYS} days, got {abs_duration} days")
     date_offset = datetime.timedelta(days=1 if duration.days > 0 else -1)
+    walked_days = 0
     while abs_duration > 0:
+        walked_days += 1
+        if walked_days > MAX_WALK_DAYS:
+            raise_walk_limit_error(start, calendar)
         if duration_type == "ELAPSEDTIME" or not is_calendar_applicable(current_date, calendar):
             abs_duration -= 1
         elif is_working_day(current_date, calendar):
@@ -153,26 +164,36 @@ def offset_date(start, duration, duration_type: DURATION_TYPE, calendar: ifcopen
 
 
 def get_soonest_working_day(start, duration_type: DURATION_TYPE, calendar: ifcopenshell.entity_instance):
-    if duration_type == "ELAPSEDTIME" or not is_calendar_applicable(start, calendar):
-        return start
-    while not is_working_day(start, calendar):
-        if not is_calendar_applicable(start, calendar):
-            break
-        start += datetime.timedelta(days=1)
-    return start
+    return get_nearest_working_day(start, duration_type, calendar, datetime.timedelta(days=1))
 
 
 def get_recent_working_day(start, duration_type: DURATION_TYPE, calendar: ifcopenshell.entity_instance):
+    return get_nearest_working_day(start, duration_type, calendar, datetime.timedelta(days=-1))
+
+
+def get_nearest_working_day(
+    start, duration_type: DURATION_TYPE, calendar: ifcopenshell.entity_instance, step: datetime.timedelta
+):
     if duration_type == "ELAPSEDTIME" or not is_calendar_applicable(start, calendar):
         return start
-    while not is_working_day(start, calendar):
-        if not is_calendar_applicable(start, calendar):
-            break
-        start -= datetime.timedelta(days=1)
-    return start
+    current_date = start
+    for _ in range(MAX_WALK_DAYS):
+        if is_working_day(current_date, calendar) or not is_calendar_applicable(current_date, calendar):
+            return current_date
+        current_date += step
+    raise_walk_limit_error(start, calendar)
 
 
-@cache
+def raise_walk_limit_error(start, calendar: ifcopenshell.entity_instance) -> None:
+    raise ValueError(f"Calendar #{calendar.id()} has too few working days within {MAX_WALK_DAYS} days of {start}")
+
+
+def check_day_span(start: datetime.date, finish: datetime.date) -> None:
+    if (finish - start).days > MAX_WALK_DAYS:
+        raise ValueError(f"Cannot walk more than {MAX_WALK_DAYS} days from {start} to {finish}")
+
+
+@lru_cache(maxsize=MAX_WALK_DAYS)
 def is_working_day(day, calendar: ifcopenshell.entity_instance) -> bool:
     is_working_day = False
     for work_time in calendar.WorkingTimes or []:
@@ -188,7 +209,7 @@ def is_working_day(day, calendar: ifcopenshell.entity_instance) -> bool:
     return is_working_day
 
 
-@cache
+@lru_cache(maxsize=MAX_WALK_DAYS)
 def is_calendar_applicable(day, calendar: ifcopenshell.entity_instance) -> bool:
     if not calendar or not calendar.WorkingTimes:
         return False
