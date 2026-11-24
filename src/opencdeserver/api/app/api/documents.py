@@ -6,7 +6,7 @@ import traceback
 from typing import Union
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -17,6 +17,7 @@ from models.documents_response import *
 from pydantic import ValidationError
 from repository.documents import doc_db
 from security.secure import get_current_active_user
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from api.logging import LoggingRoute
 
@@ -725,19 +726,33 @@ def document_version_details(
 
 
 @router.post("/documents/1.0/upload_file_to_project", tags=[""])
-async def upload_documents_post(
-    file: UploadFile, project: str = Form(...), selection_session: str = Form(...)
-) -> Document:
+async def upload_documents_post(request: Request, current_user: User = Depends(get_current_active_user)) -> Document:
+    # The multipart body is parsed here rather than declared as Form parameters, because FastAPI
+    # parses (and spools to disk) form bodies before it resolves the authentication dependency.
+    async with request.form(max_files=1) as form:
+        file = form.get("file")
+        project = form.get("project")
+        selection_session = form.get("selection_session")
+        if (
+            not isinstance(file, StarletteUploadFile)
+            or not isinstance(project, str)
+            or not isinstance(selection_session, str)
+        ):
+            raise HTTPException(status_code=422, detail="file, project and selection_session are required.")
+        return await store_file_for_project(file, project, selection_session, current_user)
 
-    # Get the file size (in bytes)
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
+
+async def store_file_for_project(
+    file: StarletteUploadFile, project: str, selection_session: str, current_user: User
+) -> Document:
+    upload_target = doc_db.authorize_upload_to_project(selection_session, project, current_user)
+
+    max_file_size = int(os.environ["SESSION_MAX_FILE_SIZE_BYTES"])
+    if file.size is not None and file.size > max_file_size:
+        raise HTTPException(status_code=413, detail="File is larger than the maximum allowed size.")
 
     # Create document id for file
     document_id = str(uuid4())
-
-    # Move cursor back to the beginning of the file
-    await file.seek(0)
 
     # Find file name ending and create new storage file name
     if file.filename.lower().endswith(tuple(file_types)):
@@ -754,34 +769,50 @@ async def upload_documents_post(
         mime_type = file_types[file_ending]["mime_type"]
         file_type = file_types[file_ending]["file_type"]
 
-    # Create document data
-    document_version_dict = {
-        "document_id": document_id,
-        "session_file_id": "",
-        "version_index": 1,
-        "version_number": "1",
-        "creation_date": doc_db.timestamp(),
-        "title": file.filename,
-        "original_file_name": file.filename,
-        "file_ending": file_ending,
-        "mime_type": mime_type,
-        "file_type": file_type,
-        "project": project,
-        "file_description": {"name": name, "size_in_bytes": file_size},
-    }
-
-    document_version_model = Document(**document_version_dict)
-
-    # Save file to disc
     upload_directory = "./data/documents/"
     destination_path = os.path.join(upload_directory, name)
-    with open(destination_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    file_created = False
+    node_requested = False
+    try:
+        # Save file to disc, refusing to store more than the maximum allowed size
+        file_size = 0
+        with open(destination_path, "xb") as buffer:
+            file_created = True
+            while chunk := await file.read(1024 * 1024):
+                file_size += len(chunk)
+                if file_size > max_file_size:
+                    raise HTTPException(status_code=413, detail="File is larger than the maximum allowed size.")
+                buffer.write(chunk)
 
-    # create database record
-    inserted_document = doc_db.create_node_for_uploaded_file(selection_session, project, document_version_model)
-    print("Created node for document id: " + str(inserted_document.document_id))
-    doc_db.create_ifc_graph_for_document(inserted_document.document_id)
+        # Create document data
+        document_version_dict = {
+            "document_id": document_id,
+            "session_file_id": "",
+            "version_index": 1,
+            "version_number": "1",
+            "creation_date": doc_db.timestamp(),
+            "title": file.filename,
+            "original_file_name": file.filename,
+            "file_ending": file_ending,
+            "mime_type": mime_type,
+            "file_type": file_type,
+            "project": upload_target.project,
+            "file_description": {"name": name, "size_in_bytes": file_size},
+        }
+
+        document_version_model = Document(**document_version_dict)
+
+        # create database record
+        node_requested = True
+        inserted_document = doc_db.create_node_for_uploaded_file(upload_target, document_version_model)
+        print("Created node for document id: " + str(inserted_document.document_id))
+        doc_db.create_ifc_graph_for_document(inserted_document.document_id)
+    except BaseException:
+        if node_requested:
+            doc_db.delete_uploaded_document(document_id)
+        if file_created:
+            os.remove(destination_path)
+        raise
 
     # return document version of database record
     return inserted_document
