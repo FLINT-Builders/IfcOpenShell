@@ -1192,9 +1192,11 @@ class FacetTransformer(lark.Transformer):
 
         tree = []
 
-        while container:
+        seen = set()
+        while container and container.id() not in seen:
             if container.is_a("IfcProject"):
                 break
+            seen.add(container.id())
             tree.append(container)
             container = ifcopenshell.util.element.get_aggregate(container)
 
