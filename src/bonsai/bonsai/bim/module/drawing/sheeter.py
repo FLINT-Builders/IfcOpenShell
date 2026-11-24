@@ -19,11 +19,11 @@
 import ntpath
 import os
 import re
-import shutil
 import urllib.parse
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import BinaryIO, Union
 from xml.dom import minidom
 
 import ifcopenshell.util.geolocation
@@ -43,7 +43,8 @@ class SheetBuilder:
     def __init__(self):
         self.scale = "NTS"
 
-    def create(self, layout_path: str, titleblock_name: str) -> None:
+    def create(self, layout_path: str, titleblock_name: str) -> bool:
+        """Write a new layout, return ``False`` if ``layout_path`` may not be written."""
         root = ET.Element("svg")
         root.attrib["xmlns"] = "http://www.w3.org/2000/svg"
         root.attrib["xmlns:xlink"] = "http://www.w3.org/1999/xlink"
@@ -56,13 +57,13 @@ class SheetBuilder:
             Path("templates") / "titleblocks" / (titleblock_name + ".svg")
         )
         titleblock_path = tool.Ifc.resolve_uri(tool.Drawing.get_default_titleblock_path(titleblock_name))
+        self.ensure_titleblock(ootb_titleblock_path, titleblock_path)
 
-        os.makedirs(sheet_dir, exist_ok=True)
-        os.makedirs(os.path.dirname(titleblock_path), exist_ok=True)
-        if not os.path.exists(titleblock_path):
-            shutil.copy(ootb_titleblock_path, titleblock_path)
-
-        view_root = ET.parse(titleblock_path).getroot()
+        try:
+            view_root = ET.parse(titleblock_path).getroot()
+        except FileNotFoundError:
+            print(f"WARNING. Couldn't create sheet layout '{layout_path}', titleblock '{titleblock_path}' is missing.")
+            return False
         view_width = self.convert_to_mm(view_root.attrib["width"])
         view_height = self.convert_to_mm(view_root.attrib["height"])
         view = ET.SubElement(root, "g")
@@ -79,8 +80,29 @@ class SheetBuilder:
         root.attrib["height"] = "{}mm".format(view_height)
         root.attrib["viewBox"] = "0 0 {} {}".format(view_width, view_height)
 
-        with open(layout_path, "w") as f:
-            f.write(minidom.parseString(ET.tostring(root)).toprettyxml(indent="    "))
+        if (layout := tool.Drawing.open_layout_file(layout_path, create=True)) is None:
+            return False
+        layout_file, _ = layout
+        with layout_file:
+            layout_file.seek(0)
+            layout_file.truncate()
+            layout_file.write(minidom.parseString(ET.tostring(root)).toprettyxml(indent="    ").encode("utf-8"))
+        return True
+
+    def ensure_titleblock(self, ootb_titleblock_path: Path, titleblock_path: str) -> None:
+        if not os.path.exists(titleblock_path):
+            tool.Drawing.copy_to_document_file(ootb_titleblock_path, titleblock_path, overwrite=False)
+
+    def open_layout(self, layout_path: str) -> Union[tuple[BinaryIO, ET.ElementTree], None]:
+        if (layout := tool.Drawing.open_layout_file(layout_path)) is None:
+            return None
+        layout_file, content = layout
+        return layout_file, ET.ElementTree(ET.fromstring(content))
+
+    def write_layout(self, layout_file: BinaryIO, layout_tree: ET.ElementTree) -> None:
+        layout_file.seek(0)
+        layout_file.truncate()
+        layout_tree.write(layout_file)
 
     def add_drawing(
         self,
@@ -101,36 +123,39 @@ class SheetBuilder:
         ET.register_namespace("", "http://www.w3.org/2000/svg")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
-        layout_tree = ET.parse(layout_path)
-        layout_root = layout_tree.getroot()
+        if (layout := self.open_layout(layout_path)) is None:
+            return
+        layout_file, layout_tree = layout
+        with layout_file:
+            layout_root = layout_tree.getroot()
 
-        view_tree = ET.parse(drawing_path)
-        view_root = view_tree.getroot()
+            view_tree = ET.parse(drawing_path)
+            view_root = view_tree.getroot()
 
-        # The view is placed into a group with a background image element.
-        # Although the foreground SVG already has a background, it is duplicated
-        # here to accommodate browsers which do not nest images.
-        view = ET.SubElement(layout_root, "g")
-        view.attrib["data-type"] = "drawing"
-        view.attrib["data-id"] = str(reference.id())
-        view.attrib["data-drawing"] = drawing.GlobalId
-        view_width = self.convert_to_mm(view_root.attrib["width"])
-        view_height = self.convert_to_mm(view_root.attrib["height"])
+            # The view is placed into a group with a background image element.
+            # Although the foreground SVG already has a background, it is duplicated
+            # here to accommodate browsers which do not nest images.
+            view = ET.SubElement(layout_root, "g")
+            view.attrib["data-type"] = "drawing"
+            view.attrib["data-id"] = str(reference.id())
+            view.attrib["data-drawing"] = drawing.GlobalId
+            view_width = self.convert_to_mm(view_root.attrib["width"])
+            view_height = self.convert_to_mm(view_root.attrib["height"])
 
-        x, y = self.next_drawing_location(layout_root, view_width)
+            x, y = self.next_drawing_location(layout_root, view_width)
 
-        # add foreground
-        if os.path.isfile(drawing_path):
-            foreground = ET.SubElement(view, "image")
-            foreground.attrib["data-type"] = "foreground"
-            foreground.attrib["xlink:href"] = os.path.relpath(drawing_path, layout_dir)
-            foreground.attrib["x"] = str(x)
-            foreground.attrib["y"] = str(y)
-            foreground.attrib["width"] = str(view_width)
-            foreground.attrib["height"] = str(view_height)
+            # add foreground
+            if os.path.isfile(drawing_path):
+                foreground = ET.SubElement(view, "image")
+                foreground.attrib["data-type"] = "foreground"
+                foreground.attrib["xlink:href"] = os.path.relpath(drawing_path, layout_dir)
+                foreground.attrib["x"] = str(x)
+                foreground.attrib["y"] = str(y)
+                foreground.attrib["width"] = str(view_width)
+                foreground.attrib["height"] = str(view_height)
 
-        self.add_view_title(x, view_height + y + VIEW_TITLE_OFFSET_Y, view, layout_dir)
-        layout_tree.write(layout_path)
+            self.add_view_title(x, view_height + y + VIEW_TITLE_OFFSET_Y, view, layout_dir)
+            self.write_layout(layout_file, layout_tree)
 
     def next_drawing_location(self, layout_root: ET.Element, next_width: float) -> list:
         titleblocks = layout_root.findall(f'{SVG}g[@data-type="titleblock"]')
@@ -172,44 +197,47 @@ class SheetBuilder:
 
         layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
         assert layout_path
-        layout_tree = ET.parse(layout_path)
-        layout_root = layout_tree.getroot()
-        ifc_file = tool.Ifc.get()
+        if (layout := self.open_layout(layout_path)) is None:
+            return
+        layout_file, layout_tree = layout
+        with layout_file:
+            layout_root = layout_tree.getroot()
+            ifc_file = tool.Ifc.get()
 
-        # iterate over all drawings in the sheet
-        drawings_views = layout_root.findall(f'{SVG}g[@data-type="drawing"]')
+            # iterate over all drawings in the sheet
+            drawings_views = layout_root.findall(f'{SVG}g[@data-type="drawing"]')
 
-        for drawing_view in drawings_views:
-            # find drawing in ifc file to get the drawing dimensions
-            drawing = ifc_file.by_guid(drawing_view.attrib.get("data-drawing"))
-            drawing_path = tool.Drawing.get_document_uri(tool.Drawing.get_drawing_reference(drawing))
-            drawing_tree = ET.parse(drawing_path)
-            drawing_root = drawing_tree.getroot()
-            view_width = round(self.convert_to_mm(drawing_root.attrib.get("width")), 2)
-            view_height = round(self.convert_to_mm(drawing_root.attrib.get("height")), 2)
+            for drawing_view in drawings_views:
+                # find drawing in ifc file to get the drawing dimensions
+                drawing = ifc_file.by_guid(drawing_view.attrib.get("data-drawing"))
+                drawing_path = tool.Drawing.get_document_uri(tool.Drawing.get_drawing_reference(drawing))
+                drawing_tree = ET.parse(drawing_path)
+                drawing_root = drawing_tree.getroot()
+                view_width = round(self.convert_to_mm(drawing_root.attrib.get("width")), 2)
+                view_height = round(self.convert_to_mm(drawing_root.attrib.get("height")), 2)
 
-            foreground = drawing_view.find(f'.//{SVG}image[@data-type="foreground"]')
-            current_width = round(float(foreground.attrib["width"]), 2)
-            current_height = round(float(foreground.attrib["height"]), 2)
+                foreground = drawing_view.find(f'.//{SVG}image[@data-type="foreground"]')
+                current_width = round(float(foreground.attrib["width"]), 2)
+                current_height = round(float(foreground.attrib["height"]), 2)
 
-            # Check if the dimensions have changed
-            if current_width != view_width or current_height != view_height:
-                readjust = Vector((current_width - view_width, current_height - view_height)) / 2
+                # Check if the dimensions have changed
+                if current_width != view_width or current_height != view_height:
+                    readjust = Vector((current_width - view_width, current_height - view_height)) / 2
 
-                for image in drawing_view.findall(f"{SVG}image"):
-                    x = float(image.attrib["x"])
-                    y = float(image.attrib["y"])
-                    if image.attrib["data-type"] == "view-title":
-                        image.attrib["x"] = str(x + readjust.x)
-                        # negate y offset because view-title comes AFTER foreground
-                        image.attrib["y"] = str(y - readjust.y)
-                    else:
-                        image.attrib["x"] = str(x + readjust.x)
-                        image.attrib["y"] = str(y + readjust.y)
-                        image.attrib["width"] = str(view_width)
-                        image.attrib["height"] = str(view_height)
+                    for image in drawing_view.findall(f"{SVG}image"):
+                        x = float(image.attrib["x"])
+                        y = float(image.attrib["y"])
+                        if image.attrib["data-type"] == "view-title":
+                            image.attrib["x"] = str(x + readjust.x)
+                            # negate y offset because view-title comes AFTER foreground
+                            image.attrib["y"] = str(y - readjust.y)
+                        else:
+                            image.attrib["x"] = str(x + readjust.x)
+                            image.attrib["y"] = str(y + readjust.y)
+                            image.attrib["width"] = str(view_width)
+                            image.attrib["height"] = str(view_height)
 
-        layout_tree.write(layout_path)
+            self.write_layout(layout_file, layout_tree)
 
     def remove_drawing(self, reference: ifcopenshell.entity_instance, sheet: ifcopenshell.entity_instance) -> None:
         ET.register_namespace("", "http://www.w3.org/2000/svg")
@@ -218,15 +246,18 @@ class SheetBuilder:
         assert layout_path
         if not os.path.exists(layout_path):
             return
-        layout_tree = ET.parse(layout_path)
-        layout_root = layout_tree.getroot()
+        if (layout := self.open_layout(layout_path)) is None:
+            return
+        layout_file, layout_tree = layout
+        with layout_file:
+            layout_root = layout_tree.getroot()
 
-        for g in layout_root.findall(f"{SVG}g"):
-            if g.attrib.get("data-id") == str(reference.id()):
-                layout_root.remove(g)
-                break
+            for g in layout_root.findall(f"{SVG}g"):
+                if g.attrib.get("data-id") == str(reference.id()):
+                    layout_root.remove(g)
+                    break
 
-        layout_tree.write(layout_path)
+            self.write_layout(layout_file, layout_tree)
 
     def add_document(
         self,
@@ -245,38 +276,40 @@ class SheetBuilder:
         ET.register_namespace("", "http://www.w3.org/2000/svg")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
-        layout_tree = ET.parse(layout_path)
-        layout_root = layout_tree.getroot()
+        if (layout := self.open_layout(layout_path)) is None:
+            return
+        layout_file, layout_tree = layout
+        with layout_file:
+            layout_root = layout_tree.getroot()
 
-        view_tree = ET.parse(view_path)
-        view_root = view_tree.getroot()
-        view_width = self.convert_to_mm(view_root.attrib.get("width"))
-        view_height = self.convert_to_mm(view_root.attrib.get("height"))
+            view_tree = ET.parse(view_path)
+            view_root = view_tree.getroot()
+            view_width = self.convert_to_mm(view_root.attrib.get("width"))
+            view_height = self.convert_to_mm(view_root.attrib.get("height"))
 
-        x, y = self.next_drawing_location(layout_root, view_width)
+            x, y = self.next_drawing_location(layout_root, view_width)
 
-        view = ET.SubElement(layout_root, "g")
-        view.attrib["data-id"] = str(reference.id())
-        view.attrib["data-type"] = document.Scope.lower()
-        view.attrib["data-document"] = str(document.id())
+            view = ET.SubElement(layout_root, "g")
+            view.attrib["data-id"] = str(reference.id())
+            view.attrib["data-type"] = document.Scope.lower()
+            view.attrib["data-document"] = str(document.id())
 
-        foreground = ET.SubElement(view, "image")
-        foreground.attrib["data-type"] = "content"
-        foreground.attrib["xlink:href"] = os.path.relpath(view_path, layout_dir)
-        foreground.attrib["x"] = str(x)
-        foreground.attrib["y"] = str(y)
-        foreground.attrib["width"] = str(view_width)
-        foreground.attrib["height"] = str(view_height)
+            foreground = ET.SubElement(view, "image")
+            foreground.attrib["data-type"] = "content"
+            foreground.attrib["xlink:href"] = os.path.relpath(view_path, layout_dir)
+            foreground.attrib["x"] = str(x)
+            foreground.attrib["y"] = str(y)
+            foreground.attrib["width"] = str(view_width)
+            foreground.attrib["height"] = str(view_height)
 
-        self.add_view_title(x, view_height + y + VIEW_TITLE_OFFSET_Y, view, layout_dir)
-        layout_tree.write(layout_path)
+            self.add_view_title(x, view_height + y + VIEW_TITLE_OFFSET_Y, view, layout_dir)
+            self.write_layout(layout_file, layout_tree)
 
     def add_view_title(self, x: float, y: float, parent: ET.Element, layout_dir: str) -> None:
         title_path = os.path.join(layout_dir, "assets", "view-title.svg")
-        os.makedirs(os.path.dirname(title_path), exist_ok=True)
         if not os.path.exists(title_path):
             ootb_title = tool.Blender.get_data_dir_path(Path("assets") / "view-title.svg")
-            shutil.copy(ootb_title, title_path)
+            tool.Drawing.copy_to_document_file(ootb_title, title_path, overwrite=False)
 
         title_tree = ET.parse(title_path)
         title_root = title_tree.getroot()
@@ -288,15 +321,14 @@ class SheetBuilder:
         title.attrib["width"] = str(self.convert_to_mm(title_root.attrib["width"]))
         title.attrib["height"] = str(self.convert_to_mm(title_root.attrib["height"]))
 
-    def build(self, sheet: ifcopenshell.entity_instance) -> dict[str, str]:
+    def build(self, sheet: ifcopenshell.entity_instance) -> Union[dict[str, str], None]:
+        """Build the sheet, return ``None`` if the sheet file may not be written."""
         layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
         assert layout_path
         self.layout_dir = os.path.dirname(layout_path)
 
         sheet_path = tool.Ifc.resolve_uri(tool.Drawing.get_default_sheet_path(sheet[0], sheet.Name))
         self.sheets_dir = os.path.dirname(sheet_path)
-
-        os.makedirs(self.sheets_dir, exist_ok=True)
 
         ET.register_namespace("", "http://www.w3.org/2000/svg")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
@@ -311,8 +343,11 @@ class SheetBuilder:
         self.build_drawings(root, sheet)
         self.build_documents(root, sheet)
 
-        with open(sheet_path, "wb") as output:
-            tree.write(output)
+        if (output := tool.Drawing.open_layout_file(sheet_path, create=True)) is None:
+            return None
+        output_file, _ = output
+        with output_file:
+            self.write_layout(output_file, tree)
 
         return {"SHEET": sheet_path}
 
@@ -526,8 +561,8 @@ class SheetBuilder:
                     template_dir = Path(os.path.join(self.layout_dir, svg_path)).resolve().parent
                     old_href = Path(os.path.join(template_dir, old_href))
                 old_href = old_href.absolute().resolve().as_posix()
-                new_href = Path(os.path.join(self.sheets_dir, Path(old_href).name)).absolute().resolve().as_posix()
-                shutil.copy(old_href, new_href)
+                new_href = Path(os.path.join(self.sheets_dir, Path(old_href).name)).absolute().as_posix()
+                tool.Drawing.copy_to_document_file(old_href, new_href)
                 image.attrib[f"{XLINK}href"] = Path(old_href).name
         for child in embedded:
             if "namedview" in child.tag:
@@ -544,32 +579,31 @@ class SheetBuilder:
         assert sheet_path is not None
         sheet_dir = os.path.dirname(sheet_path)
 
-        os.makedirs(sheet_dir, exist_ok=True)
-        os.makedirs(os.path.dirname(titleblock_path), exist_ok=True)
-        if not os.path.exists(titleblock_path):
-            shutil.copy(ootb_titleblock_path, titleblock_path)
-
         ET.register_namespace("", "http://www.w3.org/2000/svg")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
-        view_root = ET.parse(titleblock_path).getroot()
-        view_width = self.convert_to_mm(view_root.attrib["width"])
-        view_height = self.convert_to_mm(view_root.attrib["height"])
+        if (layout := self.open_layout(sheet_path)) is None:
+            return
+        layout_file, sheet_tree = layout
+        with layout_file:
+            self.ensure_titleblock(ootb_titleblock_path, titleblock_path)
+            view_root = ET.parse(titleblock_path).getroot()
+            view_width = self.convert_to_mm(view_root.attrib["width"])
+            view_height = self.convert_to_mm(view_root.attrib["height"])
 
-        sheet_tree = ET.parse(sheet_path)
-        root = sheet_tree.getroot()
+            root = sheet_tree.getroot()
 
-        titleblock = sheet_tree.findall(f'{SVG}g[@data-type="titleblock"]')[0]
-        image = titleblock.findall(f"{SVG}image[@{XLINK}href]")[0]
-        image.attrib[f"{XLINK}href"] = os.path.relpath(titleblock_path, sheet_dir)
-        image.attrib["width"] = str(view_width)
-        image.attrib["height"] = str(view_height)
+            titleblock = sheet_tree.findall(f'{SVG}g[@data-type="titleblock"]')[0]
+            image = titleblock.findall(f"{SVG}image[@{XLINK}href]")[0]
+            image.attrib[f"{XLINK}href"] = os.path.relpath(titleblock_path, sheet_dir)
+            image.attrib["width"] = str(view_width)
+            image.attrib["height"] = str(view_height)
 
-        root.attrib["width"] = "{}mm".format(view_width)
-        root.attrib["height"] = "{}mm".format(view_height)
-        root.attrib["viewBox"] = "0 0 {} {}".format(view_width, view_height)
+            root.attrib["width"] = "{}mm".format(view_width)
+            root.attrib["height"] = "{}mm".format(view_height)
+            root.attrib["viewBox"] = "0 0 {} {}".format(view_width, view_height)
 
-        sheet_tree.write(sheet_path)
+            self.write_layout(layout_file, sheet_tree)
 
     def convert_to_mm(self, value: str) -> float:
         # CSS is what defines these possibilities
