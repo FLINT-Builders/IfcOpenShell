@@ -217,24 +217,31 @@ function sanitizeUrl(url) {
     return null;
 }
 
+// Placeholder tokens are delimited by a character stripped from the input, so
+// input text can never contain or forge a token.
+const PLACEHOLDER_MARK = "\u0000";
+const PLACEHOLDER_PATTERN = /\u0000(\d+)\u0000/g;
+
 function renderInlineMarkdown(text) {
     const placeholders = [];
     const addPlaceholder = (html) => {
-        const token = `@@MD${placeholders.length}@@`;
-        placeholders.push({ token, html });
-        return token;
+        placeholders.push(html);
+        return `${PLACEHOLDER_MARK}${placeholders.length - 1}${PLACEHOLDER_MARK}`;
     };
+    // Single pass: inserted HTML is never rescanned for further tokens.
+    const restorePlaceholders = (value) =>
+        value.replace(PLACEHOLDER_PATTERN, (_, index) => placeholders[Number(index)]);
 
-    let rendered = text;
+    let rendered = String(text).replaceAll(PLACEHOLDER_MARK, "");
 
     rendered = rendered.replace(/`([^`]+)`/g, (_, code) => addPlaceholder(`<code>${escapeHtml(code)}</code>`));
     rendered = rendered.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
-        const href = sanitizeUrl(url);
+        const href = url.includes(PLACEHOLDER_MARK) ? null : sanitizeUrl(url);
         if (!href) {
             return `${label} (${url})`;
         }
         return addPlaceholder(
-            `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`
+            `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${restorePlaceholders(escapeHtml(label))}</a>`
         );
     });
 
@@ -243,11 +250,7 @@ function renderInlineMarkdown(text) {
     rendered = rendered.replace(/\*([^*]+)\*/g, "<em>$1</em>");
     rendered = rendered.replace(/_([^_]+)_/g, "<em>$1</em>");
 
-    for (const placeholder of placeholders) {
-        rendered = rendered.replaceAll(placeholder.token, placeholder.html);
-    }
-
-    return rendered;
+    return restorePlaceholders(rendered);
 }
 
 function renderMarkdown(text) {
