@@ -307,13 +307,16 @@ def resolve_representation(representation: ifcopenshell.entity_instance) -> ifco
     :param representation: IfcRepresentation
     :return: Representation resolved from mappings
     """
+    visited = {representation}
     # Tekla 2023 has missing items and mapped representation, though it's invalid IFC.
-    if (
+    while (
         len(representation.Items or []) == 1
         and representation.Items[0].is_a("IfcMappedItem")
         and (mapped_rep := representation.Items[0].MappingSource.MappedRepresentation)
+        and mapped_rep not in visited
     ):
-        return resolve_representation(mapped_rep)
+        visited.add(mapped_rep)
+        representation = mapped_rep
     return representation
 
 
@@ -328,12 +331,21 @@ def resolve_items(
     if matrix is None:
         matrix = np.eye(4)
     results: list[ResolvedItemDict] = []
-    for item in representation.Items or []:  # Be forgiving of invalid IFCs because Revit :(
+    # Each queued item carries the representations it is nested in, so cyclic mappings are skipped.
+    ancestors = frozenset((representation,))
+    # Be forgiving of invalid IFCs because Revit :(
+    queue = [(item, matrix, ancestors) for item in reversed(representation.Items or [])]
+    while queue:
+        item, matrix, ancestors = queue.pop()
         if item.is_a("IfcMappedItem"):
+            mapped_rep = item.MappingSource.MappedRepresentation
+            if mapped_rep in ancestors:
+                continue
             rep_matrix = ifcopenshell.util.placement.get_mappeditem_transformation(item)
             if not np.allclose(rep_matrix, np.eye(4)):
                 rep_matrix = rep_matrix @ matrix.copy()
-            results.extend(resolve_items(item.MappingSource.MappedRepresentation, rep_matrix))
+            mapped_ancestors = ancestors | {mapped_rep}
+            queue.extend((i, rep_matrix, mapped_ancestors) for i in reversed(mapped_rep.Items or []))
         else:
             results.append(ResolvedItemDict(matrix=matrix.copy(), item=item))
     return results
@@ -343,14 +355,20 @@ def resolve_base_items(
     representation: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
     """Resolve representation to it's base items resolving mapped items and boolean results to it's operands."""
-    queue: list[ifcopenshell.entity_instance] = list(representation.Items)
+    ancestors = frozenset((representation,))
+    queue: list[tuple[ifcopenshell.entity_instance, frozenset[ifcopenshell.entity_instance]]] = [
+        (item, ancestors) for item in representation.Items
+    ]
     while queue:
-        item = queue.pop()
+        item, ancestors = queue.pop()
         if item.is_a("IfcMappedItem"):
-            yield from resolve_base_items(item.MappingSource.MappedRepresentation)
+            mapped_rep = item.MappingSource.MappedRepresentation
+            if mapped_rep not in ancestors:
+                mapped_ancestors = ancestors | {mapped_rep}
+                queue.extend((i, mapped_ancestors) for i in mapped_rep.Items)
         elif item.is_a("IfcBooleanResult"):
-            queue.append(item.FirstOperand)
-            queue.append(item.SecondOperand)
+            queue.append((item.FirstOperand, ancestors))
+            queue.append((item.SecondOperand, ancestors))
         else:
             yield item
 

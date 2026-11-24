@@ -827,14 +827,18 @@ def get_styles(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entit
         return styles
 
     for representation in [body]:
-        queue = list(representation.Items)
+        ancestors = frozenset((representation,))
+        queue = [(item, ancestors) for item in representation.Items]
         while queue:
-            item = queue.pop()
+            item, ancestors = queue.pop()
             if item.is_a("IfcMappedItem"):
-                queue.extend(item.MappingSource.MappedRepresentation.Items)
+                mapped_rep = item.MappingSource.MappedRepresentation
+                if mapped_rep not in ancestors:
+                    mapped_ancestors = ancestors | {mapped_rep}
+                    queue.extend((i, mapped_ancestors) for i in mapped_rep.Items)
             if item.is_a("IfcBooleanResult"):
-                queue.append(item.FirstOperand)
-                queue.append(item.SecondOperand)
+                queue.append((item.FirstOperand, ancestors))
+                queue.append((item.SecondOperand, ancestors))
             if item.StyledByItem:
                 styles.extend([s for s in item.StyledByItem[0].Styles if s.is_a("IfcSurfaceStyle")])
     return styles
@@ -954,17 +958,20 @@ def get_elements_by_representation(
     if not ifc_file:
         ifc_file = representation.file
     results = set()
-    [results.update(pr.ShapeOfProduct) for pr in representation.OfProductRepresentation]
-    for rep_map in representation.RepresentationMap:
-        for inverse in ifc_file.get_inverse(rep_map):
-            if inverse.is_a("IfcTypeProduct"):
-                results.add(inverse)
-            elif inverse.is_a("IfcMappedItem"):
-                [
-                    results.update(get_elements_by_representation(ifc_file, rep))
-                    for rep in ifc_file.get_inverse(inverse)
-                    if rep.is_a("IfcShapeRepresentation")
-                ]
+    visited = {representation}
+    queue = [representation]
+    while queue:
+        representation = queue.pop()
+        [results.update(pr.ShapeOfProduct) for pr in representation.OfProductRepresentation]
+        for rep_map in representation.RepresentationMap:
+            for inverse in ifc_file.get_inverse(rep_map):
+                if inverse.is_a("IfcTypeProduct"):
+                    results.add(inverse)
+                elif inverse.is_a("IfcMappedItem"):
+                    for rep in ifc_file.get_inverse(inverse):
+                        if rep.is_a("IfcShapeRepresentation") and rep not in visited:
+                            visited.add(rep)
+                            queue.append(rep)
     return results
 
 
