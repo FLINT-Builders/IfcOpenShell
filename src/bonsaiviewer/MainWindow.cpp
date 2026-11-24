@@ -57,6 +57,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QProgressBar>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -163,7 +164,7 @@ void MainWindow::populateRecentMenu(QMenu* menu) {
 
     for (const QString& path : recent) {
         QAction* action = menu->addAction(QFileInfo(path).fileName());
-        action->setToolTip(path);
+        action->setToolTip(Qt::convertFromPlainText(path));
         connect(action, &QAction::triggered, this, [this, path]() {
             const bool opened = modules::project::commands::openProjectPath(
                 *session_state_, *this, *viewport_widget_->viewport(), path);
