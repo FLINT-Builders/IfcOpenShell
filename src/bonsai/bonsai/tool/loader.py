@@ -22,7 +22,6 @@ import logging
 import os
 import re
 from math import atan, radians
-from pathlib import Path
 from typing import Any, Optional, Union, cast
 
 import bmesh
@@ -300,18 +299,18 @@ class Loader(bonsai.core.tool.Loader):
                     original_image_url = texture.get("URLReference") or texture.get("UrlReference", "")
                     is_relative = not os.path.isabs(original_image_url)
                     nonlocal image_url
-                    image_url = Path(original_image_url)
-                    if is_relative:
-                        ifc_path = Path(tool.Ifc.get_path())
-                        image_url = ifc_path.parent / image_url
-                    image_url = image_url.absolute().resolve()
+                    image_url = tool.Ifc.resolve_local_uri(original_image_url)
+                    if image_url is None:
+                        image_url = original_image_url
+                        print(f"WARNING. Texture path {image_url} is not a local file path, it will be skipped.")
+                        return
+                    image_url = os.path.abspath(image_url)
 
-                    if not image_url.exists():
+                    if not os.path.exists(image_url):
                         print(f"WARNING. Couldn't find texture by path {image_url}, it will be skipped.")
                         return
 
                     # keep url relative if it was before
-                    image_url = str(image_url)
                     if is_relative and bpy.data.filepath:
                         image_url = bpy.path.relpath(image_url)
                     return bpy.data.images.load(image_url, check_existing=True)

@@ -344,15 +344,18 @@ class BrowseExternalStyle(bpy.types.Operator, ImportHelper):
 
     def invoke(self, context, event):
         style_elements = None
+        resolved_location = None
         if self.active_surface_style_id:
             style = tool.Ifc.get().by_id(self.active_surface_style_id)
             style_elements = tool.Style.get_style_elements(style)
+            if tool.Style.has_blender_external_style(style_elements):
+                external_style = style_elements["IfcExternallyDefinedSurfaceStyle"]
+                resolved_location = tool.Ifc.resolve_local_uri(external_style.Location)
 
         # automatically select previously selected external style in file browser
         # if it exists in the file
-        if style_elements and self.filepath == "" and tool.Style.has_blender_external_style(style_elements):
-            external_style = style_elements["IfcExternallyDefinedSurfaceStyle"]
-            style_path = Path(tool.Ifc.resolve_uri(external_style.Location))
+        if resolved_location and self.filepath == "":
+            style_path = Path(resolved_location)
             self.directory = str(style_path.parent)
             self.filepath = str(style_path)
 
@@ -440,7 +443,13 @@ class ActivateExternalStyle(bpy.types.Operator):
             identification = external_style.Identification
 
         data_block_type, data_block = identification.split("/")
-        style_path = Path(tool.Ifc.resolve_uri(location))
+        resolved_location = tool.Ifc.resolve_local_uri(location)
+        if resolved_location is None:
+            self.report(
+                {"ERROR"}, f"Error loading external style for \"{material.name}\" - not a local file: '{location}'"
+            )
+            return {"CANCELLED"}
+        style_path = Path(resolved_location)
 
         if style_path.suffix != ".blend":
             self.report(
@@ -660,7 +669,11 @@ class SuggestShadeFromExternalStyle(bpy.types.Operator, tool.Ifc.Operator):
         color_cache: "dict[tuple[str, str, str], tuple | None] | None" = None,
     ) -> bool:
         external_style = style_elements["IfcExternallyDefinedSurfaceStyle"]
-        style_path = Path(tool.Ifc.resolve_uri(external_style.Location))
+        resolved_location = tool.Ifc.resolve_local_uri(external_style.Location)
+        if resolved_location is None:
+            self.report({"WARNING"}, f'Could not open blend file for "{material.name}": not a local file')
+            return False
+        style_path = Path(resolved_location)
         data_block_type, data_block = external_style.Identification.split("/")
 
         cache_key = (str(style_path), data_block_type, data_block)

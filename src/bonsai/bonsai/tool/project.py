@@ -336,7 +336,9 @@ class Project(bonsai.core.tool.Project):
                     link.has_transformation = not np.allclose(m, np.eye(4))
                 # The selector query used at link time is persisted only in the
                 # sidecar cache JSON; restore it so Reload/Load replay the filter.
-                json_filepath = Path(tool.Ifc.resolve_uri(filepath)).with_suffix(".ifc.cache.json")
+                if not (resolved_filepath := tool.Ifc.resolve_local_uri(filepath)):
+                    continue
+                json_filepath = Path(resolved_filepath).with_suffix(".ifc.cache.json")
                 if json_filepath.exists():
                     try:
                         link.query = json.loads(json_filepath.read_text()).get("query", "")
