@@ -168,16 +168,16 @@ def authorization(
     )
 
 
-@router.get("/foundation/oauth2/code")
+@router.post("/foundation/oauth2/code")
 def code(
-    username: str,
-    password: str,
-    response_type: str,
-    client_id,
-    client_name,
-    state: str,
-    redirect_uri: str,
-    scope: str = "",
+    username: str = Form(...),
+    password: str = Form(...),
+    response_type: str = Form(...),
+    client_id: str = Form(...),
+    client_name: str = Form(...),
+    state: str = Form(...),
+    redirect_uri: str = Form(...),
+    scope: str = Form(""),
 ):
 
     global oauth2_state

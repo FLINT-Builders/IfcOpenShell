@@ -16,9 +16,8 @@
         });
         function get_code () {
             let form_values = $('#signin_form').serialize();
-            console.log(form_values);
             $.ajax ({
-                type: 'GET',
+                type: 'POST',
                 url: './code',
                 data: form_values,
                 dataType: 'json',
@@ -87,7 +86,7 @@
 </head>
 <body>
 <div id="page_layout" class="page_layout">
-    <form action="./code" id="signin_form" name="signin_form">
+    <form action="./code" method="post" id="signin_form" name="signin_form">
         <h1 class="h3 mb-3">kontroll.digital</h1>
         <div id="result_message">
             <label for="username" class="sr-only mb-1">Username</label>
