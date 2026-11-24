@@ -56,7 +56,9 @@ Example:
 
 from __future__ import annotations
 
+import builtins
 import os
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -162,6 +164,12 @@ class SchemaError(Error):
     pass
 
 
+class DecompressionLimitError(Error):
+    """Error used when a zipped IFC member exceeds a decompression limit"""
+
+    pass
+
+
 @overload
 def open(
     path: Union[os.PathLike, str],
@@ -169,6 +177,8 @@ def open(
     *,
     should_stream: Literal[False] = False,
     logger: Optional[logger] = None,
+    max_uncompressed_bytes: int = 1024**3,
+    max_compression_ratio: int = 100,
 ) -> Union[file, sqlite]: ...
 @overload
 def open(
@@ -177,6 +187,8 @@ def open(
     *,
     should_stream: Literal[True],
     logger: Optional[logger] = None,
+    max_uncompressed_bytes: int = 1024**3,
+    max_compression_ratio: int = 100,
 ) -> _stream: ...
 @overload
 def open(
@@ -186,6 +198,8 @@ def open(
     should_stream: bool = False,
     readonly: bool = False,
     logger: Optional[logger] = None,
+    max_uncompressed_bytes: int = 1024**3,
+    max_compression_ratio: int = 100,
 ) -> Union[file, sqlite, _stream]: ...
 def open(
     path: Union[os.PathLike, str],
@@ -195,12 +209,19 @@ def open(
     mmap: bool = False,
     bypass_types: Optional[Sequence[str]] = None,
     logger: Optional[logger] = None,
+    max_uncompressed_bytes: int = 1024**3,
+    max_compression_ratio: int = 100,
 ) -> Union[file, sqlite, _stream]:
     """Loads an IFC dataset from a filepath
 
     :param should_stream: Whether to open the file in streaming mode. Could be useful
         for reading large files.
     :param logger: Logger that receives native parser messages.
+    :param max_uncompressed_bytes: For zipped IFCs, the largest uncompressed size
+        accepted for the extracted model.
+    :param max_compression_ratio: For zipped IFCs, the largest uncompressed to
+        compressed size ratio accepted for the extracted model.
+    :raises DecompressionLimitError: If a zipped IFC exceeds either limit.
 
     You can specify a file format. If no format is given, it is guessed from
     its extension.
@@ -229,13 +250,21 @@ def open(
     if format == ".ifcXML":
         raise NotImplementedError("Reading .ifcXML files is not currently supported.")
     if format == ".ifcZIP":
-        with tempfile.TemporaryDirectory() as unzipped_path:
-            with zipfile.ZipFile(path) as zf:
-                for name in zf.namelist():
-                    if Path(name).suffix.lower() in (".ifc", ".ifcxml"):
-                        return open(zf.extract(name, unzipped_path), logger=logger)
-                else:
-                    raise LookupError(f"No .ifc or .ifcXML file found in {path}")
+        from .util.file import open_zip_member
+
+        with builtins.open(path, "rb") as archive_file, zipfile.ZipFile(archive_file) as zf:
+            archive_size = os.fstat(archive_file.fileno()).st_size
+            for info in zf.infolist():
+                if Path(info.filename).suffix.lower() in (".ifc", ".ifcxml"):
+                    break
+            else:
+                raise LookupError(f"No .ifc or .ifcXML file found in {path}")
+            with open_zip_member(zf, info, archive_size, max_uncompressed_bytes, max_compression_ratio) as member:
+                with tempfile.TemporaryDirectory() as unzipped_path:
+                    extracted_path = Path(unzipped_path) / Path(info.filename).name
+                    with builtins.open(extracted_path, "wb") as extracted:
+                        shutil.copyfileobj(member, extracted)
+                    return open(extracted_path, logger=logger)
     if format == ".ifcSQLite":
         return sqlite(path)
     if should_stream:

@@ -16,10 +16,71 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
+import io
+import os
 import zipfile
 from typing import IO, TypedDict, Union
 
 from typing_extensions import NotRequired
+
+import ifcopenshell
+
+DEFAULT_MAX_UNCOMPRESSED_BYTES = 1024**3
+DEFAULT_MAX_COMPRESSION_RATIO = 100
+
+
+class _LimitedReader(io.RawIOBase):
+    def __init__(self, member: IO[bytes], limit: int, name: str):
+        self.member = member
+        self.remaining = limit
+        self.member_name = name
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        data = self.member.read(min(len(buffer), self.remaining + 1))
+        if len(data) > self.remaining:
+            raise ifcopenshell.DecompressionLimitError(
+                f"Zip member '{self.member_name}' inflates past its declared size."
+            )
+        self.remaining -= len(data)
+        buffer[: len(data)] = data
+        return len(data)
+
+    def close(self) -> None:
+        self.member.close()
+        super().close()
+
+
+def open_zip_member(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    archive_size: int,
+    max_uncompressed_bytes: int = DEFAULT_MAX_UNCOMPRESSED_BYTES,
+    max_compression_ratio: int = DEFAULT_MAX_COMPRESSION_RATIO,
+) -> IO[bytes]:
+    """Open a zip member for reading after checking it against decompression limits
+
+    The member is refused before any of it is read if its declared uncompressed
+    size exceeds ``max_uncompressed_bytes``, or if its declared size divided by
+    its compressed size exceeds ``max_compression_ratio``. The returned stream
+    also stops with an error if the member inflates past its declared size.
+
+    :param archive_size: Size in bytes of the archive file ``archive`` reads from.
+        A member claiming more compressed bytes than the archive holds is refused.
+    :raises ifcopenshell.DecompressionLimitError: If a limit is exceeded.
+    """
+    if info.file_size > max_uncompressed_bytes:
+        raise ifcopenshell.DecompressionLimitError(
+            f"Zip member '{info.filename}' declares {info.file_size} uncompressed bytes, "
+            f"more than the limit of {max_uncompressed_bytes}."
+        )
+    if info.compress_size > archive_size or info.file_size > max_compression_ratio * info.compress_size:
+        raise ifcopenshell.DecompressionLimitError(
+            f"Zip member '{info.filename}' exceeds the compression ratio limit of {max_compression_ratio}."
+        )
+    return io.BufferedReader(_LimitedReader(archive.open(info), info.file_size, info.filename))
 
 
 class HeaderMetadata(TypedDict):
@@ -72,8 +133,21 @@ class IfcHeaderExtractor:
         print("Schema Name:", header_info.get("schema_name"))
     """
 
-    def __init__(self, filepath: str):
+    def __init__(
+        self,
+        filepath: str,
+        max_uncompressed_bytes: int = DEFAULT_MAX_UNCOMPRESSED_BYTES,
+        max_compression_ratio: int = DEFAULT_MAX_COMPRESSION_RATIO,
+    ):
+        """
+        :param max_uncompressed_bytes: Largest uncompressed size accepted for the
+            member read from an .ifczip archive.
+        :param max_compression_ratio: Largest uncompressed to compressed size ratio
+            accepted for the member read from an .ifczip archive.
+        """
         self.filepath = filepath
+        self.max_uncompressed_bytes = max_uncompressed_bytes
+        self.max_compression_ratio = max_compression_ratio
 
     def extract(self) -> HeaderMetadata:
         extension = self.filepath.split(".")[-1]
@@ -112,5 +186,13 @@ class IfcHeaderExtractor:
         return data
 
     def extract_ifc_zip(self) -> HeaderMetadata:
-        archive = zipfile.ZipFile(self.filepath, "r")
-        return self.extract_ifc_spf(archive.open(archive.filelist[0]))
+        with open(self.filepath, "rb") as archive_file, zipfile.ZipFile(archive_file) as archive:
+            archive_size = os.fstat(archive_file.fileno()).st_size
+            with open_zip_member(
+                archive,
+                archive.filelist[0],
+                archive_size,
+                self.max_uncompressed_bytes,
+                self.max_compression_ratio,
+            ) as member:
+                return self.extract_ifc_spf(member)
