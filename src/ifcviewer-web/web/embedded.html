@@ -134,11 +134,15 @@
       var label = m.unloaded ? 'unloaded' : m.total > 0 ? pct + '%' : '…';
       var mem = m.unloaded ? '' : Math.round(m.vram / (1024 * 1024)) + ' MB';
       li.innerHTML =
-        '<div class="name"><b title="' + m.name + '">' + m.name + '</b>' +
+        '<div class="name"><b></b>' +
         '<span class="mem">' + mem + '<button data-i="' + i + '">' +
         (m.unloaded ? 'Load' : 'Unload') + '</button></span>' +
         '<span class="pct">' + label + '</span></div>' +
         '<div class="bar"><i style="width:' + (m.unloaded ? 0 : pct) + '%"></i></div>';
+      // The model name is the picked file's name: set it as text, not markup.
+      var nameEl = li.querySelector('b');
+      nameEl.textContent = m.name;
+      nameEl.title = m.name;
       listEl.appendChild(li);
     });
   }
