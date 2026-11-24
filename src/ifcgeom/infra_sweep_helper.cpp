@@ -58,16 +58,7 @@ taxonomy::loft::ptr ifcopenshell::geom::make_loft(const ifcopenshell::geom::sett
 		}
 
 		auto curve_length = end - start;
-		auto param_type = settings.get<ifcopenshell::geom::settings::FunctionStepType>().get();
-		auto param = settings.get<ifcopenshell::geom::settings::FunctionStepParam>().get();
-		size_t num_steps = 0;
-		if (param_type == ifcopenshell::geom::settings::FunctionStepMethod::MAXSTEPSIZE) {
-			// parameter is max step size
-			num_steps = (size_t)std::ceil(curve_length / param);
-		} else {
-			// parameter is minimum number of steps
-			num_steps = (size_t)std::ceil(param);
-		}
+		size_t num_steps = function_step_count(settings, curve_length, logger);
         auto delta_step = curve_length / num_steps;
 		std::vector<double> longitudes;
 		for (auto& x : cross_sections) {
