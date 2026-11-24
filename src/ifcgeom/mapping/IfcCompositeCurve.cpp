@@ -32,6 +32,11 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcCompositeCurve& inst) {
 	std::vector<IfcSchema::IfcCompositeCurveSegment> segments = inst.Segments();
 #endif
 
+	if (segments.empty()) {
+		logger_.error("GEO", 330, "IfcCompositeCurve must have at least one segment", inst);
+		return nullptr;
+	}
+
 	for (auto& segment : segments) {
 		if (segment.as<IfcSchema::IfcCompositeCurveSegment>() && segment.as<IfcSchema::IfcCompositeCurveSegment>().ParentCurve().as<IfcSchema::IfcLine>()) {
 			logger_.notice("GEO", 238, "Infinite IfcLine used as ParentCurve of segment, treating as a segment", segment);
