@@ -1620,13 +1620,13 @@ def run():
     pprops.project_north = "{pprops.project_north}"
     # Use absolute path to be safe from cwd changes.
     try:
-        bpy.ops.bim.load_linked_project(filepath=r"{str(self.filepath_)}", query={repr(self.query)})
+        bpy.ops.bim.load_linked_project(filepath={repr(str(self.filepath_))}, query={repr(self.query)})
     except RuntimeError as e:
         # Operator failed (returned CANCELLED with error report)
         print(f"Failed to load linked project: {{e}}")
         sys.exit(1)
     # Use str instead of as_posix to avoid issues with Windows shared paths.
-    bpy.ops.wm.save_as_mainfile(filepath=r"{str(blend_filepath)}")
+    bpy.ops.wm.save_as_mainfile(filepath={repr(str(blend_filepath))})
 
 try:
     run()
