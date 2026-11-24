@@ -38,11 +38,31 @@
 namespace {
 constexpr const char* kSchema = "ifcfed/1";
 
+// Two leading separators in either style: UNC (//host/share), Win32 device
+// and extended-length prefixes (\\?\, \\.\, //?/UNC/...). Windows resolves
+// these over SMB, so even an existence check leaks the user's credentials.
+bool isNetworkPath(const QString& path) {
+    auto is_sep = [](QChar c) { return c == u'/' || c == u'\\'; };
+    return path.size() >= 2 && is_sep(path[0]) && is_sep(path[1]);
+}
+
+bool isUnderDir(const QString& dir, const QString& path) {
+    QString dir_canon = QDir::cleanPath(dir);
+    if (!dir_canon.endsWith('/')) dir_canon += '/';
+    return QDir::cleanPath(path).startsWith(dir_canon);
+}
+
+// Resolves a federation-stored model path without touching the filesystem.
+// Returns an empty string for network paths, which a federation document
+// may only reach when the federation itself lives on that share.
 QString resolvePath(const QString& fed_dir, const QString& stored) {
-    if (stored.isEmpty()) return stored;
+    if (stored.isEmpty() || isNetworkPath(stored)) return {};
     QFileInfo fi(stored);
-    if (fi.isAbsolute()) return QDir::cleanPath(stored);
-    return QDir::cleanPath(QDir(fed_dir).absoluteFilePath(stored));
+    const QString resolved = fi.isAbsolute()
+        ? QDir::cleanPath(stored)
+        : QDir::cleanPath(QDir(fed_dir).absoluteFilePath(stored));
+    if (isNetworkPath(resolved) && !isUnderDir(fed_dir, resolved)) return {};
+    return resolved;
 }
 
 // Returns abs_path relative to fed_dir if abs_path lives under fed_dir,
@@ -566,6 +586,12 @@ bool Federation::load(const QString& path,
                 continue;
             }
             model.source_path = resolvePath(fed_dir, stored);
+            if (model.source_path.isEmpty()) {
+                if (warnings)
+                    *warnings << QString("models[%1]: network path '%2' is not allowed; skipping.")
+                                     .arg(i).arg(stored);
+                continue;
+            }
             if (model.display_name.isEmpty())
                 model.display_name = QFileInfo(model.source_path).fileName();
         } else {
