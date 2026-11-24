@@ -25,8 +25,10 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
-from collections.abc import Iterable, Sequence
+from collections.abc import Generator, Iterable, Sequence
+from contextlib import contextmanager
 from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Optional, Union
@@ -1496,17 +1498,199 @@ class Drawing(bonsai.core.tool.Drawing):
     def does_file_exist(cls, uri: str) -> bool:
         return os.path.exists(uri)
 
+    # Locations come from the IFC file, so files are only deleted or moved when
+    # they are inside the opened IFC's directory or the user's absolute document
+    # directories. Every directory below that root is bound before the file is
+    # touched, so replacing one with a link afterwards cannot redirect the action.
+    SUPPORTS_DIR_FD = (
+        hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+        and all(f in os.supports_dir_fd for f in (os.open, os.stat, os.unlink, os.rename))
+    )
+
     @classmethod
-    def delete_file(cls, uri: str) -> None:
-        os.remove(uri)
+    def get_document_roots(cls) -> list[str]:
+        roots = []
+        ifc_path = tool.Ifc.get_path()
+        if ifc_path and os.path.isfile(ifc_path):
+            roots.append(os.path.dirname(os.path.abspath(ifc_path)))
+        doc_prefs = tool.Blender.get_addon_preferences().doc
+        for directory in (doc_prefs.drawings_dir, doc_prefs.sheets_dir, doc_prefs.layouts_dir):
+            if directory and os.path.isabs(directory):
+                roots.append(os.path.abspath(directory))
+        return roots
+
+    @classmethod
+    def get_relative_parts(cls, root: str, directory: str) -> Optional[list[str]]:
+        for base in dict.fromkeys((os.path.abspath(root), os.path.realpath(root))):
+            try:
+                relative = os.path.relpath(directory, base)
+            except ValueError:
+                continue
+            if relative == os.curdir:
+                return []
+            if os.path.isabs(relative) or relative == os.pardir or relative.startswith(os.pardir + os.sep):
+                continue
+            return relative.split(os.sep)
+        return None
+
+    @classmethod
+    @contextmanager
+    def open_document_directory(cls, uri: str, suffixes: Sequence[str]) -> Generator[Union[int, str, None], None, None]:
+        """Bind the parent directory of ``uri`` if ``uri`` may be deleted or moved.
+
+        Yields a directory descriptor where ``dir_fd`` is supported, the real path
+        of the pinned directory on Windows, or ``None``.
+        """
+        path = os.path.abspath(uri)
+        if os.path.splitext(path)[1].lower() in suffixes:
+            for root in cls.get_document_roots():
+                parts = cls.get_relative_parts(root, os.path.dirname(path))
+                if parts is None:
+                    continue
+                if cls.SUPPORTS_DIR_FD:
+                    opener = cls.open_directory_beneath
+                elif os.name == "nt":
+                    opener = cls.pin_directory_beneath
+                else:
+                    break
+                with opener(root, parts) as directory:
+                    if directory is not None:
+                        yield directory
+                        return
+        yield None
+
+    @classmethod
+    @contextmanager
+    def open_directory_beneath(cls, root: str, parts: list[str]) -> Generator[Optional[int], None, None]:
+        dir_fd = None
+        try:
+            dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            for part in parts:
+                parent_fd, dir_fd = dir_fd, None
+                try:
+                    dir_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+                finally:
+                    os.close(parent_fd)
+        except OSError:
+            if dir_fd is not None:
+                os.close(dir_fd)
+            dir_fd = None
+        try:
+            yield dir_fd
+        finally:
+            if dir_fd is not None:
+                os.close(dir_fd)
+
+    @classmethod
+    @contextmanager
+    def pin_directory_beneath(cls, root: str, parts: list[str]) -> Generator[Optional[str], None, None]:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        )
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        FILE_LIST_DIRECTORY = 0x1
+        FILE_SHARE_READ = 0x1
+        FILE_SHARE_WRITE = 0x2
+        OPEN_EXISTING = 3
+        FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+        FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+        invalid_handle = wintypes.HANDLE(-1).value
+
+        paths = [os.path.realpath(root)]
+        for part in parts:
+            paths.append(os.path.join(paths[-1], part))
+        directory = paths[-1]
+        handles = []
+        try:
+            for i, path in enumerate(paths):
+                # Without FILE_SHARE_DELETE nobody can rename or remove the
+                # directory, and so replace it with a junction, while it is open.
+                flags = FILE_FLAG_BACKUP_SEMANTICS | (FILE_FLAG_OPEN_REPARSE_POINT if i else 0)
+                share = FILE_SHARE_READ | FILE_SHARE_WRITE
+                handle = kernel32.CreateFileW(path, FILE_LIST_DIRECTORY, share, None, OPEN_EXISTING, flags, None)
+                if handle in (None, invalid_handle):
+                    directory = None
+                    break
+                handles.append(handle)
+                try:
+                    st = os.lstat(path)
+                except OSError:
+                    directory = None
+                    break
+                if (
+                    not stat.S_ISDIR(st.st_mode)
+                    or getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                ):
+                    directory = None
+                    break
+            yield directory
+        finally:
+            for handle in handles:
+                kernel32.CloseHandle(handle)
+
+    @classmethod
+    def is_regular_file_in(cls, directory: Union[int, str], name: str) -> bool:
+        try:
+            if isinstance(directory, int):
+                st = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            else:
+                st = os.lstat(os.path.join(directory, name))
+        except OSError:
+            return False
+        return stat.S_ISREG(st.st_mode) and not getattr(st, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+
+    @classmethod
+    def delete_file(cls, uri: str, suffixes: Sequence[str] = (".svg",)) -> None:
+        name = os.path.basename(os.path.abspath(uri))
+        with cls.open_document_directory(uri, suffixes) as directory:
+            if directory is None or not cls.is_regular_file_in(directory, name):
+                return
+            if isinstance(directory, int):
+                os.unlink(name, dir_fd=directory)
+            else:
+                os.remove(os.path.join(directory, name))
 
     @classmethod
     def move_file(cls, src: str, dest: str) -> None:
-        try:
-            shutil.move(src, dest)
-        except:
-            # Perhaps the file is locked in Windows?
-            shutil.copy(src, dest)
+        suffixes = (".svg",)
+        src_name = os.path.basename(os.path.abspath(src))
+        dest_name = os.path.basename(os.path.abspath(dest))
+        with (
+            cls.open_document_directory(src, suffixes) as src_dir,
+            cls.open_document_directory(dest, suffixes) as dest_dir,
+        ):
+            if src_dir is None or dest_dir is None or not cls.is_regular_file_in(src_dir, src_name):
+                return
+            if isinstance(src_dir, str) and isinstance(dest_dir, str):
+                src_path = os.path.join(src_dir, src_name)
+                dest_path = os.path.join(dest_dir, dest_name)
+                try:
+                    os.replace(src_path, dest_path)
+                except OSError:
+                    # Perhaps the file is locked in Windows?
+                    shutil.copy(src_path, dest_path, follow_symlinks=False)
+                return
+            assert isinstance(src_dir, int) and isinstance(dest_dir, int)
+            try:
+                os.rename(src_name, dest_name, src_dir_fd=src_dir, dst_dir_fd=dest_dir)
+            except OSError:
+                src_fd = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_dir)
+                with os.fdopen(src_fd, "rb") as src_file:
+                    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+                    with os.fdopen(os.open(dest_name, flags, 0o666, dir_fd=dest_dir), "wb") as dest_file:
+                        shutil.copyfileobj(src_file, dest_file)
 
     @classmethod
     def generate_drawing_name(

@@ -331,7 +331,7 @@ class Drawing:
     def create_svg_sheet(cls, document, titleblock): pass
     def delete_collection(cls, collection): pass
     def delete_drawing_elements(cls, elements): pass
-    def delete_file(cls, uri): pass
+    def delete_file(cls, uri, suffixes=(".svg",)): pass
     def delete_object(cls, obj): pass
     def disable_editing_assigned_product(cls, obj): pass
     def disable_editing_drawings(cls): pass
