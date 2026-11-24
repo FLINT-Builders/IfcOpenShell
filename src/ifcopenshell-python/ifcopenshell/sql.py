@@ -233,6 +233,7 @@ class sqlite(file):
     ) -> list[sqlite_entity]:
         results = [inst]
         queue = [inst]
+        visited = {inst}
         while queue:
             if max_levels is not None:
                 max_levels -= 1
@@ -247,14 +248,13 @@ class sqlite(file):
                 result = getattr(cur, attribute, [])
                 if not result:
                     continue
-                elif isinstance(result, tuple):
-                    results.extend(result)
+                for entity in result if isinstance(result, tuple) else (result,):
+                    if entity in visited:
+                        continue
+                    visited.add(entity)
+                    results.append(entity)
                     if max_levels is None or max_levels:
-                        queue.extend(result)
-                else:
-                    results.append(result)
-                    if max_levels is None or max_levels:
-                        queue.append(result)
+                        queue.append(entity)
         return results
 
     def get_inverse(
