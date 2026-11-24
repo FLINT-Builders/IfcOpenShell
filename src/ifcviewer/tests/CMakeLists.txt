@@ -154,9 +154,20 @@ find_package(Eigen3 ${EIGEN_MIN_VERSION} REQUIRED)
 
 add_executable(test_federation
     test_federation.cpp
+    test_federation_network_paths.cpp
     ${IFCVIEWER_SRC}/Federation.cpp
     ${IFCVIEWER_SRC}/FederationMath.cpp   # compose helpers, split out for IfcViewerCore
 )
+# Records stat/open paths for the network-path tests. The test binary
+# re-execs itself with this library preloaded when the .so sits beside it.
+if(UNIX)
+    add_library(federation_fs_probe SHARED federation_fs_probe.c)
+    target_link_libraries(federation_fs_probe PRIVATE ${CMAKE_DL_LIBS})
+    add_dependencies(test_federation federation_fs_probe)
+    set_target_properties(federation_fs_probe PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:test_federation>
+    )
+endif()
 set_target_properties(test_federation PROPERTIES AUTOMOC ON)
 target_include_directories(test_federation PRIVATE ${IFCVIEWER_SRC})
 target_link_libraries(test_federation PRIVATE
