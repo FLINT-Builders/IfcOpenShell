@@ -522,7 +522,8 @@ class Search(bonsai.core.tool.Search):
         return cls.interpolate_color(palette[index], palette[index + 1], fraction)
 
     @classmethod
-    def get_query_for_selected_elements(cls) -> str:
+    def get_query_for_selected_elements(cls) -> tuple[str, Union[bpy.types.Text, None]]:
+        """Return the query and, if the query was too long and was moved to a text block, that text block."""
         global_ids = []
         for obj in tool.Blender.get_selected_objects():
             if element := tool.Ifc.get_entity(obj):
@@ -530,13 +531,14 @@ class Search(bonsai.core.tool.Search):
                     global_ids.append(global_id)
 
         query = ",".join(global_ids)
+        text_data = None
         if len(global_ids) > 50:
             # Too much to store in a string property.
             name = f"globalid-filter-{ifcopenshell.guid.new()}"
             text_data = bpy.data.texts.new(name)
             text_data.from_string(query)
-            query = f"bpy.data.texts['{name}']"
-        return query
+            query = f"bpy.data.texts['{text_data.name}']"
+        return query, text_data
 
     @classmethod
     def patch_search_ifcgroups(cls) -> None:
