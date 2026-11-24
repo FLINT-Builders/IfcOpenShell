@@ -24,6 +24,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import time
 from collections import Counter
 from typing import Optional, Union
@@ -293,6 +294,8 @@ class SheetData(TypedDict):
     PredefinedType: Union[str, None]
     Name: str
     """Name should be unique as it's going to be used as a filename"""
+    FileName: str
+    """``Name`` reduced to a single path component, safe to join onto the output directory."""
 
 
 class Ifc5Dwriter:
@@ -378,6 +381,7 @@ class Ifc5Dwriter:
 
             self.sheet_data[sheet_id] = {
                 "Name": schedule_name,
+                "FileName": self.get_safe_filename(schedule_name),
                 "headers": headers,
                 "cost_items": cost_items,
                 "UpdateDate": IfcDataGetter.canonicalise_time(
@@ -402,6 +406,15 @@ class Ifc5Dwriter:
         "RateSubtotal": "Value",
         "TotalPrice": "Total Cost",
     }
+
+    @staticmethod
+    def get_safe_filename(name: str) -> str:
+        # Schedule names come from the IFC file, so they must never contribute
+        # path separators, drive prefixes or "." / ".." components.
+        return re.sub(r"[^\w .-]", "_", name).strip(". ") or "Unnamed"
+
+    def get_export_filename(self) -> str:
+        return "_".join(self.sheet_data[cost_schedule.id()]["FileName"] for cost_schedule in self.cost_schedules)
 
     def multiply_cells(self, cell1, cell2):
         return "={}*{}".format(cell1, cell2)
@@ -475,7 +488,7 @@ class Ifc5DCsvWriter(Ifc5Dwriter):
         os.makedirs(self.output, exist_ok=True)
         for sheet, data in self.sheet_data.items():
             with open(
-                os.path.join(self.output, "{}.csv".format(data["Name"])), "w", newline="", encoding="utf-8"
+                os.path.join(self.output, "{}.csv".format(data["FileName"])), "w", newline="", encoding="utf-8"
             ) as file:
                 writer = csv.writer(file)
                 writer.writerow(data["headers"])
@@ -506,14 +519,9 @@ class Ifc5DOdsWriter(Ifc5Dwriter):
         self.doc.styles.addElement(ns1)
 
         os.makedirs(self.output, exist_ok=True)
-        file_name = ""
         for cost_schedule in self.cost_schedules:
-            if file_name:
-                file_name += "_" + cost_schedule.Name or ""
-            else:
-                file_name += cost_schedule.Name or ""
             self.write_table(cost_schedule)
-        self.doc.save(os.path.join(self.output, file_name), True)
+        self.doc.save(os.path.join(self.output, self.get_export_filename()), True)
 
     def write_table(self, cost_schedule):
         from odf.number import CurrencySymbol, Number
@@ -601,22 +609,25 @@ class Ifc5DXlsxWriter(Ifc5Dwriter):
     def write(self) -> None:
         # openpyxl rather than xlsxwriter: it is what ifccsv already uses and
         # what ships with Bonsai, so XLSX export works out of the box there.
+        import tempfile
+
         import openpyxl
 
         super().write()
         os.makedirs(self.output, exist_ok=True)
-        file_name = ""
-        for cost_schedule in self.cost_schedules:
-            if file_name:
-                file_name += "_" + cost_schedule.Name or ""
-            else:
-                file_name += cost_schedule.Name or ""
-        self.file_path = os.path.join(self.output, "{}.xlsx".format(file_name))
+        self.file_path = os.path.join(self.output, "{}.xlsx".format(self.get_export_filename()))
         self.workbook = openpyxl.Workbook()
         self.workbook.remove(self.workbook.active)
         for cost_schedule in self.cost_schedules:
             self.write_table(cost_schedule)
-        self.workbook.save(self.file_path)
+        # openpyxl spools each worksheet through a temporary file; keep those
+        # inside the output directory so the export writes nowhere else.
+        previous_tempdir = tempfile.tempdir
+        tempfile.tempdir = self.output
+        try:
+            self.workbook.save(self.file_path)
+        finally:
+            tempfile.tempdir = previous_tempdir
 
     def write_table(self, cost_schedule):
         import re
@@ -720,7 +731,7 @@ class Ifc5DPdfWriter(Ifc5Dwriter):
             # export csv file
             csv_file_writer = Ifc5DCsvWriter(file=self.file, output=temp_dir, cost_schedule=self.cost_schedule)
             csv_file_writer.write()
-            csv_file_name = cost_schedule_name + ".csv"
+            csv_file_name = csv_file_writer.sheet_data[self.cost_schedule.id()]["FileName"] + ".csv"
 
             # locate typst template file
             typst_template_file_path = os.path.join(
