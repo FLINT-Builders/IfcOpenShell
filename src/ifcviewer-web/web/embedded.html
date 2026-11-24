@@ -133,12 +133,29 @@
       var pct = m.total > 0 ? Math.round(100 * m.resident / m.total) : 0;
       var label = m.unloaded ? 'unloaded' : m.total > 0 ? pct + '%' : '…';
       var mem = m.unloaded ? '' : Math.round(m.vram / (1024 * 1024)) + ' MB';
-      li.innerHTML =
-        '<div class="name"><b title="' + m.name + '">' + m.name + '</b>' +
-        '<span class="mem">' + mem + '<button data-i="' + i + '">' +
-        (m.unloaded ? 'Load' : 'Unload') + '</button></span>' +
-        '<span class="pct">' + label + '</span></div>' +
-        '<div class="bar"><i style="width:' + (m.unloaded ? 0 : pct) + '%"></i></div>';
+      // m.name is a user-chosen file name or URL segment: insert it as text only.
+      var nameEl = document.createElement('div');
+      nameEl.className = 'name';
+      var b = document.createElement('b');
+      b.title = m.name;
+      b.textContent = m.name;
+      var memEl = document.createElement('span');
+      memEl.className = 'mem';
+      memEl.textContent = mem;
+      var btn = document.createElement('button');
+      btn.dataset.i = i;
+      btn.textContent = m.unloaded ? 'Load' : 'Unload';
+      memEl.appendChild(btn);
+      var pctEl = document.createElement('span');
+      pctEl.className = 'pct';
+      pctEl.textContent = label;
+      nameEl.append(b, memEl, pctEl);
+      var bar = document.createElement('div');
+      bar.className = 'bar';
+      var fill = document.createElement('i');
+      fill.style.width = (m.unloaded ? 0 : pct) + '%';
+      bar.appendChild(fill);
+      li.append(nameEl, bar);
       listEl.appendChild(li);
     });
   }
