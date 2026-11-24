@@ -1090,16 +1090,25 @@ def get_container(
                 return container
             if container.is_a(ifc_class):
                 return container
-    elif contained_in_structure := getattr(element, "ContainedInStructure", None):
-        container = contained_in_structure[0].RelatingStructure
-        if not ifc_class:
-            return container
-        while container:
-            if container.is_a(ifc_class):
+        return None
+
+    # Cyclic relationships are not valid IFC, but files may still contain them.
+    visited = set()
+    while element and element not in visited:
+        visited.add(element)
+        if contained_in_structure := getattr(element, "ContainedInStructure", None):
+            container = contained_in_structure[0].RelatingStructure
+            if not ifc_class:
                 return container
-            container = get_aggregate(container)
-    elif parent := get_parent(element):
-        return get_container(parent, should_get_direct, ifc_class)
+            containers = set()
+            while container and container not in containers:
+                if container.is_a(ifc_class):
+                    return container
+                containers.add(container)
+                container = get_aggregate(container)
+            return None
+        element = get_parent(element)
+    return None
 
 
 def get_referenced_structures(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
@@ -1160,8 +1169,12 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    visited = set()
     while queue:
         element = queue.pop()
+        if element in visited:
+            continue
+        visited.add(element)
         for rel in getattr(element, "ContainsElements", []):
             related = rel.RelatedElements
             queue.extend(related)
@@ -1208,8 +1221,12 @@ def get_grouped_by(
     """
     queue = [element]
     results = []
+    visited = set()
     while queue:
         element = queue.pop()
+        if element in visited:
+            continue
+        visited.add(element)
         for rel in getattr(element, "IsGroupedBy", []):
             related_objects = rel.RelatedObjects
             queue.extend(related_objects)
@@ -1303,9 +1320,11 @@ def get_parent(
     if not ifc_class:
         return parent
 
-    while parent:
+    visited = {element}
+    while parent and parent not in visited:
         if parent.is_a(ifc_class):
             return parent
+        visited.add(parent)
         parent = get_parent(parent)
 
     return None
@@ -1937,11 +1956,11 @@ def get_openings(element: ifcopenshell.entity_instance) -> Generator[ifcopenshel
     :param element: IfcElement.
     :return: Generator of IfcRelVoidsElements.
     """
-    for element_rel in getattr(element, "HasOpenings", ()):
-        yield element_rel
-
-    if aggregate := get_aggregate(element):
-        yield from get_openings(aggregate)
+    visited = set()
+    while element and element not in visited:
+        visited.add(element)
+        yield from getattr(element, "HasOpenings", ())
+        element = get_aggregate(element)
 
 
 def has_openings(element: ifcopenshell.entity_instance) -> bool:
