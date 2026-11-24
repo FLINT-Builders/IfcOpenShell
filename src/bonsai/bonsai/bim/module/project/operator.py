@@ -1311,7 +1311,7 @@ class LoadProjectElements(bpy.types.Operator):
             if not filter_category.is_selected:
                 continue
             container = self.file.by_id(filter_category.ifc_definition_id)
-            while container:
+            while container and container not in containers:
                 containers.add(container)
                 container = ifcopenshell.util.element.get_aggregate(container)
                 if self.file.schema == "IFC2X3" and container.is_a("IfcProject"):

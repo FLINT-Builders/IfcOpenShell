@@ -242,8 +242,10 @@ class FilterValueSuggestions(Operator):
     def build_hierarchy_path(self, element: ifcopenshell.entity_instance) -> list[str]:
         path: list[str] = []
         current = element
+        visited = set()
 
-        while current:
+        while current and current not in visited:
+            visited.add(current)
             if hasattr(current, "Name") and current.Name:
                 path.insert(0, current.Name)
 
