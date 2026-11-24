@@ -1,4 +1,5 @@
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -94,7 +95,7 @@ class Components(BaseModel):
 
 
 class ViewpointPOST(BaseModel):
-    guid: Optional[str] = None
+    guid: Optional[UUID] = None
     index: Optional[int] = None
     orthogonal_camera: Optional[OrthogonalCamera] = None
     perspective_camera: Optional[PerspectiveCamera] = None

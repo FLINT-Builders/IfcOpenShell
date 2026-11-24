@@ -8,6 +8,7 @@ from fastapi import HTTPException, UploadFile
 from models.bcf_request import *
 from models.bcf_response import *
 from models.request import *
+from neo4j.exceptions import ConstraintError
 
 
 class BCFDB(MyDB):
@@ -700,7 +701,7 @@ class BCFDB(MyDB):
                  AND r1.createViewpoint = True
                  AND p.project_id = $project_id
                  AND t.guid = $topic_id
-                 MERGE (t)-[r3:HAS]->(v:Viewpoint {guid: $guid, index: $index})
+                 CREATE (t)-[r3:HAS]->(v:Viewpoint {guid: $guid, index: $index})
                  SET v.camera_definition = $camera_definition,
                      v.camera_view_point   = point({x: $cvp_x, y: $cvp_y, z: $cvp_z}),
                      v.camera_direction    = point({x: $cad_x, y: $cad_y, z: $cad_z}),
@@ -712,6 +713,7 @@ class BCFDB(MyDB):
                      v.spaces_visible = $spaces_visible,
                      v.space_boundaries_visible = $space_boundaries_visible,
                      v.openings_visible = $openings_visible
+                 RETURN elementId(v) AS viewpoint_element_id
                  """
                 % set_snapshot
             )
@@ -731,49 +733,53 @@ class BCFDB(MyDB):
                 cvp = viewpoint.orthogonal_camera.camera_view_point
                 cad = viewpoint.orthogonal_camera.camera_direction
                 cuv = viewpoint.orthogonal_camera.camera_up_vector
-            result = tx.run(
-                cypher_viewpoint,
-                username=current_user.username,
-                project_id=str(project_id),
-                topic_id=str(topic_id),
-                guid=str(viewpoint.guid),
-                index=viewpoint.index,
-                camera_definition=camera_definition,
-                cvp_x=cvp.x,
-                cvp_y=cvp.y,
-                cvp_z=cvp.z,
-                cad_x=cad.x,
-                cad_y=cad.y,
-                cad_z=cad.z,
-                cuv_x=cuv.x,
-                cuv_y=cuv.y,
-                cuv_z=cuv.z,
-                view_tws_or_fo_view=view_tws_or_fo_view,
-                aspect_ratio=aspect_ratio,
-                snapshot=snapshot,
-                snapshot_type=snapshot_type,
-                default_visibility=viewpoint.components.visibility.default_visibility,
-                spaces_visible=viewpoint.components.visibility.view_setup_hints.spaces_visible,
-                space_boundaries_visible=viewpoint.components.visibility.view_setup_hints.space_boundaries_visible,
-                openings_visible=viewpoint.components.visibility.view_setup_hints.openings_visible,
-            )
-            summary = result.consume()
-            if summary.counters.nodes_created < 1:
+            try:
+                result = tx.run(
+                    cypher_viewpoint,
+                    username=current_user.username,
+                    project_id=str(project_id),
+                    topic_id=str(topic_id),
+                    guid=str(viewpoint.guid),
+                    index=viewpoint.index,
+                    camera_definition=camera_definition,
+                    cvp_x=cvp.x,
+                    cvp_y=cvp.y,
+                    cvp_z=cvp.z,
+                    cad_x=cad.x,
+                    cad_y=cad.y,
+                    cad_z=cad.z,
+                    cuv_x=cuv.x,
+                    cuv_y=cuv.y,
+                    cuv_z=cuv.z,
+                    view_tws_or_fo_view=view_tws_or_fo_view,
+                    aspect_ratio=aspect_ratio,
+                    snapshot=snapshot,
+                    snapshot_type=snapshot_type,
+                    default_visibility=viewpoint.components.visibility.default_visibility,
+                    spaces_visible=viewpoint.components.visibility.view_setup_hints.spaces_visible,
+                    space_boundaries_visible=viewpoint.components.visibility.view_setup_hints.space_boundaries_visible,
+                    openings_visible=viewpoint.components.visibility.view_setup_hints.openings_visible,
+                )
+                record = result.single()
+            except ConstraintError:
+                raise HTTPException(status_code=409, detail="Viewpoint guid already in use.")
+            if record is None:
                 print(cypher_viewpoint)
                 raise HTTPException(status_code=400, detail="Item not added.")
+            viewpoint_element_id = record["viewpoint_element_id"]
 
             # LINES
             for line in viewpoint.lines:
                 cypher_line = """
                     MATCH (v:Viewpoint)
-                    WHERE v.guid = $guid
+                    WHERE elementId(v) = $viewpoint_element_id
                     MERGE (v)-[r1:HAS]->(l:Line)
                     SET l.start_point = point({x: $lsp_x, y: $lsp_y, z: $lsp_z}),
                         l.end_point = point({x: $lep_x, y: $lep_y, z: $lep_z})
                 """
                 result = tx.run(
                     cypher_line,
-                    guid=str(viewpoint.guid),
+                    viewpoint_element_id=viewpoint_element_id,
                     lsp_x=line.start_point.x,
                     lsp_y=line.start_point.y,
                     lsp_z=line.start_point.z,
@@ -790,14 +796,14 @@ class BCFDB(MyDB):
             for clipping_plane in viewpoint.clipping_planes:
                 cypher_clipping_plane = """
                     MATCH (v:Viewpoint)
-                    WHERE v.guid = $guid
+                    WHERE elementId(v) = $viewpoint_element_id
                     MERGE (v)-[r1:HAS]->(cp:ClippingPlane)
                     SET cp.location = point({x: $cpl_x, y: $cpl_y, z: $cpl_z}),
                         cp.direction = point({x: $cpd_x, y: $cpd_y, z: $cpd_z})
                 """
                 result = tx.run(
                     cypher_clipping_plane,
-                    guid=str(viewpoint.guid),
+                    viewpoint_element_id=viewpoint_element_id,
                     lsp_x=clipping_plane.location.x,
                     lsp_y=clipping_plane.location.y,
                     lsp_z=clipping_plane.location.z,
@@ -814,7 +820,7 @@ class BCFDB(MyDB):
             for bitmap in viewpoint.bitmaps:
                 cypher_bitmap = """
                     MATCH (v:Viewpoint)
-                    WHERE v.guid = $guid
+                    WHERE elementId(v) = $viewpoint_element_id
                     MERGE (v)-[r1:HAS]->(b:Bitmap)
                     SET b.type = $type,
                         b.location = point({x: $bml_x, y: $bml_y, z: $bml_z}),
@@ -825,7 +831,7 @@ class BCFDB(MyDB):
                 bitmap_type = self.enum_to_mime(bitmap.bitmap_type)
                 result = tx.run(
                     cypher_bitmap,
-                    guid=str(viewpoint.guid),
+                    viewpoint_element_id=viewpoint_element_id,
                     type=bitmap_type,
                     bml_x=bitmap.location.x,
                     bml_y=bitmap.location.y,
@@ -888,14 +894,14 @@ class BCFDB(MyDB):
                 set_string = ", ".join(set_list)
                 cypher_component = """
                     MATCH (v:Viewpoint)
-                    WHERE v.guid = $viewpoint_id
+                    WHERE elementId(v) = $viewpoint_element_id
                     MERGE (v)-[r1:HAS]->(c:Component {ifc_guid: $ifc_guid})
                     SET 
                 """
                 cypher_component += set_string
                 tx.run(
                     cypher_component,
-                    viewpoint_id=str(viewpoint.guid),
+                    viewpoint_element_id=viewpoint_element_id,
                     ifc_guid=str(ifc_guid),
                     selected=selected,
                     originating_system=originating_system,
@@ -909,10 +915,11 @@ class BCFDB(MyDB):
             for ifc_guid in components.keys():
                 cypher_link = """
                     MATCH (prod:IfcProduct) WHERE prod.GlobalId = $uuid
-                    MATCH (c:Component) WHERE c.ifc_guid = $uuid
+                    MATCH (v:Viewpoint)-[:HAS]->(c:Component)
+                    WHERE elementId(v) = $viewpoint_element_id AND c.ifc_guid = $uuid
                     MERGE (c)-[r:SAME_AS]->(prod)
                 """
-                tx.run(cypher_link, uuid=str(ifc_guid))
+                tx.run(cypher_link, uuid=str(ifc_guid), viewpoint_element_id=viewpoint_element_id)
                 result.consume()
 
                 cypher_link = """
@@ -924,10 +931,11 @@ class BCFDB(MyDB):
                         WHERE prod.GlobalId = $uuid
                         AND ps.Name = 'Reuse'
                         AND prop.Name = 'GTIN'
-                    MATCH (c:Component) WHERE c.ifc_guid = $uuid
+                    MATCH (v:Viewpoint)-[:HAS]->(c:Component)
+                    WHERE elementId(v) = $viewpoint_element_id AND c.ifc_guid = $uuid
                     SET c.GTIN = root.wrappedValue
                 """
-                tx.run(cypher_link, uuid=str(ifc_guid))
+                tx.run(cypher_link, uuid=str(ifc_guid), viewpoint_element_id=viewpoint_element_id)
                 result.consume()
 
             if summary.counters.nodes_created < 1:
@@ -956,7 +964,7 @@ class BCFDB(MyDB):
                     print("could not create file " + snapshot_path + " " + bitmap_path + " ")
                     print(e)
                     raise HTTPException(status_code=400, detail="Item not added.")
-            return viewpoint.guid
+            return str(viewpoint.guid)
 
         with self.driver.session() as session:
             viewpoint.guid = session.execute_write(post_viewpoint_work)

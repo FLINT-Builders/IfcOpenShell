@@ -97,7 +97,11 @@ class MyDB:
             return
 
         with self.driver.session() as session:
-            return session.execute_write(initialize_db_work)
+            session.execute_write(initialize_db_work)
+            # Viewpoint snapshots are stored on disk by guid, so a guid must not be reused across topics or projects.
+            session.run(
+                "CREATE CONSTRAINT viewpoint_guid_unique IF NOT EXISTS FOR (v:Viewpoint) REQUIRE v.guid IS UNIQUE"
+            ).consume()
 
     def get_user(self, username: str):
         def get_user_work(tx, username_work: str):
