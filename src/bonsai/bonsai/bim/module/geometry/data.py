@@ -216,10 +216,14 @@ class RepresentationItemsData:
             if not element.is_a("IfcShapeModel"):
                 return 0
             queue = list(element.Items)
+            seen = {element.id()}
             while queue:
                 item = queue.pop()
                 if item.is_a("IfcMappedItem"):
-                    queue.extend(item.MappingSource.MappedRepresentation.Items)
+                    mapped_rep = item.MappingSource.MappedRepresentation
+                    if mapped_rep.id() not in seen:
+                        seen.add(mapped_rep.id())
+                        queue.extend(mapped_rep.Items)
                 else:
                     result += 1
         return result

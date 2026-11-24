@@ -1728,10 +1728,14 @@ class Geometry(bonsai.core.tool.Geometry):
             if not representation.is_a("IfcShapeModel"):
                 return
             queue = list(representation.Items)
+            seen = {representation.id()}
             while queue:
                 item = queue.pop()
                 if item.is_a("IfcMappedItem"):
-                    queue.extend(item.MappingSource.MappedRepresentation.Items)
+                    mapped_rep = item.MappingSource.MappedRepresentation
+                    if mapped_rep.id() not in seen:
+                        seen.add(mapped_rep.id())
+                        queue.extend(mapped_rep.Items)
                 else:
                     new = props.items.add()
                     new.name = item.is_a()
@@ -2162,7 +2166,9 @@ class Geometry(bonsai.core.tool.Geometry):
                 items.extend(item.MappingSource.MappedRepresentation.Items)
             if item.is_a("IfcBooleanResult"):
                 operand = item.FirstOperand
-                while True:
+                seen = {item.id()}
+                while operand.id() not in seen:
+                    seen.add(operand.id())
                     items.append(operand)
                     if operand.is_a("IfcBooleanResult"):
                         operand = operand.FirstOperand

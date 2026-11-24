@@ -3218,13 +3218,19 @@ class SelectRepresentationItem(bpy.types.Operator):
 
     def get_nested_item_ids(self, item):
         results = set()
-        if item.is_a("IfcBooleanResult"):
-            results.update(self.get_nested_item_ids(item.FirstOperand))
-            results.update(self.get_nested_item_ids(item.SecondOperand))
-        elif item.is_a("IfcCsgSolid"):
-            results.update(self.get_nested_item_ids(item.TreeRootExpression))
-        else:
-            results.add(item.id())
+        queue = [item]
+        seen = set()
+        while queue:
+            item = queue.pop()
+            if item.id() in seen:
+                continue
+            seen.add(item.id())
+            if item.is_a("IfcBooleanResult"):
+                queue.extend((item.FirstOperand, item.SecondOperand))
+            elif item.is_a("IfcCsgSolid"):
+                queue.append(item.TreeRootExpression)
+            else:
+                results.add(item.id())
         return results
 
 
@@ -3570,6 +3576,7 @@ class ImportRepresentationItems(bpy.types.Operator, tool.Ifc.Operator):
                 continue  # In theory, an item can be used multiple times (e.g. in a boolean stack).
             item = tool.Ifc.get().by_id(item_id)
             if item.is_a("IfcBooleanResult"):
+                processed_ids.add(item_id)
                 queue.append(item.FirstOperand.id())
                 queue.append(item.SecondOperand.id())
                 boolean_ids.add(item.SecondOperand.id())
