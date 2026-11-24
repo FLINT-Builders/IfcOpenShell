@@ -1,4 +1,3 @@
-MATCH (n) DETACH DELETE n;
 CREATE
   (user1:User:Admin {UUID: 1, username: 'admin', full_name: "Admin Sliter", email: "admin@verket.se", hashed_password: "$2a$10$SyekXmrbf9rEd9KrfcXQd.gNWM8iRl228nPTrxqJq0wlDamlHzDly", disabled: false}),
   (user2:User:Officer {UUID: 2, username: 'kommun', full_name: "Kalle Nitisk", email: "kalle.nitisk@kommunen.se", hashed_password: "$2a$10$lX1BIZZuBGOIEiHCxXwrf.IoeHOAWgB3ri6vX10xtMVEmzVH/GbCu", disabled: false}),

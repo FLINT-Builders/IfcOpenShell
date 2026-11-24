@@ -88,3 +88,14 @@ def create_full_graph(graph, ifc_file):
         create_graph_from_ifc_entity_all(graph, entity, ifc_file)
         idx += 1
     return
+
+
+if __name__ == "__main__":
+    import os
+    import sys
+
+    import ifcopenshell
+    from py2neo import Graph
+
+    my_graph = Graph(os.environ["NEO4J_URI"], auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_INITIAL_PASSWORD"]))
+    create_full_graph(my_graph, ifcopenshell.open(sys.argv[1]))

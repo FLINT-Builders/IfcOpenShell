@@ -87,6 +87,9 @@ class MyDB:
 
     def initialize_db(self):
         def initialize_db_work(tx):
+            # Seed data is only for a database that has never had users; it must never touch existing data.
+            if tx.run("MATCH (u:User) RETURN u LIMIT 1").single() is not None:
+                return
             cypher_file = open(cypher_file_path, "r")
             cypher_data = cypher_file.read()
             cypher_file.close()
