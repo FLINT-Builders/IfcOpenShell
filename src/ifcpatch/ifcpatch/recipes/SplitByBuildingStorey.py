@@ -18,6 +18,7 @@
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Union
 
@@ -47,9 +48,6 @@ class Patcher:
 
     def patch(self) -> None:
         import tempfile
-        from shutil import copyfile
-
-        import ifcopenshell
 
         if self.output_dir is None:
             output_dir = Path()
@@ -62,12 +60,25 @@ class Patcher:
         temp_file = tempfile.NamedTemporaryFile(suffix=".ifc", delete=False)
         self.file.write(temp_file.name)
 
+        # Storey names are untrusted, so outputs are created by name relative to
+        # this one directory handle rather than through a re-resolved path.
+        dir_fd = None
+        if os.open in os.supports_dir_fd:
+            dir_fd = os.open(output_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            self.split(temp_file.name, output_dir, dir_fd)
+        finally:
+            if dir_fd is not None:
+                os.close(dir_fd)
+
+        temp_file.close()
+        os.unlink(temp_file.name)
+
+    def split(self, source: str, output_dir: Path, dir_fd: Union[int, None]) -> None:
         storeys = self.file.by_type("IfcBuildingStorey")
         for i, storey in enumerate(storeys):
-            filename = f"{i}-{storey.Name}.ifc"
-            dest = filename if output_dir == None else output_dir / filename
-            copyfile(temp_file.name, dest)
-            old_ifc: ifcopenshell.file = ifcopenshell.open(dest)
+            filename = f"{i}-{self.get_safe_filename_component(storey.Name)}.ifc"
+            old_ifc: ifcopenshell.file = ifcopenshell.open(source)
             new_ifc = ifcopenshell.file(schema=self.file.schema)
 
             if self.file.schema == "IFC2X3":
@@ -92,10 +103,19 @@ class Patcher:
             for element in new_ifc.by_type("IfcElement"):
                 if not self.is_in_storey(element, storey):
                     new_ifc.remove(element)
-            new_ifc.write(dest)
+            self.write_new_file(new_ifc, output_dir, filename, dir_fd)
 
-        temp_file.close()
-        os.unlink(temp_file.name)
+    def get_safe_filename_component(self, name: Union[str, None]) -> str:
+        return re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", str(name))
+
+    def write_new_file(self, new_ifc: ifcopenshell.file, output_dir: Path, filename: str, dir_fd: Union[int, None]):
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        if dir_fd is None:
+            fd = os.open(output_dir / filename, flags, 0o666)
+        else:
+            fd = os.open(filename, flags, 0o666, dir_fd=dir_fd)
+        with os.fdopen(fd, "wb") as f:
+            f.write(new_ifc.to_string().encode("utf-8"))
 
     def is_in_storey(self, element: ifcopenshell.entity_instance, storey: ifcopenshell.entity_instance) -> bool:
         return (
