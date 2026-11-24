@@ -481,7 +481,9 @@ void MainWindow::setupPanels() {
 
 void MainWindow::setupStatus() {
     status_mode_label_ = new QLabel("Ready", this);
+    status_mode_label_->setTextFormat(Qt::PlainText);
     status_selection_label_ = new QLabel("No selection", this);
+    status_selection_label_->setTextFormat(Qt::PlainText);
     status_perf_label_ = new QLabel(this);
     status_memory_label_ = new QLabel(this);
     status_memory_label_->setVisible(false);

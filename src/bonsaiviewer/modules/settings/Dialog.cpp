@@ -471,9 +471,12 @@ QWidget* SettingsDialog::buildConnectorsTab() {
         row_layout->setContentsMargins(0, 0, 0, 0);
         row_layout->setSpacing(8);
 
-        auto* name = new QLabel(manifest.name, row);
-        auto* version = new QLabel(
-            manifest.version.isEmpty() ? QString() : QString("v%1").arg(manifest.version), row);
+        auto* name = new QLabel(row);
+        name->setTextFormat(Qt::PlainText);
+        name->setText(manifest.name);
+        auto* version = new QLabel(row);
+        version->setTextFormat(Qt::PlainText);
+        version->setText(manifest.version.isEmpty() ? QString() : QString("v%1").arg(manifest.version));
         version->setProperty("textRole", "secondary");
 
         auto* settings_button = new QPushButton("Settings…", row);
