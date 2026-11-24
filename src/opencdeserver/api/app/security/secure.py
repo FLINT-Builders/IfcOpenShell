@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from database.neo4j import db
 from fastapi import Depends, HTTPException, Security, status
@@ -31,13 +32,30 @@ credentials_exception = HTTPException(
 )
 
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
+ACCESS_TOKEN_TYPE = "access"
+REFRESH_TOKEN_TYPE = "refresh"
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None, token_type: str = ACCESS_TOKEN_TYPE):
     payload = data.copy()
+    payload.pop("expires", None)
     expires_delta = expires_delta or timedelta(minutes=15)
     expire = datetime.now(timezone.utc) + expires_delta
-    payload.update({"expires": str(expire)})
+    payload.update({"exp": int(expire.timestamp()), "type": token_type, "jti": str(uuid4())})
     encoded_jwt = jwt.encode(payload, secrets["security_secret_key"], algorithm=os.environ["SECURITY_ALGORITHM"])
     return encoded_jwt
+
+
+def decode_token(token: str, token_type: str) -> dict:
+    payload = jwt.decode(
+        token,
+        secrets["security_secret_key"],
+        algorithms=[os.environ["SECURITY_ALGORITHM"]],
+        options={"require_exp": True},
+    )
+    if payload.get("type") != token_type:
+        raise JWTError("Unexpected token type.")
+    return payload
 
 
 def verify_password(plain_password, hashed_password):
@@ -72,7 +90,7 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
 
     try:
         print("Token: ", token)
-        payload = jwt.decode(token, secrets["security_secret_key"], algorithms=[os.environ["SECURITY_ALGORITHM"]])
+        payload = decode_token(token, ACCESS_TOKEN_TYPE)
         username_from_token: str = payload.get("username")
         print("Token username: ", username_from_token)
         if username_from_token is None:
@@ -88,6 +106,10 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
     user = db.get_user(username=token_data.username)
 
     if user is None:
+        raise credentials_exception
+
+    # Tokens replaced by a later login or refresh must stop working before their expiry.
+    if not db.is_current_access_token(token_data.username, token):
         raise credentials_exception
 
     for scope in security_scopes.scopes:

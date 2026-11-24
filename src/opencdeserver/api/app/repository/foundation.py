@@ -4,11 +4,17 @@ from datetime import timedelta
 
 from database.neo4j import MyDB, driver
 from fastapi import HTTPException
-from jose import jwt
+from jose import JWTError
 from models.foundation_other import *
 from models.other import *
 from security.secrets import get_secrets
-from security.secure import create_access_token, credentials_exception
+from security.secure import (
+    ACCESS_TOKEN_TYPE,
+    REFRESH_TOKEN_TYPE,
+    create_access_token,
+    credentials_exception,
+    decode_token,
+)
 
 secrets = get_secrets()
 
@@ -71,7 +77,9 @@ class FoundationDB(MyDB):
             user_info.dict(), timedelta(seconds=int(os.environ["SECURITY_ACCESS_TOKEN_EXPIRE_SECONDS"]))
         )
         token_info.refresh_token = create_access_token(
-            user_info.dict(), timedelta(seconds=int(os.environ["SECURITY_REFRESH_TOKEN_EXPIRE_SECONDS"]))
+            user_info.dict(),
+            timedelta(seconds=int(os.environ["SECURITY_REFRESH_TOKEN_EXPIRE_SECONDS"])),
+            REFRESH_TOKEN_TYPE,
         )
 
         def add_tokens_and_delete_code_work(tx) -> bool:
@@ -116,9 +124,10 @@ class FoundationDB(MyDB):
                         RETURN
                             at.value AS access_token
                         """
-            refresh_token_payload = jwt.decode(
-                refresh_token, secrets["security_secret_key"], algorithms=[os.environ["SECURITY_ALGORITHM"]]
-            )
+            try:
+                refresh_token_payload = decode_token(refresh_token, REFRESH_TOKEN_TYPE)
+            except JWTError:
+                raise credentials_exception
             username_from_refresh_token: str = refresh_token_payload.get("username")
             print("refresh_token_username: ", username_from_refresh_token)
             result = tx.run(
@@ -132,9 +141,10 @@ class FoundationDB(MyDB):
             token_info = TokenInfo()
             token_info.access_token = first.get("access_token")
             token_info.refresh_token = refresh_token
-            access_token_payload = jwt.decode(
-                token_info.access_token, secrets["security_secret_key"], algorithms=[os.environ["SECURITY_ALGORITHM"]]
-            )
+            try:
+                access_token_payload = decode_token(token_info.access_token, ACCESS_TOKEN_TYPE)
+            except JWTError:
+                raise credentials_exception
             username_from_access_token: str = access_token_payload.get("username")
             if username_from_access_token is None:
                 raise credentials_exception
@@ -149,7 +159,9 @@ class FoundationDB(MyDB):
             got_token_data.dict(), timedelta(seconds=int(os.environ["SECURITY_ACCESS_TOKEN_EXPIRE_SECONDS"]))
         )
         new_token_info.refresh_token = create_access_token(
-            got_token_data.dict(), timedelta(seconds=int(os.environ["SECURITY_REFRESH_TOKEN_EXPIRE_SECONDS"]))
+            got_token_data.dict(),
+            timedelta(seconds=int(os.environ["SECURITY_REFRESH_TOKEN_EXPIRE_SECONDS"])),
+            REFRESH_TOKEN_TYPE,
         )
 
         def update_tokens_work(tx) -> bool:
