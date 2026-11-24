@@ -1599,34 +1599,52 @@ class LoadLink(bpy.types.Operator, tool.Ifc.Operator):
             pprops = tool.Project.get_project_props()
             gprops = tool.Georeference.get_georeference_props()
 
-            code = f"""
+            args = {
+                "has_blender_offset": bool(gprops.has_blender_offset),
+                "blender_offset_x": str(gprops.blender_offset_x),
+                "blender_offset_y": str(gprops.blender_offset_y),
+                "blender_offset_z": str(gprops.blender_offset_z),
+                "blender_x_axis_abscissa": str(gprops.blender_x_axis_abscissa),
+                "blender_x_axis_ordinate": str(gprops.blender_x_axis_ordinate),
+                "distance_limit": float(pprops.distance_limit),
+                "false_origin_mode": str(pprops.false_origin_mode),
+                "false_origin": str(pprops.false_origin),
+                "project_north": str(pprops.project_north),
+                # Use absolute path to be safe from cwd changes.
+                # Use str instead of as_posix to avoid issues with Windows shared paths.
+                "filepath": str(self.filepath_),
+                "query": self.query,
+                "blend_filepath": str(blend_filepath),
+            }
+
+            code = """
 import bpy
+import json
 import sys
 
 def run():
     import bonsai.tool as tool
+    args = json.loads(sys.argv[sys.argv.index("--") + 1])
     gprops = tool.Georeference.get_georeference_props()
     # Our model origin becomes their host model origin
-    gprops.has_blender_offset = {gprops.has_blender_offset}
-    gprops.blender_offset_x = "{gprops.blender_offset_x}"
-    gprops.blender_offset_y = "{gprops.blender_offset_y}"
-    gprops.blender_offset_z = "{gprops.blender_offset_z}"
-    gprops.blender_x_axis_abscissa = "{gprops.blender_x_axis_abscissa}"
-    gprops.blender_x_axis_ordinate = "{gprops.blender_x_axis_ordinate}"
+    gprops.has_blender_offset = args["has_blender_offset"]
+    gprops.blender_offset_x = args["blender_offset_x"]
+    gprops.blender_offset_y = args["blender_offset_y"]
+    gprops.blender_offset_z = args["blender_offset_z"]
+    gprops.blender_x_axis_abscissa = args["blender_x_axis_abscissa"]
+    gprops.blender_x_axis_ordinate = args["blender_x_axis_ordinate"]
     pprops = tool.Project.get_project_props()
-    pprops.distance_limit = {pprops.distance_limit}
-    pprops.false_origin_mode = "{pprops.false_origin_mode}"
-    pprops.false_origin = "{pprops.false_origin}"
-    pprops.project_north = "{pprops.project_north}"
-    # Use absolute path to be safe from cwd changes.
+    pprops.distance_limit = args["distance_limit"]
+    pprops.false_origin_mode = args["false_origin_mode"]
+    pprops.false_origin = args["false_origin"]
+    pprops.project_north = args["project_north"]
     try:
-        bpy.ops.bim.load_linked_project(filepath=r"{str(self.filepath_)}", query={repr(self.query)})
+        bpy.ops.bim.load_linked_project(filepath=args["filepath"], query=args["query"])
     except RuntimeError as e:
         # Operator failed (returned CANCELLED with error report)
-        print(f"Failed to load linked project: {{e}}")
+        print(f"Failed to load linked project: {e}")
         sys.exit(1)
-    # Use str instead of as_posix to avoid issues with Windows shared paths.
-    bpy.ops.wm.save_as_mainfile(filepath=r"{str(blend_filepath)}")
+    bpy.ops.wm.save_as_mainfile(filepath=args["blend_filepath"])
 
 try:
     run()
@@ -1651,6 +1669,8 @@ except Exception as e:
                     temp_file.name,
                     "--python-exit-code",
                     "1",
+                    "--",
+                    json.dumps(args),
                 ]
             )
             if run.returncode == 1:
