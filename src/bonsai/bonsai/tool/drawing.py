@@ -1316,32 +1316,78 @@ class Drawing(bonsai.core.tool.Drawing):
             props.relating_product = None
 
     @classmethod
-    def open_with_user_command(cls, user_command: str, path: str) -> None:
+    def get_openable_path(cls, path: Optional[str], extensions: Sequence[str] = (".svg",)) -> Union[str, None]:
+        """Get the resolved path to hand to a viewer, or ``None`` if it must not be opened.
+
+        Document locations come from the IFC file, so only a regular file with
+        one of ``extensions`` inside the project directory (or a documentation
+        directory from the add-on preferences) is accepted. Open the returned
+        path rather than ``path`` so the checked file is the one launched.
+        """
+        if not path:
+            return None
+        real_path = os.path.realpath(path)
+        name = os.path.basename(real_path)
+        # A colon would address an NTFS alternate data stream of another file.
+        if ":" in name or os.path.splitext(name)[1].lower() not in extensions:
+            return None
+        if not os.path.isfile(real_path):
+            return None
+        real_path_key = os.path.normcase(real_path)
+        for root in cls.get_openable_roots():
+            root_key = os.path.normcase(root)
+            try:
+                if os.path.commonpath((root_key, real_path_key)) == root_key:
+                    return real_path
+            except ValueError:
+                continue
+        return None
+
+    @classmethod
+    def get_openable_roots(cls) -> list[str]:
+        roots = []
+        if ifc_path := tool.Ifc.get_path():
+            roots.append(os.path.dirname(ifc_path) if os.path.isfile(ifc_path) else ifc_path)
+        doc_prefs = tool.Blender.get_addon_preferences().doc
+        for directory in (doc_prefs.drawings_dir, doc_prefs.sheets_dir, doc_prefs.layouts_dir):
+            if directory and os.path.isabs(directory):
+                roots.append(directory)
+        return [os.path.realpath(root) for root in roots]
+
+    @classmethod
+    def open_with_user_command(cls, user_command: str, path: str, extensions: Sequence[str] = (".svg",)) -> bool:
+        openable_path = cls.get_openable_path(path, extensions)
+        if not openable_path:
+            print(f"Not opening '{path}': expected a {'/'.join(extensions)} file inside the project directory.")
+            return False
         if user_command:
             commands = json.loads(user_command)
-            replacements = {"path": path}
+            replacements = {"path": openable_path}
             for command in commands:
                 command[0] = shutil.which(str(command[0])) or command[0]
                 subprocess.Popen([replacements.get(c, c) for c in command])
         else:
             if platform.system() == "Darwin":
-                subprocess.call(("open", path))
+                subprocess.call(("open", openable_path))
             elif platform.system() == "Windows":
-                os.startfile(os.path.normpath(path))
+                os.startfile(os.path.normpath(openable_path))
             else:
-                subprocess.call(("xdg-open", path))
+                subprocess.call(("xdg-open", openable_path))
+        return True
 
     @classmethod
-    def open_spreadsheet(cls, uri: str) -> None:
-        cls.open_with_user_command(tool.Blender.get_addon_preferences().spreadsheet_command, uri)
+    def open_spreadsheet(cls, uri: str) -> bool:
+        return cls.open_with_user_command(
+            tool.Blender.get_addon_preferences().spreadsheet_command, uri, extensions=(".ods", ".xls", ".xlsx")
+        )
 
     @classmethod
-    def open_svg(cls, uri: str) -> None:
-        cls.open_with_user_command(tool.Blender.get_addon_preferences().svg_command, uri)
+    def open_svg(cls, uri: str) -> bool:
+        return cls.open_with_user_command(tool.Blender.get_addon_preferences().svg_command, uri)
 
     @classmethod
-    def open_layout_svg(cls, uri: str) -> None:
-        cls.open_with_user_command(tool.Blender.get_addon_preferences().layout_svg_command, uri)
+    def open_layout_svg(cls, uri: str) -> bool:
+        return cls.open_with_user_command(tool.Blender.get_addon_preferences().layout_svg_command, uri)
 
     @classmethod
     def run_root_assign_class(
