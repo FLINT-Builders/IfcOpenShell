@@ -43,9 +43,11 @@ def remove_cost_item(file: ifcopenshell.file, cost_item: ifcopenshell.entity_ins
     for inverse in file.get_inverse(cost_item):
         if inverse.is_a("IfcRelNests"):
             if inverse.RelatingObject == cost_item:
-                for related_object in inverse.RelatedObjects:
-                    ifcopenshell.api.cost.remove_cost_item(file, cost_item=related_object)
-            elif inverse.RelatedObjects == (cost_item,):
+                continue
+            related_objects = [o for o in inverse.RelatedObjects if o != cost_item]
+            if related_objects:
+                inverse.RelatedObjects = related_objects
+            else:
                 history = inverse.OwnerHistory
                 file.remove(inverse)
                 if history:
@@ -57,6 +59,16 @@ def remove_cost_item(file: ifcopenshell.file, cost_item: ifcopenshell.entity_ins
             file.remove(inverse)
             if history:
                 ifcopenshell.util.element.remove_deep2(file, history)
+    # The cost item is detached from its parents above, so a nesting cycle cannot lead back to it.
+    # Nested items are looked up again after each removal, as one removal may also remove others.
+    while nested_cost_items := [
+        related_object
+        for inverse in file.get_inverse(cost_item)
+        if inverse.is_a("IfcRelNests") and inverse.RelatingObject == cost_item
+        for related_object in inverse.RelatedObjects
+        if related_object != cost_item
+    ]:
+        ifcopenshell.api.cost.remove_cost_item(file, cost_item=nested_cost_items[0])
     history = cost_item.OwnerHistory
     file.remove(cost_item)
     if history:

@@ -56,16 +56,19 @@ def copy_cost_item(
 class Usecase:
     file: ifcopenshell.file
     new_cost_items: list[ifcopenshell.entity_instance]
+    copied_cost_items: set[ifcopenshell.entity_instance]
 
     def execute(
         self, cost_item: ifcopenshell.entity_instance
     ) -> Union[ifcopenshell.entity_instance, list[ifcopenshell.entity_instance]]:
         self.new_cost_items = []
+        self.copied_cost_items = set()
         self.duplicate_cost_item(cost_item)
         return self.new_cost_items[0] if len(self.new_cost_items) == 1 else self.new_cost_items
 
     def duplicate_cost_item(self, cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
         new_cost_item = ifcopenshell.util.element.copy_deep(self.file, cost_item)
+        self.copied_cost_items.update((cost_item, new_cost_item))
         self.new_cost_items.append(new_cost_item)
         self.copy_indirect_attributes(cost_item, new_cost_item)
         return new_cost_item
@@ -80,12 +83,12 @@ class Usecase:
                 pset = ifcopenshell.util.element.copy_deep(self.file, inverse.RelatingPropertyDefinition)
                 inverse.RelatingPropertyDefinition = pset
             elif inverse.is_a("IfcRelNests") and inverse.RelatingObject == from_element:
-                nested_cost_items = [e for e in inverse.RelatedObjects]
-                if nested_cost_items:
-                    new_cost_items = []
-                    for cost_item in nested_cost_items:
-                        new_cost_item = self.duplicate_cost_item(cost_item)
-                        new_cost_items.append(new_cost_item)
+                new_cost_items = []
+                for cost_item in inverse.RelatedObjects:
+                    # Originals and copies made so far are skipped so that a nesting cycle is not followed.
+                    if cost_item not in self.copied_cost_items:
+                        new_cost_items.append(self.duplicate_cost_item(cost_item))
+                if new_cost_items:
                     inverse = ifcopenshell.util.element.copy(self.file, inverse)
                     inverse.RelatingObject = to_element
                     inverse.RelatedObjects = new_cost_items
