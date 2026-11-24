@@ -33,7 +33,7 @@ from bonsai.bim.ifc import IfcStore
 
 # Monkey-patch webbrowser opening since we want to test headlessly
 webbrowser.open = lambda x: True
-tool.Drawing.open_with_user_command = lambda x, y: True
+tool.Drawing.open_with_user_command = lambda x, y, extensions=None: True
 
 
 variables = {"cwd": os.getcwd(), "ifc": "IfcStore.get_file()"}

@@ -162,8 +162,8 @@ def regenerate_sheet(
             drawing.delete_file(path_layout)
 
 
-def open_layout(drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance) -> None:
-    drawing.open_layout_svg(drawing.get_document_uri(sheet, "LAYOUT"))
+def open_layout(drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance) -> bool:
+    return drawing.open_layout_svg(drawing.get_document_uri(sheet, "LAYOUT"))
 
 
 def remove_sheet(ifc: type[tool.Ifc], drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance) -> None:
@@ -258,12 +258,12 @@ def remove_document(
     drawing.import_documents(document_type)
 
 
-def open_schedule(drawing: type[tool.Drawing], schedule: ifcopenshell.entity_instance) -> None:
-    drawing.open_spreadsheet(drawing.get_document_uri(schedule))
+def open_schedule(drawing: type[tool.Drawing], schedule: ifcopenshell.entity_instance) -> bool:
+    return drawing.open_spreadsheet(drawing.get_document_uri(schedule))
 
 
-def open_reference(drawing: type[tool.Drawing], reference: ifcopenshell.entity_instance) -> None:
-    drawing.open_svg(drawing.get_document_uri(reference))
+def open_reference(drawing: type[tool.Drawing], reference: ifcopenshell.entity_instance) -> bool:
+    return drawing.open_svg(drawing.get_document_uri(reference))
 
 
 def update_document_name(

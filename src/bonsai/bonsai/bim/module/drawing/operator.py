@@ -1954,6 +1954,9 @@ class OpenLayout(bpy.types.Operator, tool.Ifc.Operator):
         sheet_item = tool.Drawing.get_active_sheet_item()
         assert sheet_item
         sheet = tool.Ifc.get().by_id(sheet_item.ifc_definition_id)
+        if not tool.Drawing.get_openable_path(tool.Drawing.get_document_uri(sheet, "LAYOUT")):
+            self.report({"WARNING"}, "The sheet layout is not an .svg file inside the project directory.")
+            return
         sheet_builder = sheeter.SheetBuilder()
         sheet_builder.update_sheet_drawing_sizes(sheet)
         core.open_layout(tool.Drawing, sheet=sheet)
@@ -2054,9 +2057,15 @@ class OpenSheet(bpy.types.Operator):
 
         for sheet_uri in sheet_uris:
             if svg2pdf_command:
-                tool.Drawing.open_with_user_command(tool.Blender.get_addon_preferences().pdf_command, sheet_uri)
+                is_opened = tool.Drawing.open_with_user_command(
+                    tool.Blender.get_addon_preferences().pdf_command, sheet_uri, extensions=(".pdf",)
+                )
             else:
-                tool.Drawing.open_with_user_command(tool.Blender.get_addon_preferences().svg_command, sheet_uri)
+                is_opened = tool.Drawing.open_with_user_command(
+                    tool.Blender.get_addon_preferences().svg_command, sheet_uri
+                )
+            if not is_opened:
+                self.report({"WARNING"}, f"Sheet '{sheet_uri}' is not inside the project directory and was not opened.")
         return {"FINISHED"}
 
 
@@ -2268,7 +2277,9 @@ class CreateSheets(bpy.types.Operator, tool.Ifc.Operator):
 
             if self.open_viewer:
                 if svg2pdf_command:
-                    tool.Drawing.open_with_user_command(tool.Blender.get_addon_preferences().pdf_command, pdf)
+                    tool.Drawing.open_with_user_command(
+                        tool.Blender.get_addon_preferences().pdf_command, pdf, extensions=(".pdf",)
+                    )
                 else:
                     tool.Drawing.open_with_user_command(tool.Blender.get_addon_preferences().svg_command, svg)
 
@@ -2346,18 +2357,29 @@ class OpenDrawing(bpy.types.Operator):
 
         drawing_uris = []
         drawings_not_found = []
+        drawings_not_openable = []
 
         for drawing in drawings:
             drawing_uri = tool.Drawing.get_document_uri(tool.Drawing.get_drawing_document(drawing))
-            drawing_uris.append(drawing_uri)
             if not os.path.exists(drawing_uri):
                 drawings_not_found.append(drawing.Name)
+            elif openable_uri := tool.Drawing.get_openable_path(drawing_uri):
+                drawing_uris.append(openable_uri)
+            else:
+                drawings_not_openable.append(drawing.Name)
 
         if drawings_not_found:
             msg = "Some drawings .svg files were not found, need to create them first: \n{}.".format(
                 "\n".join(drawings_not_found)
             )
             self.report({"ERROR"}, msg)
+            return {"CANCELLED"}
+
+        if drawings_not_openable:
+            msg = "Some drawings are not .svg files inside the project directory and were not opened: \n{}.".format(
+                "\n".join(drawings_not_openable)
+            )
+            self.report({"WARNING"}, msg)
             return {"CANCELLED"}
 
         for drawing_uri in drawing_uris:
@@ -3118,7 +3140,8 @@ class OpenSchedule(bpy.types.Operator, tool.Ifc.Operator):
     schedule: bpy.props.IntProperty()
 
     def _execute(self, context):
-        core.open_schedule(tool.Drawing, schedule=tool.Ifc.get().by_id(self.schedule))
+        if not core.open_schedule(tool.Drawing, schedule=tool.Ifc.get().by_id(self.schedule)):
+            self.report({"WARNING"}, "The schedule is not an .ods, .xls or .xlsx file inside the project directory.")
 
 
 class BuildSchedule(bpy.types.Operator, tool.Ifc.Operator):
@@ -3317,7 +3340,8 @@ class OpenReference(bpy.types.Operator, tool.Ifc.Operator):
     reference: bpy.props.IntProperty()
 
     def _execute(self, context):
-        core.open_reference(tool.Drawing, reference=tool.Ifc.get().by_id(self.reference))
+        if not core.open_reference(tool.Drawing, reference=tool.Ifc.get().by_id(self.reference)):
+            self.report({"WARNING"}, "The reference is not an .svg file inside the project directory.")
 
 
 class CleanWireframes(bpy.types.Operator):
