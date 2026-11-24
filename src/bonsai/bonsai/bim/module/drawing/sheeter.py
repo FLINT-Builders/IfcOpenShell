@@ -55,7 +55,9 @@ class SheetBuilder:
         ootb_titleblock_path = tool.Blender.get_data_dir_path(
             Path("templates") / "titleblocks" / (titleblock_name + ".svg")
         )
-        titleblock_path = tool.Ifc.resolve_uri(tool.Drawing.get_default_titleblock_path(titleblock_name))
+        titleblock_path = tool.Drawing.ensure_project_path(
+            tool.Drawing.get_default_titleblock_path(titleblock_name), "svg"
+        )
 
         os.makedirs(sheet_dir, exist_ok=True)
         os.makedirs(os.path.dirname(titleblock_path), exist_ok=True)
@@ -89,8 +91,7 @@ class SheetBuilder:
         sheet: ifcopenshell.entity_instance,
     ) -> None:
         filename = drawing.Name
-        layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
-        assert layout_path
+        layout_path = tool.Drawing.ensure_project_path(tool.Drawing.get_document_location(sheet, "LAYOUT"), "svg")
         layout_dir = os.path.dirname(layout_path)
 
         drawing_path = tool.Drawing.get_document_uri(tool.Drawing.get_drawing_reference(drawing))
@@ -123,7 +124,7 @@ class SheetBuilder:
         if os.path.isfile(drawing_path):
             foreground = ET.SubElement(view, "image")
             foreground.attrib["data-type"] = "foreground"
-            foreground.attrib["xlink:href"] = os.path.relpath(drawing_path, layout_dir)
+            foreground.attrib["xlink:href"] = os.path.relpath(os.path.realpath(drawing_path), layout_dir)
             foreground.attrib["x"] = str(x)
             foreground.attrib["y"] = str(y)
             foreground.attrib["width"] = str(view_width)
@@ -170,8 +171,7 @@ class SheetBuilder:
     def update_sheet_drawing_sizes(self, sheet: ifcopenshell.entity_instance) -> None:
         ET.register_namespace("", "http://www.w3.org/2000/svg")
 
-        layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
-        assert layout_path
+        layout_path = tool.Drawing.ensure_project_path(tool.Drawing.get_document_location(sheet, "LAYOUT"), "svg")
         layout_tree = ET.parse(layout_path)
         layout_root = layout_tree.getroot()
         ifc_file = tool.Ifc.get()
@@ -214,9 +214,8 @@ class SheetBuilder:
     def remove_drawing(self, reference: ifcopenshell.entity_instance, sheet: ifcopenshell.entity_instance) -> None:
         ET.register_namespace("", "http://www.w3.org/2000/svg")
 
-        layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
-        assert layout_path
-        if not os.path.exists(layout_path):
+        layout_path = tool.Drawing.get_project_path(tool.Drawing.get_document_location(sheet, "LAYOUT"), "svg")
+        if not layout_path or not os.path.exists(layout_path):
             return
         layout_tree = ET.parse(layout_path)
         layout_root = layout_tree.getroot()
@@ -238,8 +237,7 @@ class SheetBuilder:
         if not os.path.exists(view_path):
             tool.Drawing.create_svg_document(document)
         document_name = os.path.splitext(os.path.basename(view_path))[0]
-        layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
-        assert layout_path
+        layout_path = tool.Drawing.ensure_project_path(tool.Drawing.get_document_location(sheet, "LAYOUT"), "svg")
         layout_dir = os.path.dirname(layout_path)
 
         ET.register_namespace("", "http://www.w3.org/2000/svg")
@@ -262,7 +260,7 @@ class SheetBuilder:
 
         foreground = ET.SubElement(view, "image")
         foreground.attrib["data-type"] = "content"
-        foreground.attrib["xlink:href"] = os.path.relpath(view_path, layout_dir)
+        foreground.attrib["xlink:href"] = os.path.relpath(os.path.realpath(view_path), layout_dir)
         foreground.attrib["x"] = str(x)
         foreground.attrib["y"] = str(y)
         foreground.attrib["width"] = str(view_width)
@@ -272,7 +270,7 @@ class SheetBuilder:
         layout_tree.write(layout_path)
 
     def add_view_title(self, x: float, y: float, parent: ET.Element, layout_dir: str) -> None:
-        title_path = os.path.join(layout_dir, "assets", "view-title.svg")
+        title_path = tool.Drawing.ensure_project_path(os.path.join("assets", "view-title.svg"), "svg", base=layout_dir)
         os.makedirs(os.path.dirname(title_path), exist_ok=True)
         if not os.path.exists(title_path):
             ootb_title = tool.Blender.get_data_dir_path(Path("assets") / "view-title.svg")
@@ -289,11 +287,10 @@ class SheetBuilder:
         title.attrib["height"] = str(self.convert_to_mm(title_root.attrib["height"]))
 
     def build(self, sheet: ifcopenshell.entity_instance) -> dict[str, str]:
-        layout_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
-        assert layout_path
+        layout_path = tool.Drawing.ensure_project_path(tool.Drawing.get_document_location(sheet, "LAYOUT"), "svg")
         self.layout_dir = os.path.dirname(layout_path)
 
-        sheet_path = tool.Ifc.resolve_uri(tool.Drawing.get_default_sheet_path(sheet[0], sheet.Name))
+        sheet_path = tool.Drawing.ensure_project_path(tool.Drawing.get_default_sheet_path(sheet[0], sheet.Name), "svg")
         self.sheets_dir = os.path.dirname(sheet_path)
 
         os.makedirs(self.sheets_dir, exist_ok=True)
@@ -526,7 +523,7 @@ class SheetBuilder:
                     template_dir = Path(os.path.join(self.layout_dir, svg_path)).resolve().parent
                     old_href = Path(os.path.join(template_dir, old_href))
                 old_href = old_href.absolute().resolve().as_posix()
-                new_href = Path(os.path.join(self.sheets_dir, Path(old_href).name)).absolute().resolve().as_posix()
+                new_href = tool.Drawing.ensure_project_path(Path(old_href).name, base=self.sheets_dir)
                 shutil.copy(old_href, new_href)
                 image.attrib[f"{XLINK}href"] = Path(old_href).name
         for child in embedded:
@@ -539,9 +536,10 @@ class SheetBuilder:
         ootb_titleblock_path = tool.Blender.get_data_dir_path(
             Path("templates") / "titleblocks" / (titleblock_name + ".svg")
         )
-        titleblock_path = tool.Ifc.resolve_uri(tool.Drawing.get_default_titleblock_path(titleblock_name))
-        sheet_path = tool.Drawing.get_document_uri(sheet, "LAYOUT")
-        assert sheet_path is not None
+        titleblock_path = tool.Drawing.ensure_project_path(
+            tool.Drawing.get_default_titleblock_path(titleblock_name), "svg"
+        )
+        sheet_path = tool.Drawing.ensure_project_path(tool.Drawing.get_document_location(sheet, "LAYOUT"), "svg")
         sheet_dir = os.path.dirname(sheet_path)
 
         os.makedirs(sheet_dir, exist_ok=True)

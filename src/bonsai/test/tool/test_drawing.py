@@ -206,7 +206,7 @@ class TestCreateSvgSheet(NewFile):
             Identification="X",
             Name="FOOBAR",
             Scope="SHEET",
-            Location=(ifc_path.parent / "layouts" / "X - FOOBAR.svg").as_posix(),
+            Location="layouts/X - FOOBAR.svg",
         )
         uri = subject.create_svg_sheet(document, "A1")
         assert uri.endswith(".svg")

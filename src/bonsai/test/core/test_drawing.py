@@ -174,8 +174,8 @@ class TestRemoveSheet:
     def test_run(self, ifc, drawing):
         drawing.get_document_references("sheet").should_be_called().will_return(["reference"])
         drawing.get_reference_description("reference").should_be_called().will_return("LAYOUT")
-        drawing.get_document_uri("reference").should_be_called().will_return("relative_uri")
-        ifc.resolve_uri("relative_uri").should_be_called().will_return("absolute_uri")
+        drawing.get_reference_location("reference").should_be_called().will_return("relative_uri")
+        drawing.get_project_path("relative_uri").should_be_called().will_return("absolute_uri")
         drawing.does_file_exist("absolute_uri").should_be_called().will_return(True)
         drawing.delete_file("absolute_uri").should_be_called()
         ifc.run("document.remove_information", information="sheet").should_be_called()
@@ -522,8 +522,8 @@ class TestRemoveDrawing:
         ifc.run("root.remove_product", product="reference").should_be_called()
         drawing.get_drawing_document("drawing").should_be_called().will_return("reference")
         drawing.get_reference_document("reference").should_be_called().will_return("information")
-        drawing.get_document_uri("information").should_be_called().will_return("relative_uri")
-        ifc.resolve_uri("relative_uri").should_be_called().will_return("absolute_uri")
+        drawing.get_document_location("information").should_be_called().will_return("relative_uri")
+        drawing.get_project_path("relative_uri", "svg").should_be_called().will_return("absolute_uri")
         drawing.does_file_exist("absolute_uri").should_be_called().will_return(True)
         drawing.delete_file("absolute_uri").should_be_called()
         ifc.run("document.remove_information", information="information").should_be_called()
@@ -567,9 +567,9 @@ class TestUpdateDrawingName:
         ifc.run(
             "document.edit_reference", reference="reference", attributes={"Location": "new_location"}
         ).should_be_called()
-        ifc.resolve_uri("old_location").should_be_called().will_return("old_uri")
+        drawing.get_project_path("old_location", "svg").should_be_called().will_return("old_uri")
         drawing.does_file_exist("old_uri").should_be_called().will_return(True)
-        ifc.resolve_uri("new_location").should_be_called().will_return("new_uri")
+        drawing.get_project_path("new_location", "svg").should_be_called().will_return("new_uri")
         drawing.move_file("old_uri", "new_uri").should_be_called()
 
         drawing.get_references_with_location("old_location").should_be_called().will_return(
@@ -582,10 +582,10 @@ class TestUpdateDrawingName:
             "sheet_with_old_location"
         )
 
-        drawing.get_document_uri("sheet_with_old_location", "LAYOUT").should_be_called().will_return(
+        drawing.get_document_location("sheet_with_old_location", "LAYOUT").should_be_called().will_return(
             "relative_layout_uri"
         )
-        ifc.resolve_uri("relative_layout_uri").should_be_called().will_return("absolute_layout_uri")
+        drawing.get_project_path("relative_layout_uri", "svg").should_be_called().will_return("absolute_layout_uri")
         drawing.does_file_exist("absolute_layout_uri").should_be_called().will_return(True)
         drawing.update_embedded_svg_location(
             "absolute_layout_uri", "reference_with_old_location", "new_uri"

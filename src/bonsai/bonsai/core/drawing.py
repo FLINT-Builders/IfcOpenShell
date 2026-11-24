@@ -156,9 +156,8 @@ def regenerate_sheet(
     try:
         drawing.add_drawings(sheet)
     except FileNotFoundError:
-        path_layout = drawing.get_document_uri(sheet, "LAYOUT")
-        assert path_layout
-        if drawing.does_file_exist(path_layout):
+        path_layout = drawing.get_project_path(drawing.get_document_location(sheet, "LAYOUT"), "svg")
+        if path_layout and drawing.does_file_exist(path_layout):
             drawing.delete_file(path_layout)
 
 
@@ -169,8 +168,8 @@ def open_layout(drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance
 def remove_sheet(ifc: type[tool.Ifc], drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance) -> None:
     for reference in drawing.get_document_references(sheet):
         if drawing.get_reference_description(reference) in ("LAYOUT", "SHEET", "REVISION", "RASTER"):
-            uri = ifc.resolve_uri(drawing.get_document_uri(reference))
-            if drawing.does_file_exist(uri):
+            uri = drawing.get_project_path(drawing.get_reference_location(reference))
+            if uri and drawing.does_file_exist(uri):
                 drawing.delete_file(uri)
     ifc.run("document.remove_information", information=sheet)
     drawing.import_sheets()
@@ -195,17 +194,19 @@ def rename_sheet(
             new_location = drawing.get_default_sheet_path(identification, name)
             if old_location != new_location:
                 ifc.run("document.edit_reference", reference=reference, attributes={"Location": new_location})
-                old_location = ifc.resolve_uri(old_location)
-                if drawing.does_file_exist(old_location):
-                    drawing.move_file(old_location, ifc.resolve_uri(new_location))
+                old_uri = drawing.get_project_path(old_location, "svg")
+                new_uri = drawing.get_project_path(new_location, "svg")
+                if old_uri and new_uri and drawing.does_file_exist(old_uri):
+                    drawing.move_file(old_uri, new_uri)
         elif description == "LAYOUT":
             old_location = drawing.get_reference_location(reference)
             new_location = drawing.get_default_layout_path(identification, name)
             if old_location != new_location:
                 ifc.run("document.edit_reference", reference=reference, attributes={"Location": new_location})
-                old_location = ifc.resolve_uri(old_location)
-                if drawing.does_file_exist(old_location):
-                    drawing.move_file(old_location, ifc.resolve_uri(new_location))
+                old_uri = drawing.get_project_path(old_location, "svg")
+                new_uri = drawing.get_project_path(new_location, "svg")
+                if old_uri and new_uri and drawing.does_file_exist(old_uri):
+                    drawing.move_file(old_uri, new_uri)
 
 
 def rename_reference(
@@ -458,8 +459,8 @@ def remove_drawing(
         ifc.run("root.remove_product", product=reference)
 
     information = drawing_tool.get_reference_document(drawing_tool.get_drawing_document(drawing))
-    uri = ifc.resolve_uri(drawing_tool.get_document_uri(information))
-    if drawing_tool.does_file_exist(uri):
+    uri = drawing_tool.get_project_path(drawing_tool.get_document_location(information), "svg")
+    if uri and drawing_tool.does_file_exist(uri):
         drawing_tool.delete_file(uri)
     ifc.run("document.remove_information", information=information)
 
@@ -493,17 +494,17 @@ def update_drawing_name(
     new_location = drawing_tool.get_default_drawing_path(name)
     if old_location != new_location:
         ifc.run("document.edit_reference", reference=reference, attributes={"Location": new_location})
-        resolved_old_location = ifc.resolve_uri(old_location)
-        resolved_new_location = ifc.resolve_uri(new_location)
-        if drawing_tool.does_file_exist(resolved_old_location):
+        resolved_old_location = drawing_tool.get_project_path(old_location, "svg")
+        resolved_new_location = drawing_tool.get_project_path(new_location, "svg")
+        if resolved_old_location and resolved_new_location and drawing_tool.does_file_exist(resolved_old_location):
             drawing_tool.move_file(resolved_old_location, resolved_new_location)
 
         for reference in drawing_tool.get_references_with_location(old_location):
             ifc.run("document.edit_reference", reference=reference, attributes={"Location": new_location})
             sheet = drawing_tool.get_reference_document(reference)
-            if sheet:
-                uri = ifc.resolve_uri(drawing_tool.get_document_uri(sheet, "LAYOUT"))
-                if drawing_tool.does_file_exist(uri):
+            if sheet and resolved_new_location:
+                uri = drawing_tool.get_project_path(drawing_tool.get_document_location(sheet, "LAYOUT"), "svg")
+                if uri and drawing_tool.does_file_exist(uri):
                     drawing_tool.update_embedded_svg_location(uri, reference, resolved_new_location)
 
         if drawing_tool.is_editing_sheets():
