@@ -62,12 +62,55 @@ class DOCDB(MyDB):
 
     # ---- CUSTOM (NON DOCUMENTS API) UPLOAD FUNCTION ----
 
-    def create_node_for_uploaded_file(self, selection_session, project, document_version) -> Union[Document, bool]:
+    def authorize_upload_to_project(self, selection_session: str, project: str, current_user: User) -> UploadTarget:
+        def authorize_upload_work(tx) -> Union[UploadTarget, None]:
+            cypher = """
+                MATCH (u:User)-[r1:HAS]->(ss:Session:Select)
+                WHERE u.username = $username
+                AND ss.selection_session = $selection_session
+                MATCH (u)-[r2:HAS_ACTIONS_ON]->(p:Project)
+                WHERE p.project_id = $project
+                RETURN elementId(ss) AS session_element_id, elementId(p) AS project_element_id
+                LIMIT 1
+            """
+            result = tx.run(
+                cypher, username=current_user.username, selection_session=selection_session, project=project
+            )
+            first = result.single()
+            if first is None:
+                return None
+            return UploadTarget(
+                username=current_user.username,
+                selection_session=selection_session,
+                session_element_id=first.get("session_element_id"),
+                project=project,
+                project_element_id=first.get("project_element_id"),
+            )
+
+        with self.driver.session() as session:
+            upload_target = session.execute_read(authorize_upload_work)
+        if upload_target is None:
+            raise HTTPException(status_code=403, detail="Selection session or project is not available.")
+        return upload_target
+
+    def delete_uploaded_document(self, document_id: str):
+        with self.driver.session() as session:
+            session.run(
+                "MATCH (d:Document) WHERE d.document_id = $document_id DETACH DELETE d", document_id=document_id
+            )
+
+    def create_node_for_uploaded_file(self, upload_target: UploadTarget, document_version) -> Union[Document, bool]:
         def create_document_node_work(tx) -> bool:
             cypher = """
-                MATCH (ss:Session:Select)<-[r1:HAS]-(u:User)-[r2:HAS_ACTIONS_ON]->(p:Project)
-                WHERE ss.selection_session = $selection_session
+                MATCH (u:User)-[r1:HAS]->(ss:Session:Select)
+                WHERE elementId(ss) = $session_element_id
+                AND u.username = $username
+                AND ss.selection_session = $selection_session
+                MATCH (u)-[r2:HAS_ACTIONS_ON]->(p:Project)
+                WHERE elementId(p) = $project_element_id
                 AND p.project_id = $project
+                WITH p
+                LIMIT 1
                 CREATE (p)-[r3:CONTAINS]->(d:Document)
                 SET
                     d.document_id = $document_id,
@@ -85,8 +128,11 @@ class DOCDB(MyDB):
             """
             result = tx.run(
                 cypher,
-                selection_session=selection_session,
-                project=project,
+                username=upload_target.username,
+                selection_session=upload_target.selection_session,
+                session_element_id=upload_target.session_element_id,
+                project=upload_target.project,
+                project_element_id=upload_target.project_element_id,
                 document_id=document_version.document_id,
                 session_file_id=document_version.session_file_id,
                 version_index=document_version.version_index,
@@ -103,7 +149,7 @@ class DOCDB(MyDB):
 
             summary = result.consume()
             if summary.counters.nodes_created < 1:
-                raise HTTPException(status_code=400, detail="Document node was not created.")
+                raise HTTPException(status_code=403, detail="Selection session or project is no longer available.")
             return True
 
         def find_document_node_work(tx) -> Union[Document, bool]:

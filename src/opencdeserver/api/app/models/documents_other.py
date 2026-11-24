@@ -30,6 +30,14 @@ class DataForUploadDocuments(BaseModel):
     projects: list[ProjectOnly]
 
 
+class UploadTarget(BaseModel):
+    username: str
+    selection_session: str
+    session_element_id: str
+    project: str
+    project_element_id: str
+
+
 # ---- DOWNLOAD MODELS ----
 
 
