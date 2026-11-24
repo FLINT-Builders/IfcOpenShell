@@ -23,9 +23,6 @@ import functools
 import importlib
 import itertools
 import operator
-import subprocess
-import sys
-import time
 from collections.abc import Callable, Sequence
 from typing import Any, TypeVar, Union
 
@@ -116,22 +113,15 @@ class entity_instance_mixin:
             try:
                 rules = importlib.import_module(f"ifcopenshell.express.rules.{schema_name}")
             except:
-                import os
+                import ifcopenshell.express.rule_executor
 
-                current_dir_files = {fn.lower(): fn for fn in os.listdir(".")}
-                exp_filename = schema_name.lower() + ".exp"
-                schema_path = current_dir_files.get(exp_filename)
-                if schema_path is None:
-                    raise Exception(
-                        f"Couldn't find express file '{schema_name.lower()}.exp' in the current folder: '{os.getcwd()}'."
+                rules = ifcopenshell.express.rule_executor.get_rules_module(schema_name)
+                if rules is None:
+                    raise AttributeError(
+                        "entity instance of type '%s' has no attribute '%s' (no express rules available for schema "
+                        "'%s', custom schemas need to be registered with "
+                        "ifcopenshell.express.rule_executor.register_schema())" % (self.is_a(True), name, schema_name)
                     )
-                fn = schema_path[:-4] + ".py"
-                if not os.path.exists(fn):
-                    subprocess.run(
-                        [sys.executable, "-m", "ifcopenshell.express.rule_compiler", schema_path, fn], check=True
-                    )
-                    time.sleep(1.0)
-                rules = importlib.import_module(schema_name)
 
             def yield_supertypes():
                 decl = ifcopenshell_wrapper.schema_by_name(schema_name).declaration_by_name(self.is_a())

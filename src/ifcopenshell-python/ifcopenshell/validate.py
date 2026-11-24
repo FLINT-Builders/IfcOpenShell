@@ -29,7 +29,7 @@ Can be used to run validation on IFC file from the command line:
 
     python -m ifcopenshell.validate -h
 
-    usage: validate.py [-h] [--rules] [--json] [--fields] [--spf] files [files ...]
+    usage: validate.py [-h] [--rules] [--schema SCHEMA] [--json] [--fields] [--spf] files [files ...]
 
     positional arguments:
       files       The IFC file to validate.
@@ -37,6 +37,8 @@ Can be used to run validation on IFC file from the command line:
     options:
       -h, --help  show this help message and exit
       --rules     Run express rules.
+      --schema SCHEMA
+                  Path to a custom EXPRESS schema (.exp) to validate the files against.
       --json      Output in JSON format.
       --fields    Output more detailed information about failed entities (only with --json).
       --spf       Output entities in SPF format (only with --json).
@@ -49,7 +51,6 @@ import argparse
 import functools
 import itertools
 import json
-import os
 import re
 import sys
 import types
@@ -467,17 +468,9 @@ def validate(f: ifcopenshell.file | str | Path, logger: Logger | json_logger, ex
         try:
             f = ifcopenshell.open(f, readonly=True)
         except ifcopenshell.SchemaError as e:
-            current_dir_files = {fn.lower(): fn for fn in os.listdir(".")}
             schema_name = str(e).split(" ")[-1].lower()
-            exists = current_dir_files.get(schema_name + ".exp")
-            if exists:
-                schema = ifcopenshell.express.parse(exists)
-                ifcopenshell.register_schema(schema)
-
-                f = ifcopenshell.open(f)
-            else:
-                logger.error(f"Unsupported schema: {schema_name}")
-                return
+            logger.error(f"Unsupported schema: {schema_name}")
+            return
 
         assert isinstance(f, ifcopenshell.file)
         log_internal_cpp_errors(f, filename, logger)
@@ -822,6 +815,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("files", nargs="+", help="The IFC file to validate.")
     parser.add_argument("--rules", action="store_true", help="Run express rules.")
+    parser.add_argument("--schema", help="Path to a custom EXPRESS schema (.exp) to validate the files against.")
     parser.add_argument("--json", action="store_true", help="Output in JSON format.")
     parser.add_argument(
         "--recursion-limit",
@@ -843,6 +837,9 @@ if __name__ == "__main__":
 
     if args.recursion_limit > 0:
         sys.setrecursionlimit(args.recursion_limit)
+
+    if args.schema:
+        ifcopenshell.express.rule_executor.register_schema(args.schema)
 
     for fn in filenames:
         handler = None

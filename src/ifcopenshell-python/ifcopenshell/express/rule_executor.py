@@ -1,13 +1,82 @@
 import ast
+import atexit
 import collections
+import importlib.util
 import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import types
 from dataclasses import dataclass
 from logging import Logger
+from typing import Optional
 
 from codegen import indent
 
 import ifcopenshell
+import ifcopenshell.express
+
+# Private copies of the EXPRESS schemas passed to register_schema(), by schema name.
+custom_schemas: dict[str, str] = {}
+# Rules compiled from those copies, by schema name.
+compiled_rules: dict[str, str] = {}
+rules_modules: dict[str, types.ModuleType] = {}
+
+
+def register_schema(schema_path: str) -> str:
+    """Parses and registers a custom EXPRESS schema so its files can be validated with express rules.
+
+    The schema is copied into a new private directory and only that copy is used, both for
+    registration and later for compiling its rules. No other file next to the schema is read.
+
+    :param schema_path: Path to the .exp file.
+    :return: The name of the registered schema.
+    """
+    directory = tempfile.mkdtemp(prefix="ifcopenshell-express-")
+    atexit.register(shutil.rmtree, directory, ignore_errors=True)
+    exp_path = os.path.join(directory, "schema.exp")
+    shutil.copyfile(schema_path, exp_path)
+    builder = ifcopenshell.express.parse(exp_path)
+    ifcopenshell.register_schema(builder)
+    name = builder.schema.name()
+    custom_schemas[name] = exp_path
+    compiled_rules.pop(name, None)
+    rules_modules.pop(name, None)
+    return name
+
+
+def get_rules_path(schema_name: str) -> Optional[str]:
+    """Returns the path of the bundled rules for a schema, or of the rules compiled from a
+    schema passed to register_schema(). Returns None if neither exists."""
+    if schema_name in custom_schemas:
+        if schema_name not in compiled_rules:
+            exp_path = custom_schemas[schema_name]
+            directory = os.path.dirname(exp_path)
+            rules_path = os.path.join(directory, "rules.py")
+            subprocess.run(
+                [sys.executable, "-m", "ifcopenshell.express.rule_compiler", exp_path, rules_path],
+                check=True,
+                cwd=directory,
+            )
+            compiled_rules[schema_name] = rules_path
+        return compiled_rules[schema_name]
+    rules_path = os.path.join(os.path.dirname(__file__), "rules", f"{schema_name}.py")
+    if os.path.isfile(rules_path):
+        return rules_path
+
+
+def get_rules_module(schema_name: str) -> Optional[types.ModuleType]:
+    """Imports the rules returned by get_rules_path() for a custom schema by their file path."""
+    if schema_name not in rules_modules:
+        if schema_name not in custom_schemas or not (rules_path := get_rules_path(schema_name)):
+            return None
+        spec = importlib.util.spec_from_file_location(f"{schema_name}_rules", rules_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        rules_modules[schema_name] = module
+    return rules_modules[schema_name]
 
 
 def reverse_compile(s):
@@ -72,6 +141,16 @@ def fix_type(v):
 def run(f: ifcopenshell.file, logger: Logger) -> None:
     from _pytest import assertion
 
+    fn = get_rules_path(f.schema_identifier)
+    if fn is None:
+        logger.error(
+            f"No express rules available for schema {f.schema_identifier}. "
+            "Custom schemas need to be registered with ifcopenshell.express.rule_executor.register_schema()."
+        )
+        return
+    with open(fn, "r") as rules_file:
+        source = rules_file.read()
+
     if hasattr(logger, "set_instance"):
         # when using the json logger, we notify it of the relevant instance
         pre_annotate_instance = lambda instance: (
@@ -97,23 +176,6 @@ def run(f: ifcopenshell.file, logger: Logger) -> None:
     # rule_compiler.process_rel_op.
     orig_compare = ifcopenshell.settings.compare_instances_by_value
     ifcopenshell.settings.compare_instances_by_value = True
-
-    fn = os.path.join(os.path.dirname(__file__), "rules", f"{f.schema_identifier}.py")
-    try:
-        source = open(fn, "r").read()
-    except FileNotFoundError as e:
-        import subprocess
-        import sys
-        import time
-
-        current_dir_files = {fn.lower(): fn for fn in os.listdir(".")}
-        schema_name = str(f.schema_identifier).split(" ")[-1].lower()
-        schema_path = current_dir_files.get(schema_name + ".exp")
-        fn = schema_path[:-4] + ".py"
-        if not os.path.exists(fn):
-            subprocess.run([sys.executable, "-m", "ifcopenshell.express.rule_compiler", schema_path, fn], check=True)
-            time.sleep(1.0)
-        source = open(fn, "r").read()
 
     a = ast.parse(source)
     assertion.rewrite.rewrite_asserts(mod=a, source=source)
