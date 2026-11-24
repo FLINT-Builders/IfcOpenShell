@@ -47,9 +47,12 @@ websocket_runner = None
 
 
 class IfcTesterWebSocketServer:
-    def __init__(self, port):
+    def __init__(self, port, webapp_port):
         self.port = port
-        self.sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="aiohttp")
+        self.sio = socketio.AsyncServer(
+            cors_allowed_origins=[f"http://127.0.0.1:{webapp_port}", f"http://localhost:{webapp_port}"],
+            async_mode="aiohttp",
+        )
         self.app = web.Application()
         self.sio.attach(self.app)
         self.runner = None
@@ -324,7 +327,7 @@ class StartIfcTesterWebapp(bpy.types.Operator):
 
         try:
             # Start the websocket server in a thread
-            websocket_app = IfcTesterWebSocketServer(websocket_port)
+            websocket_app = IfcTesterWebSocketServer(websocket_port, webapp_port)
 
             def run_websocket_server():
                 loop = asyncio.new_event_loop()
