@@ -34,6 +34,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
     auto offset_values = inst.OffsetValues();
     if (offset_values.empty()) {
         logger_.error("GEO", 270, "IfcOffsetCurveByDistances must have at least one offset value");
+        return nullptr;
     }
 
     auto& first_offset_value = offset_values.front();
