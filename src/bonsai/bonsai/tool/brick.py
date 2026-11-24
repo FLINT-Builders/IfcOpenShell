@@ -39,7 +39,7 @@ import bonsai.tool as tool
 try:
     import brickschema
     import brickschema.persistent
-    from brickschema.namespaces import REF, A
+    from brickschema.namespaces import BRICK, REF, A
     from rdflib import BNode, Literal, Namespace, URIRef
 except:
     # See #1860
@@ -130,7 +130,7 @@ class Brick(bonsai.core.tool.Brick):
             props.new_brick_relation_type = BrickStore.relationships[0]
             props.add_brick_relation_failed = False
             return
-        query = BrickStore.graph.query("ASK { <{object_uri}> a ?o . }".replace("{object_uri}", object))
+        query = BrickStore.graph.query("ASK { ?object_uri a ?o . }", initBindings={"object_uri": URIRef(object)})
         if query:
             with BrickStore.new_changeset() as cs:
                 cs.add((URIRef(brick_uri), URIRef(predicate), URIRef(object)))
@@ -168,10 +168,11 @@ class Brick(bonsai.core.tool.Brick):
             """
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
             SELECT ?label {
-                <{brick_uri}> rdfs:label ?label .
+                ?brick_uri rdfs:label ?label .
             }
             LIMIT 1
-        """.replace("{brick_uri}", brick_uri)
+        """,
+            initBindings={"brick_uri": URIRef(brick_uri)},
         )
         name = None
         for row in query:
@@ -220,10 +221,11 @@ class Brick(bonsai.core.tool.Brick):
             PREFIX ref: <https://brickschema.org/schema/Brick/ref#>
             SELECT ?proj WHERE {
                 ?proj a ref:ifcProject .
-                ?proj ref:ifcProjectID "{project_globalid}" .
+                ?proj ref:ifcProjectID ?project_globalid .
             }
             LIMIT 1
-        """.replace("{project_globalid}", project.GlobalId)
+        """,
+            initBindings={"project_globalid": Literal(project.GlobalId)},
         )
         results = list(query)
         if results:
@@ -274,10 +276,11 @@ class Brick(bonsai.core.tool.Brick):
             """
             PREFIX brick: <https://brickschema.org/schema/Brick#>
             SELECT ?class WHERE {
-               <{item}> a ?class .
+               ?item a ?class .
             }
             LIMIT 1
-        """.replace("{item}", item)
+        """,
+            initBindings={"item": URIRef(item)},
         )
         for row in query:
             return row.get("class").toPython().split("#")[-1]
@@ -307,7 +310,7 @@ class Brick(bonsai.core.tool.Brick):
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             SELECT ?group (count(?item) as ?total_items) ?label WHERE {
-                ?group rdfs:subClassOf brick:{brick_class} .
+                ?group rdfs:subClassOf ?brick_class .
                 ?item rdf:type/rdfs:subClassOf* ?group .
                 OPTIONAL {
                     ?group rdfs:label ?label
@@ -315,7 +318,8 @@ class Brick(bonsai.core.tool.Brick):
             }
             GROUP BY ?group
             ORDER BY asc(?group)
-        """.replace("{brick_class}", brick_class)
+        """,
+            initBindings={"brick_class": BRICK[brick_class]},
         )
         props = tool.Brick.get_brick_props()
         if split_screen:
@@ -339,13 +343,14 @@ class Brick(bonsai.core.tool.Brick):
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             SELECT ?item ?label WHERE {
-                ?item rdf:type brick:{brick_class} .
+                ?item rdf:type ?brick_class .
                 OPTIONAL {
                     ?item rdfs:label ?label
                 }
             }
             ORDER BY asc(?item)
-        """.replace("{brick_class}", brick_class)
+        """,
+            initBindings={"brick_class": BRICK[brick_class]},
         )
         props = tool.Brick.get_brick_props()
         if split_screen:
@@ -551,12 +556,13 @@ class BrickStore:
                 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                 PREFIX owl: <http://www.w3.org/2002/07/owl#>
                 SELECT ?class WHERE {
-                    ?class rdfs:subClassOf* brick:{root_class} .
+                    ?class rdfs:subClassOf* ?root_class .
                     FILTER NOT EXISTS {
                         ?class owl:deprecated true .
                     }
                 }
-            """.replace("{root_class}", root_class)
+            """,
+                initBindings={"root_class": BRICK[root_class]},
             )
             BrickStore.entity_classes[root_class] = []
             for uri in sorted([x[0].toPython() for x in query]):

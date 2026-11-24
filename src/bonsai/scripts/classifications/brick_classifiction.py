@@ -1,5 +1,6 @@
 import ifcopenshell
 from brickschema.graph import Graph
+from brickschema.namespaces import BRICK
 
 
 class Generator:
@@ -79,9 +80,10 @@ class Generator:
                 PREFIX brick: <https://brickschema.org/schema/Brick#>
                 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                 SELECT ?parent WHERE {
-                    brick:{entity} rdfs:subClassOf ?parent .
+                    ?entity rdfs:subClassOf ?parent .
                 }
-                """.replace("{entity}", location.split("#")[-1])
+                """,
+                initBindings={"entity": BRICK[location.split("#")[-1]]},
             )
             # filter parents for the brick entity
             parent = None

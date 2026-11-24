@@ -69,7 +69,7 @@ class BrickschemaData:
             PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             SELECT DISTINCT ?predicate ?object ?label ?sp ?sv  WHERE {
-                <{uri}> ?predicate ?object .
+                ?uri ?predicate ?object .
                 OPTIONAL {
                     ?object rdfs:label ?label . 
                 }
@@ -81,7 +81,8 @@ class BrickschemaData:
                 }
             }
             GROUP BY ?object
-        """.replace("{uri}", uri)
+        """,
+            initBindings={"uri": URIRef(uri)},
         )
         for row in query:
             predicate_uri = row.get("predicate")
