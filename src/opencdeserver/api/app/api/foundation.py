@@ -170,6 +170,7 @@ def authorization(
 
 @router.get("/foundation/oauth2/code")
 def code(
+    request: Request,
     username: str,
     password: str,
     response_type: str,
@@ -184,7 +185,7 @@ def code(
     oauth2_state = state
 
     print("Username: " + username + ". Password: " + password)
-    user = authenticate_user(username, password)
+    user = authenticate_user(username, password, request.client.host if request.client else None)
 
     if not user:
         raise HTTPException(
