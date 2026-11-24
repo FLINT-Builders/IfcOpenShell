@@ -291,6 +291,15 @@ def upload_completion(
     print("Number of parts: " + str(len(parts)))
     document = doc_db.get_document_from_session(upload_session, current_user)
 
+    # The published file is named after the document id, so it must not be able to
+    # point at another document's file.
+    try:
+        valid_document_id = str(UUID(document.document_id)) == document.document_id
+    except ValueError:
+        valid_document_id = False
+    if not valid_document_id:
+        raise HTTPException(status_code=400, detail="Document id is not a valid UUID.")
+
     # check if all parts really are uploaded to document_id-dir
     document_name = doc_db.safe_path(document.document_id)
 
@@ -309,21 +318,26 @@ def upload_completion(
     # merge parts to a new temporary document
     temp_doc_path = path
     temp_doc_file_name = path + document_name
-    if not os.path.exists(temp_doc_path):
-        os.makedirs(temp_doc_path)
 
     new_doc_path = "./data/documents/"
     new_doc_path_name = new_doc_path + document.file_description.name
 
-    # Read parts and write to temp doc.
-    with open(temp_doc_file_name, "ab") as temp_doc:
-        for part in parts:
-            part = doc_db.safe_path(part)
-            with open(temp_doc_path + part, "rb") as part_doc:
-                temp_doc.write(part_doc.read())
+    def publish():
+        if not os.path.exists(temp_doc_path):
+            os.makedirs(temp_doc_path)
 
-    # move document to new location in documents dir
-    os.rename(temp_doc_file_name, new_doc_path_name)
+        # Read parts and write to temp doc.
+        with open(temp_doc_file_name, "wb") as temp_doc:
+            for part in parts:
+                part = doc_db.safe_path(part)
+                with open(temp_doc_path + part, "rb") as part_doc:
+                    temp_doc.write(part_doc.read())
+
+        # move document to new location in documents dir
+        os.replace(temp_doc_file_name, new_doc_path_name)
+
+    # clean database, create new document node under correct project and publish the file
+    finished = doc_db.document_upload_finish(upload_session, current_user, publish)
 
     # remove temp parts
     for part in parts:
@@ -332,8 +346,7 @@ def upload_completion(
     # remove temp path
     os.rmdir(temp_doc_path)
 
-    # clean database and create new document node under correct project
-    if doc_db.document_upload_finish(upload_session, current_user, document.project):
+    if finished:
         # get DocumentVersion
         document = doc_db.get_document_version(document.document_id, document.version_index, current_user)
 
@@ -772,14 +785,19 @@ async def upload_documents_post(
 
     document_version_model = Document(**document_version_dict)
 
-    # Save file to disc
+    # Save file to disc, once the database record is authorized
     upload_directory = "./data/documents/"
     destination_path = os.path.join(upload_directory, name)
-    with open(destination_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+
+    def save_file():
+        file.file.seek(0)
+        with open(destination_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
     # create database record
-    inserted_document = doc_db.create_node_for_uploaded_file(selection_session, project, document_version_model)
+    inserted_document = doc_db.create_node_for_uploaded_file(
+        selection_session, project, document_version_model, save_file
+    )
     print("Created node for document id: " + str(inserted_document.document_id))
     doc_db.create_ifc_graph_for_document(inserted_document.document_id)
 
