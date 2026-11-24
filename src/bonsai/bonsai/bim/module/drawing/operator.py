@@ -2950,9 +2950,36 @@ class ActivateDrawingStyle(bpy.types.Operator, tool.Ifc.Operator):
 
         return {"FINISHED"}
 
+    @staticmethod
+    def set_raster_style_property(path: str, value: Any, scene: bpy.types.Scene, space: bpy.types.SpaceView3D) -> None:
+        # Style data comes from a file referenced by the IFC, so it must never be evaluated as code.
+        # Only the paths that `SaveDrawingStyle` can produce are accepted.
+        source_path, _, prop_name = path.rpartition(".")
+        eval_props = [p.value for p in RasterStyleProperty if p.name.startswith("EVAL_PROP")]
+        sources = [p.value for p in RasterStyleProperty if not p.name.startswith("EVAL_PROP")]
+        if path in RASTER_STYLE_PROPERTIES_EXCLUDE or (path not in eval_props and source_path not in sources):
+            raise ValueError(f"Unsupported drawing style property '{path}'.")
+
+        root, *parts = source_path.split(".")
+        source = {"bpy": bpy, "scene": scene, "space": space}[root]
+        for part in parts:
+            name, _, index = part.partition("[")
+            source = getattr(source, name)
+            if index:
+                source = source[int(index.rstrip("]"))]
+
+        if source.bl_rna.properties.get(prop_name) is None or source.is_property_readonly(prop_name):
+            raise ValueError(f"'{path}' is not a writable property.")
+        numbers = (int, float)
+        is_vector = isinstance(value, list) and all(isinstance(v, numbers) for v in value)
+        if not (isinstance(value, (str, *numbers)) or is_vector):
+            raise TypeError(f"Unsupported value type '{type(value).__name__}' for '{path}'.")
+        setattr(source, prop_name, value)
+
     def set_raster_style(self, context: bpy.types.Context) -> None:
-        scene = context.scene  # Do not remove. It is used in exec later
-        assert (space := tool.Blender.get_view3d_space())  # Do not remove. It is used in exec later
+        scene = context.scene
+        assert scene
+        assert (space := tool.Blender.get_view3d_space())
         style: dict[str, Any] = json.loads(self.drawing_style.raster_style)
 
         VIEWPORT_SHADING_TYPE = "scene.display.shading.type"
@@ -3056,10 +3083,7 @@ class ActivateDrawingStyle(bpy.types.Operator, tool.Ifc.Operator):
                 continue
 
             try:
-                if isinstance(value, str):
-                    exec(f"{path} = '{value}'")
-                else:
-                    exec(f"{path} = {value}")
+                self.set_raster_style_property(path, value, scene, space)
             except Exception as e:
                 # Differences in Blender versions mean result in failures here
                 print(f"Failed to set drawing style property '{path}' to '{value}'. Error: '{str(e)}'")
