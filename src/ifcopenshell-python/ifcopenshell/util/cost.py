@@ -65,71 +65,121 @@ def calculate_applied_value(
     cost_value: ifcopenshell.entity_instance,
     category_filter: Optional[str] = None,
 ) -> float:
-    if cost_value.ArithmeticOperator and cost_value.Components:
-        component_values = []
-        for component in cost_value.Components:
-            component_values.append(calculate_applied_value(root_element, component, category_filter))
-        if cost_value.ArithmeticOperator == "ADD":
-            return sum(component_values)
-        result = component_values.pop(0)
-        if cost_value.ArithmeticOperator == "DIVIDE":
-            for value in component_values:
-                try:
-                    result /= value
-                except ZeroDivisionError:
-                    pass
-        elif cost_value.ArithmeticOperator == "MULTIPLY":
-            for value in component_values:
-                result *= value
-        elif cost_value.ArithmeticOperator == "SUBTRACT":
-            for value in component_values:
-                result -= value
-        return result
-    if cost_value.Category is None:
-        return get_primitive_applied_value(cost_value.AppliedValue)
-    elif cost_value.Category == "*":
-        if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element)
-        else:
-            return get_primitive_applied_value(cost_value.AppliedValue)
-    elif cost_value.Category:
-        if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element, category_filter=cost_value.Category)
-        else:
-            return get_primitive_applied_value(cost_value.AppliedValue)
-    return 0.0
+    return _calculate_applied_value(root_element, cost_value, category_filter, set(), {})
+
+
+def _calculate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    stack: set,
+    cache: dict,
+) -> float:
+    # Components and nesting may form cycles in a file. A value that depends on
+    # itself contributes nothing, and results are cached so a cyclic graph is
+    # not re-walked along every path.
+    key = (root_element, cost_value)
+    if key in cache:
+        return cache[key]
+    if key in stack:
+        return 0.0
+    stack.add(key)
+    try:
+        result = 0.0
+        if cost_value.ArithmeticOperator and cost_value.Components:
+            component_values = []
+            for component in cost_value.Components:
+                component_values.append(
+                    _calculate_applied_value(root_element, component, category_filter, stack, cache)
+                )
+            if cost_value.ArithmeticOperator == "ADD":
+                result = sum(component_values)
+            else:
+                result = component_values.pop(0)
+                if cost_value.ArithmeticOperator == "DIVIDE":
+                    for value in component_values:
+                        try:
+                            result /= value
+                        except ZeroDivisionError:
+                            pass
+                elif cost_value.ArithmeticOperator == "MULTIPLY":
+                    for value in component_values:
+                        result *= value
+                elif cost_value.ArithmeticOperator == "SUBTRACT":
+                    for value in component_values:
+                        result -= value
+        elif cost_value.Category is None:
+            result = get_primitive_applied_value(cost_value.AppliedValue)
+        elif cost_value.Category == "*":
+            if root_element.IsNestedBy:
+                result = _sum_child_root_elements(root_element, None, stack, cache)
+            else:
+                result = get_primitive_applied_value(cost_value.AppliedValue)
+        elif cost_value.Category:
+            if root_element.IsNestedBy:
+                result = _sum_child_root_elements(root_element, cost_value.Category, stack, cache)
+            else:
+                result = get_primitive_applied_value(cost_value.AppliedValue)
+    finally:
+        stack.remove(key)
+    cache[key] = result
+    return result
 
 
 def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category_filter: Optional[str] = None) -> float:
+    return _sum_child_root_elements(root_element, category_filter, set(), {})
+
+
+def _sum_child_root_elements(
+    root_element: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    stack: set,
+    cache: dict,
+) -> float:
+    key = (root_element, category_filter)
+    if key in cache:
+        return cache[key]
+    if root_element in stack:
+        return 0.0
+    stack.add(root_element)
     result = 0.0
-    for rel in root_element.IsNestedBy:
-        for child_root_element in rel.RelatedObjects:
-            if get_assigned_rate_cost_item(child_root_element):
-                new_child_root_element = get_assigned_rate_cost_item(child_root_element)
-            else:
-                new_child_root_element = child_root_element
-            if root_element.is_a("IfcCostItem"):
-                values = new_child_root_element.CostValues
-            elif root_element.is_a("IfcConstructionResource"):
-                values = child_root_element.BaseCosts
-            else:
-                assert False, root_element
-            for child_cost_value in values or []:
-                if category_filter and child_cost_value.Category != category_filter:
+    try:
+        for rel in root_element.IsNestedBy:
+            for child_root_element in rel.RelatedObjects:
+                # A child already being summed further up the stack is part of a nesting cycle.
+                if child_root_element in stack:
                     continue
-                child_applied_value = calculate_applied_value(new_child_root_element, child_cost_value)
-                child_quantity = get_total_quantity(child_root_element)
-                child_quantity = 1.0 if child_quantity is None else child_quantity
-                if child_cost_value.UnitBasis:
-                    value_component = child_cost_value.UnitBasis.ValueComponent.wrappedValue
-                    result += child_quantity / value_component * child_applied_value
+                if get_assigned_rate_cost_item(child_root_element):
+                    new_child_root_element = get_assigned_rate_cost_item(child_root_element)
                 else:
-                    result += child_quantity * child_applied_value
+                    new_child_root_element = child_root_element
+                if root_element.is_a("IfcCostItem"):
+                    values = new_child_root_element.CostValues
+                elif root_element.is_a("IfcConstructionResource"):
+                    values = child_root_element.BaseCosts
+                else:
+                    assert False, root_element
+                for child_cost_value in values or []:
+                    if category_filter and child_cost_value.Category != category_filter:
+                        continue
+                    child_applied_value = _calculate_applied_value(
+                        new_child_root_element, child_cost_value, None, stack, cache
+                    )
+                    child_quantity = get_total_quantity(child_root_element)
+                    child_quantity = 1.0 if child_quantity is None else child_quantity
+                    if child_cost_value.UnitBasis:
+                        value_component = child_cost_value.UnitBasis.ValueComponent.wrappedValue
+                        result += child_quantity / value_component * child_applied_value
+                    else:
+                        result += child_quantity * child_applied_value
+    finally:
+        stack.remove(root_element)
+    cache[key] = result
     return result
 
 
 def serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
-    result = _serialise_cost_value(cost_value)
+    result = _serialise_cost_value(cost_value, set(), {})
     if result and result[0] == "(" and result[-1] == ")":
         return result[1:-1]
     return result
@@ -142,13 +192,22 @@ def get_assigned_rate_cost_item(cost_item: ifcopenshell.entity_instance) -> ifco
             return assignment.RelatingControl
 
 
-def _serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
+def _serialise_cost_value(cost_value: ifcopenshell.entity_instance, stack: set, cache: dict) -> str:
+    # A component that refers back to a value being serialised is a cycle and is written as zero.
+    if cost_value in cache:
+        return cache[cost_value]
+    if cost_value in stack:
+        return "0"
     value = ""
     if cost_value.ArithmeticOperator and cost_value.Components:
         operator = arithmetic_operator_symbols[cost_value.ArithmeticOperator]
         serialised_components = []
-        for component in cost_value.Components:
-            serialised_components.append(_serialise_cost_value(component))
+        stack.add(cost_value)
+        try:
+            for component in cost_value.Components:
+                serialised_components.append(_serialise_cost_value(component, stack, cache))
+        finally:
+            stack.remove(cost_value)
         value = operator.join(serialised_components)
     elif cost_value.AppliedValue is not None:
         value = serialise_applied_value(cost_value.AppliedValue)
@@ -163,10 +222,13 @@ def _serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
         value = "0"
 
     if category:
-        return f"{category}({value})"
+        result = f"{category}({value})"
     elif cost_value.Components:
-        return f"({value})"
-    return value
+        result = f"({value})"
+    else:
+        result = value
+    cache[cost_value] = result
+    return result
 
 
 def serialise_applied_value(applied_value: ifcopenshell.entity_instance) -> str:
@@ -219,9 +281,18 @@ def get_root_cost_items(cost_schedule: ifcopenshell.entity_instance) -> list[ifc
 def get_all_nested_cost_items(
     cost_item: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
+    yield from _get_all_nested_cost_items(cost_item, {cost_item})
+
+
+def _get_all_nested_cost_items(
+    cost_item: ifcopenshell.entity_instance, visited: set[ifcopenshell.entity_instance]
+) -> Generator[ifcopenshell.entity_instance]:
     for cost_item in get_nested_cost_items(cost_item):
+        if cost_item in visited:
+            continue
+        visited.add(cost_item)
         yield cost_item
-        yield from get_all_nested_cost_items(cost_item)
+        yield from _get_all_nested_cost_items(cost_item, visited)
 
 
 def get_nested_cost_items(cost_item: ifcopenshell.entity_instance, is_deep=False) -> list[ifcopenshell.entity_instance]:
@@ -332,11 +403,15 @@ def get_product_quantity_names(elements: list[ifcopenshell.entity_instance]) -> 
 
 def get_cost_schedule(cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
     """Returns the cost schedule of a cost item."""
-    for rel in cost_item.HasAssignments or []:
-        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
-            return rel.RelatingControl
-    for rel in cost_item.Nests or []:
-        return get_cost_schedule(rel.RelatingObject)
+    visited = set()
+    while cost_item not in visited:
+        visited.add(cost_item)
+        for rel in cost_item.HasAssignments or []:
+            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+                return rel.RelatingControl
+        if not cost_item.Nests:
+            return None
+        cost_item = cost_item.Nests[0].RelatingObject
 
 
 def get_cost_rate(
@@ -344,13 +419,16 @@ def get_cost_rate(
 ) -> Optional[ifcopenshell.entity_instance]:
     """Returns the cost rate of a cost item."""
     # There is no direct relationship between a cost item and a cost rate in IFC, so we need to infer it, based on the assumption that cost_rate.CostValues == cost_item.CostValues.
-    if get_cost_schedule(cost_item).PredefinedType == "SCHEDULEOFRATES":
+    schedule = get_cost_schedule(cost_item)
+    if schedule and schedule.PredefinedType == "SCHEDULEOFRATES":
         return None  # Cost item is already a cost rate
     if cost_item.CostValues:
         potential_rates = file.get_inverse(cost_item.CostValues[0])
         for potential_rate in potential_rates:
+            if not potential_rate.is_a("IfcCostItem"):
+                continue
             schedule = get_cost_schedule(potential_rate)
-            if schedule.PredefinedType == "SCHEDULEOFRATES":
+            if schedule and schedule.PredefinedType == "SCHEDULEOFRATES":
                 return potential_rate
     return None
 
