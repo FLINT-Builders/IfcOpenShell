@@ -762,7 +762,11 @@ class Cost(bonsai.core.tool.Cost):
         cost_item: ifcopenshell.entity_instance,
         level_index: int,
         type: Literal["cost", "cost_rate"] = "cost_rate",
+        visited: Optional[set[int]] = None,
     ) -> None:
+        if visited is None:
+            visited = set()
+        visited.add(cost_item.id())
         new = props_collection.add()
         new.ifc_definition_id = cost_item.id()
         new.name = cost_item.Name or "Unnamed"
@@ -777,9 +781,10 @@ class Cost(bonsai.core.tool.Cost):
             new.has_children = True
             if new.is_expanded:
                 [
-                    cls.create_new_cost_item_li(props_collection, sub_cost_item, level_index + 1, type)
+                    cls.create_new_cost_item_li(props_collection, sub_cost_item, level_index + 1, type, visited)
                     for rel in cost_item.IsNestedBy
                     for sub_cost_item in rel.RelatedObjects
+                    if sub_cost_item.id() not in visited
                 ]
 
     @classmethod
@@ -900,17 +905,18 @@ class Cost(bonsai.core.tool.Cost):
 
     @classmethod
     def highlight_cost_item(cls, cost_item: ifcopenshell.entity_instance) -> None:
-        def expand_ancestors(cost_item: ifcopenshell.entity_instance) -> None:
+        def expand_ancestors(cost_item: ifcopenshell.entity_instance, visited: set[int]) -> None:
+            visited.add(cost_item.id())
             cls.expand_cost_item(cost_item.id())
             for rel in cost_item.Nests or []:
                 parent_cost = rel.RelatingObject if rel.RelatingObject.is_a("IfcCostItem") else None
-                if parent_cost:
-                    expand_ancestors(parent_cost)
+                if parent_cost and parent_cost.id() not in visited:
+                    expand_ancestors(parent_cost, visited)
             cls.load_cost_schedule_tree()
 
         cost_props = cls.get_cost_props()
         if not cost_item.id() in [item.ifc_definition_id for item in cost_props.cost_items]:
-            expand_ancestors(cost_item)
+            expand_ancestors(cost_item, set())
         cost_item_index = [item.ifc_definition_id for item in cost_props.cost_items].index(cost_item.id()) or 0
         cost_props.active_cost_item_index = cost_item_index
 
@@ -1050,7 +1056,16 @@ class Cost(bonsai.core.tool.Cost):
         return data
 
     @classmethod
-    def create_cost_item_json(cls, cost_item: ifcopenshell.entity_instance, cost_items: dict, data: list):
+    def create_cost_item_json(
+        cls,
+        cost_item: ifcopenshell.entity_instance,
+        cost_items: dict,
+        data: list,
+        visited: Optional[set[int]] = None,
+    ):
+        if visited is None:
+            visited = set()
+        visited.add(cost_item.id())
         if cost_item.id() in cost_items.keys():
             cost_item_data = cost_items[cost_item.id()]
             cost_item_data["id"] = cost_item.id()
@@ -1062,7 +1077,8 @@ class Cost(bonsai.core.tool.Cost):
             return None
         for rel in cost_item.IsNestedBy or []:
             for sub_cost_item in rel.RelatedObjects or []:
-                cls.create_cost_item_json(sub_cost_item, cost_items, cost_item_data["is_nested_by"])
+                if sub_cost_item.id() not in visited:
+                    cls.create_cost_item_json(sub_cost_item, cost_items, cost_item_data["is_nested_by"], visited)
 
     @classmethod
     def is_cost_item_sum(cls, cost_item: ifcopenshell.entity_instance) -> bool:
