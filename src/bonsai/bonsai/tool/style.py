@@ -761,9 +761,13 @@ class Style(bonsai.core.tool.Style):
         ifc_file = tool.Ifc.get()
 
         inverses = list(ifc_file.get_inverse(style))
+        processed: set[ifcopenshell.entity_instance] = set()
         items = []
         while inverses:
             inverse = inverses.pop()
+            if inverse in processed:
+                continue
+            processed.add(inverse)
             if inverse.is_a("IfcPresentationStyleAssignment"):
                 inverses.extend(ifc_file.get_inverse(inverse))
                 continue
