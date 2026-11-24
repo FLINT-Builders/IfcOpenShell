@@ -22,6 +22,7 @@
 #include <cctype>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -44,6 +45,27 @@ namespace {
             ifcopenshell::geom::POSTFIX_SCHEMA(mapping)* m = new ifcopenshell::geom::POSTFIX_SCHEMA(mapping)(file, settings, logger);
             return m;
         }
+    };
+
+    // Instances being mapped on the current thread. Re-entering one of them means the file
+    // contains a reference cycle, which would otherwise recurse until the stack overflows.
+    thread_local std::set<std::pair<const void*, uint32_t>> instances_in_progress;
+
+    class in_progress_guard {
+      public:
+        in_progress_guard(const void* m, uint32_t iden) : key_(m, iden) {
+            if (!instances_in_progress.insert(key_).second) {
+                throw ifcopenshell::exception("Cyclic reference encountered during geometry mapping");
+            }
+        }
+        ~in_progress_guard() {
+            instances_in_progress.erase(key_);
+        }
+        in_progress_guard(const in_progress_guard&) = delete;
+        in_progress_guard& operator=(const in_progress_guard&) = delete;
+
+      private:
+        std::pair<const void*, uint32_t> key_;
     };
 }
 
@@ -758,6 +780,7 @@ taxonomy::ptr mapping::map(const express::base& inst) {
             return it->second;
         }
     }
+    in_progress_guard in_progress(this, iden);
     taxonomy::ptr item = nullptr;
 
     // @todo we should check whether there is a notice performance impact on the large sequence
