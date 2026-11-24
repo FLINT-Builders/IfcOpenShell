@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 namespace {
 
@@ -85,6 +86,43 @@ std::string sidecarPath(const std::string& ifc_path) {
                            ? p.substr(0, dot)
                            : p;
     return stem + ".ifcview";
+}
+
+// Size of an open file. Leaves the file position at the end.
+bool fileSize(FILE* f, uint64_t& out) {
+    if (std::fseek(f, 0, SEEK_END) != 0) return false;
+    const long end = std::ftell(f);
+    if (end < 0) return false;
+    out = uint64_t(end);
+    return true;
+}
+
+// True when [base + offset, base + offset + size) lies inside a file of
+// file_size bytes. Written to not overflow on hostile offsets/sizes.
+bool rangeInFile(uint64_t file_size, uint64_t base, uint64_t offset, uint64_t size) {
+    if (base > file_size) return false;
+    const uint64_t avail = file_size - base;
+    return offset <= avail && size <= avail - offset;
+}
+
+bool allRangesEmpty(const std::vector<std::pair<uint64_t, uint64_t>>& ranges) {
+    return std::all_of(ranges.begin(), ranges.end(),
+                       [](const std::pair<uint64_t, uint64_t>& r) { return r.second == 0; });
+}
+
+// Sums the range sizes into `total`. False if any range leaves the file or
+// the sum overflows.
+bool rangesInFile(FILE* f, uint64_t base,
+                  const std::vector<std::pair<uint64_t, uint64_t>>& ranges, uint64_t& total) {
+    uint64_t file_size = 0;
+    if (!fileSize(f, file_size)) return false;
+    total = 0;
+    for (const auto& [off, size] : ranges) {
+        if (!rangeInFile(file_size, base, off, size)) return false;
+        if (size > std::numeric_limits<uint64_t>::max() - total) return false;
+        total += size;
+    }
+    return true;
 }
 
 }  // namespace
@@ -135,12 +173,16 @@ std::optional<StreamingSidecar> readSidecarMetadata(const std::string& ifc_path)
         return std::nullopt;
     };
 
+    uint64_t file_size = 0;
+    if (!fileSize(f, file_size) || std::fseek(f, 0, SEEK_SET) != 0) return fail();
+
     // Head (v16): 12-byte header + the compressed-geometry-section length. The
     // metadata blocks follow the geometry at SIDECAR_HEAD_BYTES + geom_bytes.
     uint8_t head[SIDECAR_HEAD_BYTES];
     if (std::fread(head, 1, SIDECAR_HEAD_BYTES, f) != SIDECAR_HEAD_BYTES) return fail();
     uint64_t geom_bytes = 0;
     if (!parseSidecarHead(head, SIDECAR_HEAD_BYTES, geom_bytes)) return fail();
+    if (!rangeInFile(file_size, SIDECAR_HEAD_BYTES, 0, geom_bytes)) return fail();
 
     StreamingSidecar out;
     out.file_path                = path;
@@ -157,6 +199,8 @@ std::optional<StreamingSidecar> readSidecarMetadata(const std::string& ifc_path)
         uint64_t comp = 0, rawn = 0;
         if (std::fread(&comp, 8, 1, f) != 1 || std::fread(&rawn, 8, 1, f) != 1) return false;
         const long here = std::ftell(f);
+        if (here < 0 || !rangeInFile(file_size, uint64_t(here), 0, comp)) return false;
+        if (!SidecarCompress::rawSizeAllowed(comp, rawn)) return false;
         std::vector<uint8_t> z(static_cast<size_t>(comp));
         if (comp && std::fread(z.data(), 1, z.size(), f) != z.size()) return false;
         raw.assign(size_t(rawn), 0);
@@ -189,9 +233,20 @@ bool readChunkGeometryCompressed(const std::string& ifc_path,
                                  std::uint64_t i_raw_size,
                                  std::vector<std::uint8_t>&  out_vbytes,
                                  std::vector<std::uint32_t>& out_idx) {
+    if (i_raw_size % sizeof(std::uint32_t) != 0) return false;
+    if (!SidecarCompress::rawSizeAllowed(v_comp_size, v_raw_size) ||
+        !SidecarCompress::rawSizeAllowed(i_comp_size, i_raw_size)) return false;
+
     const std::string path = sidecarPath(ifc_path);
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
+    uint64_t file_size = 0;
+    if (!fileSize(f, file_size) ||
+        !rangeInFile(file_size, geometry_section_offset, v_comp_off, v_comp_size) ||
+        !rangeInFile(file_size, geometry_section_offset, i_comp_off, i_comp_size)) {
+        std::fclose(f);
+        return false;
+    }
     auto readFrame = [&](std::uint64_t off, std::uint64_t comp, std::uint64_t raw,
                          std::uint8_t* dst) -> bool {
         if (raw == 0) return comp == 0;
@@ -220,7 +275,10 @@ bool readSidecarVertexChunk(const std::string& ifc_path,
     const std::string path = sidecarPath(ifc_path);
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
-    if (std::fseek(f, long(vertex_section_offset + chunk_byte_offset), SEEK_SET) != 0) {
+    uint64_t file_size = 0;
+    if (!fileSize(f, file_size) ||
+        !rangeInFile(file_size, vertex_section_offset, chunk_byte_offset, chunk_byte_size) ||
+        std::fseek(f, long(vertex_section_offset + chunk_byte_offset), SEEK_SET) != 0) {
         std::fclose(f);
         return false;
     }
@@ -236,10 +294,18 @@ bool readSidecarIndexChunk(const std::string& ifc_path,
                            uint64_t chunk_index_count,
                            std::vector<uint32_t>& out_indices) {
     if (chunk_index_count == 0) { out_indices.clear(); return true; }
+    constexpr uint64_t kMaxU32Count = std::numeric_limits<uint64_t>::max() / 4u;
+    if (chunk_first_index > kMaxU32Count || chunk_index_count > kMaxU32Count) return false;
 
     const std::string path = sidecarPath(ifc_path);
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
+    uint64_t file_size = 0;
+    if (!fileSize(f, file_size) ||
+        !rangeInFile(file_size, index_section_offset, chunk_first_index * 4u, chunk_index_count * 4u)) {
+        std::fclose(f);
+        return false;
+    }
     const uint64_t byte_offset = index_section_offset + chunk_first_index * 4u;
     if (std::fseek(f, long(byte_offset), SEEK_SET) != 0) {
         std::fclose(f);
@@ -308,18 +374,18 @@ bool readSidecarVertexRanges(const std::string& ifc_path,
                              uint64_t vertex_section_offset,
                              const std::vector<std::pair<uint64_t, uint64_t>>& ranges,
                              std::vector<uint8_t>& out_bytes) {
-    uint64_t total = 0;
-    for (const auto& r : ranges) total += r.second;
-    out_bytes.resize(size_t(total));
-    if (total == 0) return true;
-
-    // 64 KB max gap: on SSDs a small contiguous read is much cheaper
-    // than a seek + fresh read, even if some bytes are discarded.
-    auto plans = planSidecarReadRanges(vertex_section_offset, ranges, 64 * 1024);
+    if (allRangesEmpty(ranges)) { out_bytes.clear(); return true; }
 
     const std::string path = sidecarPath(ifc_path);
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
+    uint64_t total = 0;
+    if (!rangesInFile(f, vertex_section_offset, ranges, total)) { std::fclose(f); return false; }
+    out_bytes.resize(size_t(total));
+
+    // 64 KB max gap: on SSDs a small contiguous read is much cheaper
+    // than a seek + fresh read, even if some bytes are discarded.
+    auto plans = planSidecarReadRanges(vertex_section_offset, ranges, 64 * 1024);
 
     std::vector<uint8_t> scratch;
     for (const auto& p : plans) {
@@ -341,26 +407,29 @@ bool readSidecarIndexRanges(const std::string& ifc_path,
                             uint64_t index_section_offset,
                             const std::vector<std::pair<uint64_t, uint64_t>>& ranges,
                             std::vector<uint32_t>& out_indices) {
-    uint64_t total = 0;
-    for (const auto& r : ranges) total += r.second;
-    out_indices.resize(size_t(total));
-    if (total == 0) return true;
+    if (allRangesEmpty(ranges)) { out_indices.clear(); return true; }
 
     // Convert u32-range (first_u32, count_u32) to byte-range
     // (file_offset, byte_size). Then coalesce + read.
+    constexpr uint64_t kMaxU32Count = std::numeric_limits<uint64_t>::max() / 4u;
     std::vector<std::pair<uint64_t, uint64_t>> byte_ranges;
     byte_ranges.reserve(ranges.size());
     uint64_t out_byte_cursor = 0;
     for (const auto& [first_u32, count] : ranges) {
+        if (first_u32 > kMaxU32Count || count > kMaxU32Count) return false;
         // Store byte offsets relative to the index section.
         byte_ranges.emplace_back(first_u32 * 4u, count * 4u);
         out_byte_cursor += count * 4u;
     }
-    auto plans = planSidecarReadRanges(index_section_offset, byte_ranges, 64 * 1024);
 
     const std::string path = sidecarPath(ifc_path);
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return false;
+    uint64_t total_bytes = 0;
+    if (!rangesInFile(f, index_section_offset, byte_ranges, total_bytes)) { std::fclose(f); return false; }
+    out_indices.resize(size_t(total_bytes / 4u));
+
+    auto plans = planSidecarReadRanges(index_section_offset, byte_ranges, 64 * 1024);
 
     std::vector<uint8_t> scratch;
     uint8_t* out_bytes = reinterpret_cast<uint8_t*>(out_indices.data());

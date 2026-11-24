@@ -4049,8 +4049,22 @@ void webReadRangesAsync(
         std::uint64_t section_offset,
         const std::vector<std::pair<std::uint64_t, std::uint64_t>>& ranges,
         std::function<void(bool, std::vector<std::uint8_t>&&)> done) {
+    // Offsets and sizes come from the sidecar itself, so every range must lie
+    // inside the source before `out` is sized from them.
+    const double source_size = ifcvSourceSize(source_id);
+    const std::uint64_t file_size = source_size > 0.0 ? std::uint64_t(source_size) : 0;
     std::uint64_t total = 0;
-    for (const auto& rg : ranges) total += rg.second;
+    for (const auto& rg : ranges) {
+        if (rg.second == 0) continue;
+        const bool in_source = section_offset <= file_size
+            && rg.first <= file_size - section_offset
+            && rg.second <= file_size - section_offset - rg.first;
+        if (!in_source || rg.second > std::numeric_limits<std::size_t>::max() - total) {
+            if (done) done(false, {});
+            return;
+        }
+        total += rg.second;
+    }
 
     WebRangeRead r;
     r.source_id = source_id;
@@ -4192,9 +4206,12 @@ void ViewportCore::beginWebChunkLoad(std::uint32_t session_model_id, std::size_t
         // emscripten_get_now, not Stopwatch: this is web-only code and the
         // Stopwatch header is included further down the file than here.
         const double apply_t0 = emscripten_get_now();
-        std::vector<std::uint8_t>  vbytes(static_cast<std::size_t>(v_raw));
-        std::vector<std::uint32_t> idx(static_cast<std::size_t>(i_raw / sizeof(std::uint32_t)));
-        const bool ok = join->v_ok && join->i_ok
+        const bool sizes_ok = join->v_ok && join->i_ok
+            && SidecarCompress::rawSizeAllowed(join->vz.size(), v_raw)
+            && SidecarCompress::rawSizeAllowed(join->iz.size(), i_raw);
+        std::vector<std::uint8_t>  vbytes(sizes_ok ? static_cast<std::size_t>(v_raw) : 0);
+        std::vector<std::uint32_t> idx(sizes_ok ? static_cast<std::size_t>(i_raw / sizeof(std::uint32_t)) : 0);
+        const bool ok = sizes_ok
             && SidecarCompress::decompress(join->vz.data(), join->vz.size(),
                                            vbytes.data(), vbytes.size())
             && SidecarCompress::decompress(join->iz.data(), join->iz.size(),
@@ -4290,6 +4307,10 @@ void ViewportCore::loadSidecarMetadataWeb(int source_id, std::string source_labe
                     const std::uint64_t geometry_metadata_off = meta_off + 16;
                     if (double(geometry_metadata_off + geometry_metadata_comp + 16) > fsize) {
                         Log::warn() << "loadSidecarMetadataWeb: geometry metadata past EOF";
+                        return;
+                    }
+                    if (!SidecarCompress::rawSizeAllowed(geometry_metadata_comp, geometry_metadata_raw)) {
+                        Log::warn() << "loadSidecarMetadataWeb: geometry metadata size out of bounds";
                         return;
                     }
                     webReadRangesAsync(source_id, 0,
@@ -4397,6 +4418,11 @@ void ViewportCore::loadElementMetadataWeb(std::uint32_t session_model_id,
         return;
     }
     const std::uint64_t raw_size = m.element_metadata_raw_size;
+    if (!SidecarCompress::rawSizeAllowed(m.element_metadata_comp_size, raw_size)) {
+        Log::warn() << "loadElementMetadataWeb: element metadata size out of bounds";
+        if (done) done(false);
+        return;
+    }
     webReadRangesAsync(m.web_source_id, 0,
         {{m.element_metadata_comp_offset, m.element_metadata_comp_size}},
         [this, session_model_id, raw_size, done](bool ok, std::vector<std::uint8_t>&& cz) {

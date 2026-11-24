@@ -33,6 +33,16 @@
 
 namespace SidecarCompress {
 
+// Bounds on what one frame may claim to expand to. The raw-size fields in a
+// sidecar are untrusted, so loaders must pass them through rawSizeAllowed
+// before allocating the output buffer.
+constexpr std::uint64_t kMaxRawBytes  = std::uint64_t(256) << 20;
+constexpr std::uint64_t kMaxExpansion = 131072;
+
+// True when raw_size is at most kMaxRawBytes and at most kMaxExpansion times
+// comp_size.
+bool rawSizeAllowed(std::uint64_t comp_size, std::uint64_t raw_size);
+
 // Decompress a zstd frame in [src, src+src_size) into dst, which must have room
 // for exactly raw_size bytes. Returns false on any zstd error or if the frame
 // doesn't expand to exactly raw_size. Available on all platforms.

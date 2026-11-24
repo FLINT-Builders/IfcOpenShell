@@ -23,6 +23,13 @@
 
 namespace SidecarCompress {
 
+bool rawSizeAllowed(std::uint64_t comp_size, std::uint64_t raw_size) {
+    if (raw_size > kMaxRawBytes) return false;
+    // Past this, comp_size * kMaxExpansion exceeds kMaxRawBytes (and could overflow).
+    if (comp_size > kMaxRawBytes / kMaxExpansion) return true;
+    return raw_size <= comp_size * kMaxExpansion;
+}
+
 bool decompress(const std::uint8_t* src, std::size_t src_size,
                 std::uint8_t* dst, std::size_t raw_size) {
     if (raw_size == 0) return src_size == 0;  // empty in ↔ empty out
