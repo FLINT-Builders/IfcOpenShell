@@ -62,18 +62,23 @@ def get_classification(reference: ifcopenshell.entity_instance) -> ifcopenshell.
     """Get the IfcClassification that a classification reference belongs to
 
     :param reference: An IfcClassificationReference
-    :return: IfcClassification
+    :return: IfcClassification, or None if the ReferencedSource chain ends or
+        loops back on itself without reaching one
     """
-    if reference.is_a("IfcClassification"):
-        return reference
-    return get_classification(reference.ReferencedSource) if reference.ReferencedSource is not None else None
+    seen = set()
+    while reference is not None and not reference.is_a("IfcClassification"):
+        if reference.identity() in seen:
+            return None
+        seen.add(reference.identity())
+        reference = reference.ReferencedSource
+    return reference
 
 
 def get_inherited_references(reference: Optional[ifcopenshell.entity_instance]) -> list[ifcopenshell.entity_instance]:
     results = []
-    while True:
-        if not reference or reference.is_a("IfcClassification"):
-            break
+    seen = set()
+    while reference and not reference.is_a("IfcClassification") and reference.identity() not in seen:
+        seen.add(reference.identity())
         results.append(reference)
         reference = reference.ReferencedSource
     return results
