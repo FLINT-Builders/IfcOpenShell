@@ -1324,6 +1324,10 @@ class Drawing(bonsai.core.tool.Drawing):
                 command[0] = shutil.which(str(command[0])) or command[0]
                 subprocess.Popen([replacements.get(c, c) for c in command])
         else:
+            # Paths come from IFC document locations, and the OS open action runs executables and scripts.
+            if os.path.splitext(path)[1].lower() not in (".svg", ".pdf", ".ods", ".xls", ".xlsx"):
+                print(f"Refusing to open a file of this type: {path}")
+                return
             if platform.system() == "Darwin":
                 subprocess.call(("open", path))
             elif platform.system() == "Windows":

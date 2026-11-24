@@ -18,7 +18,6 @@
 
 import tempfile
 import uuid
-import webbrowser
 from math import atan, degrees, radians, tan
 from pathlib import Path
 
@@ -1534,8 +1533,7 @@ class OpenBcfReferenceLink(bpy.types.Operator):
 
     def execute(self, context):
         props = tool.Bcf.get_bcf_props()
-        webbrowser.open(props.topic_links[self.index].name)
-        return {"FINISHED"}
+        return bpy.ops.bim.open_uri("INVOKE_DEFAULT", uri=props.topic_links[self.index].name)
 
 
 class SelectBcfHeaderFile(bpy.types.Operator, ImportHelper):
@@ -1630,7 +1628,7 @@ class ExtractBcfFile(bpy.types.Operator):
         assert entity
         filepath = bcf.agnostic.topic.extract_file(topic, entity, bcfxml)
         assert isinstance(filepath, Path)
-        webbrowser.open(str(filepath.parent))
+        tool.Blender.open_file_or_folder(str(filepath.parent))
         return {"FINISHED"}
 
 

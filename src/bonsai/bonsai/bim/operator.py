@@ -94,14 +94,105 @@ class OpenUri(bpy.types.Operator):
     bl_idname = "bim.open_uri"
     bl_label = "Open URI"
     uri: bpy.props.StringProperty()
+    confirmed_path: bpy.props.StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    # URIs come from IFC and BCF data, and the OS open action runs executables, scripts and
+    # URL scheme handlers. Local files are limited to types that open in a viewer.
+    DOCUMENT_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".txt", ".docx"}
 
     @classmethod
     def description(cls, context, properties):
         return f"Open the URL in your Web Browser: '{properties.uri}'."
 
+    def invoke(self, context, event):
+        try:
+            target_type, target = self.get_target(self.uri)
+        except ValueError as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        if target_type == "FILE":
+            self.confirmed_path = target
+            return context.window_manager.invoke_confirm(
+                self, event, title="Open Local File", message=target, confirm_text="Open"
+            )
+        return self.execute(context)
+
     def execute(self, context):
-        webbrowser.open(self.uri)
+        try:
+            target_type, target = self.get_target(self.uri)
+        except ValueError:
+            return {"CANCELLED"}
+        if target_type == "URL":
+            webbrowser.open(target)
+            return {"FINISHED"}
+        if target != self.confirmed_path:
+            return {"CANCELLED"}
+        tool.Blender.open_file_or_folder(target)
         return {"FINISHED"}
+
+    @classmethod
+    def get_target(cls, uri: str) -> tuple[str, str]:
+        """Return ("URL", url) for a web link or ("FILE", path) for a local document.
+
+        Raises ValueError for anything else.
+        """
+        import os
+        import stat
+        from urllib.parse import unquote, urlsplit
+
+        if not uri or uri != uri.strip() or any(ord(c) < 32 or ord(c) == 127 for c in uri):
+            raise ValueError(f"Invalid link: {uri!r}")
+
+        if os.path.isabs(uri):
+            path = uri
+        else:
+            parts = urlsplit(uri)
+            scheme = parts.scheme.lower()
+            if scheme in ("http", "https"):
+                if not parts.hostname or "\\" in uri:
+                    raise ValueError(f"Invalid web address: {uri}")
+                return "URL", uri
+            if scheme != "file":
+                raise ValueError(f"Only http, https and file links can be opened: {uri}")
+            path = uri[len("file:") :]
+            if path.startswith("//"):
+                path = path[2:]
+                if path[:10].lower() == "localhost/":
+                    path = path[9:]
+                elif not path.startswith(("/", "\\")) and path[1:2] != ":":
+                    path = "//" + path
+            if path[:1] == "/" and path[2:3] == ":":
+                path = path[1:]
+            path = unquote(path)
+
+        path = os.path.normpath(path)
+        if any(ord(c) < 32 or ord(c) == 127 for c in path) or not os.path.isabs(path):
+            raise ValueError(f"Only absolute local file paths can be opened: {uri}")
+        if any(c in os.path.splitdrive(path)[1] for c in ':*?"<>|'):
+            raise ValueError(f"Invalid file path: {path}")
+        if os.path.splitext(path)[1].lower() not in cls.DOCUMENT_EXTENSIONS:
+            raise ValueError(f"Refusing to open a file of this type: {path}")
+
+        # Compared before any filesystem access, so a UNC path elsewhere is never contacted.
+        folders = [os.path.dirname(p) for p in (tool.Ifc.get_path(), tool.Bcf.get_path()) if p]
+        normalised_path = os.path.normcase(path)
+        for folder in folders:
+            folder = os.path.normcase(os.path.normpath(folder))
+            try:
+                if os.path.isabs(folder) and os.path.commonpath([normalised_path, folder]) == folder:
+                    break
+            except ValueError:
+                pass
+        else:
+            raise ValueError(f"Refusing to open a file outside the project folder: {path}")
+
+        try:
+            mode = os.lstat(path).st_mode
+        except OSError:
+            raise ValueError(f"File not found: {path}")
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"Not a regular file: {path}")
+        return "FILE", path
 
 
 class OpenPath(bpy.types.Operator):
