@@ -308,7 +308,7 @@ for mat_name in ifcstyle_material_names:
     if mat_name in bpy.data.materials:
         bpy.data.materials.remove(bpy.data.materials[mat_name], do_unlink=True)
 
-bpy.ops.wm.save_as_mainfile(filepath=r'{blendmetadata_path}')
+bpy.ops.wm.save_as_mainfile(filepath={repr(blendmetadata_path)})
 """
         import tempfile
 
