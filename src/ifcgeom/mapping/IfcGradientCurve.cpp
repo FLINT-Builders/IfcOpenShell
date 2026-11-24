@@ -29,6 +29,10 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcGradientCurve& inst) {
        logger_.warning("GEO", 261, "Expected IfcGradientCurve.BaseCurve to be IfcCompositeCurve", inst); // CT 4.1.7.1.1.2
 
 	auto segments = inst.Segments();
+	if (segments.empty()) {
+		logger_.error("GEO", 260, "IfcGradientCurve must have at least one segment", inst);
+		return nullptr;
+	}
 
 	taxonomy::piecewise_function::span_list spans;
 
