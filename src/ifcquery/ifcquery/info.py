@@ -83,7 +83,9 @@ def _walk_clipping(item) -> tuple:
     """Return (base_solid, [clipping_plane_dicts]) from a BooleanClippingResult chain."""
     planes = []
     current = item
-    while current.is_a("IfcBooleanClippingResult"):
+    visited = set()
+    while current.is_a("IfcBooleanClippingResult") and current not in visited:
+        visited.add(current)
         plane = _half_space_plane(current.SecondOperand)
         if plane:
             planes.append(plane)
