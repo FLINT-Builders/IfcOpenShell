@@ -905,8 +905,12 @@ def get_elements_by_style(
         ifc_file = style.file
     results = set()
     inverses = list(ifc_file.get_inverse(style))
+    processed: set[ifcopenshell.entity_instance] = set()
     while inverses:
         inverse = inverses.pop()
+        if inverse in processed:
+            continue
+        processed.add(inverse)
         inverse_class = inverse.is_a()
         # IfcPresentationStyleAssignment for < IFC4X3.
         # IfcFillAreaStyleHatching->IfcFillAreaStyle only for IfcCurveStyle.
