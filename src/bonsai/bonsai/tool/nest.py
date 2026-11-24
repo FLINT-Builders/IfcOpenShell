@@ -98,7 +98,8 @@ class Nest(bonsai.core.tool.Nest):
         queue = {element}
         while queue:
             element = queue.pop()
-            queue.update(new_components := set(ifcopenshell.util.element.get_components(element)))
+            # Only queue unseen components, so cyclic nests cannot loop forever.
+            queue.update(new_components := set(ifcopenshell.util.element.get_components(element)) - components)
             components.update(new_components)
         return components
 

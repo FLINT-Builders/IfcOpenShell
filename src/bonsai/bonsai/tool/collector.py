@@ -122,7 +122,10 @@ class Collector(bonsai.core.tool.Collector):
         elif element.is_a("IfcAnnotation") and (drawing_obj := cls.get_annotation_drawing_obj(element)):
             cls.link_collection_object_safe(tool.Blender.get_object_bim_props(drawing_obj).collection, obj)
         elif container := ifcopenshell.util.element.get_container(element):
-            while container.is_a("IfcSpace"):
+            # Cyclic aggregates in malformed files must not cause infinite loops.
+            visited = set()
+            while container.is_a("IfcSpace") and container not in visited:
+                visited.add(container)
                 container = ifcopenshell.util.element.get_aggregate(container)
             container_obj = tool.Ifc.get_object(container)
             if not (collection := tool.Blender.get_object_bim_props(container_obj).collection):

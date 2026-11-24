@@ -46,10 +46,13 @@ def _traverse_up(element: ifcopenshell.entity_instance) -> list[dict[str, Any]]:
     """Walk the hierarchy from element up to IfcProject."""
     chain = [_ref(element)]
     current = element
+    # Cyclic relationships in malformed files must not cause infinite loops.
+    visited = {element}
     while True:
         parent = ifcopenshell.util.element.get_parent(current)
-        if parent is None:
+        if parent is None or parent in visited:
             break
+        visited.add(parent)
         chain.append(_ref(parent))
         current = parent
     return chain

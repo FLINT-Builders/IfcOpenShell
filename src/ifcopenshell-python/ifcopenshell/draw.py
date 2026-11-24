@@ -136,9 +136,12 @@ def main(
             iterator_kwargs["exclude"] = settings.exclude_entities.split(",")
 
         def yield_parents(el):
-            yield el
-            if par := ifcopenshell.util.element.get_parent(el):
-                yield from yield_parents(par)
+            # Cyclic relationships in malformed files must not cause infinite recursion.
+            visited = set()
+            while el is not None and el not in visited:
+                visited.add(el)
+                yield el
+                el = ifcopenshell.util.element.get_parent(el)
 
         def has_selected_parent(el):
             return any(settings.storey_filter in (x.Name or x.GlobalId) for x in yield_parents(el))

@@ -118,10 +118,13 @@ class Aggregate(bonsai.core.tool.Aggregate):
         """Get elements aggregates recursively, resulting set includes `element`."""
         aggregates: list[ifcopenshell.entity_instance] = list()
         queue = {element}
+        # Cyclic aggregates in malformed files must not cause infinite loops.
+        visited = {element}
         while queue:
             element = queue.pop()
             aggregate = ifcopenshell.util.element.get_aggregate(element)
-            if aggregate:
+            if aggregate and aggregate not in visited:
+                visited.add(aggregate)
                 queue.update({aggregate})
             if ifcopenshell.util.element.get_parts(element):
                 aggregates.append(element)
@@ -134,7 +137,8 @@ class Aggregate(bonsai.core.tool.Aggregate):
         queue = {element}
         while queue:
             element = queue.pop()
-            queue.update(new_parts := set(ifcopenshell.util.element.get_parts(element)))
+            # Only queue unseen parts, so cyclic aggregates cannot loop forever.
+            queue.update(new_parts := set(ifcopenshell.util.element.get_parts(element)) - parts)
             parts.update(new_parts)
         return parts
 
