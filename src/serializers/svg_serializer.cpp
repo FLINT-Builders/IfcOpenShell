@@ -2738,21 +2738,19 @@ namespace {
 	std::string nameElement_(const std::vector<std::pair<std::string, std::string> >& attrs) {
 		std::ostringstream oss;
 for (auto& a : attrs) {
-	// @todo while we're at it might as well implement escaping
-	oss << a.first << "=\"" << a.second << "\" ";
+	auto v = a.second;
+	ifcopenshell::escape_xml(v);
+	oss << a.first << "=\"" << v << "\" ";
 }
 return oss.str();
 	}
 }
 
 std::string svg_serializer::nameElement(express::base storey, const ifcopenshell::geom::element* elem) {
-	auto n = elem->name();
-	ifcopenshell::escape_xml(n);
-
 	return nameElement_({
 		{"id", with_section_heights_from_storey_ ? object_id(storey, elem) : ifcopenshell::geom::geometry_serializer::object_id(elem)},
 		{"class", elem->type()},
-		{namespace_prefix_ + "name", n},
+		{namespace_prefix_ + "name", elem->name()},
 		{namespace_prefix_ + "guid", elem->guid()}
 		});
 }
@@ -2779,7 +2777,6 @@ std::string svg_serializer::nameElement(express::base elem_) {
 	std::string ifc_name;
 	if (!elem.get("Name").isNull()) {
 		ifc_name = (std::string) elem.get("Name");
-		ifcopenshell::escape_xml(ifc_name);
 	}
 
 	return nameElement_({
