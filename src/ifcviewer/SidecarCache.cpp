@@ -300,6 +300,15 @@ std::optional<SidecarData> readSidecar(const std::string& ifc_path) {
     if (!f) return std::nullopt;
     auto fail = [&]() -> std::optional<SidecarData> { fclose(f); return std::nullopt; };
 
+    if (fseek(f, 0, SEEK_END) != 0) return fail();
+    const long file_end = ftell(f);
+    if (file_end < 0 || fseek(f, 0, SEEK_SET) != 0) return fail();
+    // Bytes from the current position to EOF; a length field may not exceed it.
+    auto remaining = [&]() -> std::uint64_t {
+        const long here = ftell(f);
+        return (here < 0 || here > file_end) ? 0 : std::uint64_t(file_end - here);
+    };
+
     SidecarHeader hdr;
     if (fread(&hdr, sizeof(hdr), 1, f) != 1) return fail();
     if (hdr.magic != SIDECAR_MAGIC || hdr.version != SIDECAR_VERSION ||
@@ -312,12 +321,14 @@ std::optional<SidecarData> readSidecar(const std::string& ifc_path) {
 
     std::uint64_t geom_bytes = 0;
     if (!rdU64(geom_bytes)) return fail();
+    if (geom_bytes > remaining()) return fail();
     std::vector<std::uint8_t> geom(static_cast<std::size_t>(geom_bytes));
     if (geom_bytes && !read_bytes(geom.data(), geom.size())) return fail();
 
     auto readBlock = [&](std::vector<std::uint8_t>& out) -> bool {
         std::uint64_t comp = 0, raw = 0;
         if (!rdU64(comp) || !rdU64(raw)) return false;
+        if (comp > remaining() || !SidecarCompress::rawSizeAllowed(comp, raw)) return false;
         std::vector<std::uint8_t> z(static_cast<std::size_t>(comp));
         if (comp && !read_bytes(z.data(), z.size())) return false;
         out.assign(std::size_t(raw), 0);
@@ -344,6 +355,26 @@ std::optional<SidecarData> readSidecar(const std::string& ifc_path) {
     data.string_table.resize(stbl_len);
     if (stbl_len && !dr.take(data.string_table.data(), stbl_len)) return std::nullopt;
 
+    // Validate every chunk frame before sizing anything from the TOC. The baker
+    // writes frames back to back, so their compressed sizes sum to at most the
+    // geometry section; geometry bytes exist only inside chunks, so the
+    // whole-model arrays can't legitimately be larger than the chunks' raw totals.
+    auto inGeom = [&](std::uint64_t off, std::uint64_t size) {
+        return off <= geom.size() && size <= geom.size() - off;
+    };
+    std::uint64_t comp_total = 0, v_raw_total = 0, i_raw_total = 0;
+    for (const auto& sidecar_chunk : data.chunks) {
+        if (!inGeom(sidecar_chunk.v_comp_off, sidecar_chunk.v_comp_size) ||
+            !inGeom(sidecar_chunk.i_comp_off, sidecar_chunk.i_comp_size) ||
+            !SidecarCompress::rawSizeAllowed(sidecar_chunk.v_comp_size, sidecar_chunk.v_raw_size) ||
+            !SidecarCompress::rawSizeAllowed(sidecar_chunk.i_comp_size, sidecar_chunk.i_raw_size))
+            return std::nullopt;
+        comp_total += sidecar_chunk.v_comp_size + sidecar_chunk.i_comp_size;
+        if (comp_total > geom.size()) return std::nullopt;
+        v_raw_total += sidecar_chunk.v_raw_size;
+        i_raw_total += sidecar_chunk.i_raw_size;
+    }
+
     // Reconstruct the whole-model vertex/index arrays from the per-chunk blobs.
     std::size_t vsize = 0, isize = 0;
     for (const auto& mesh_info : data.meshes) {
@@ -358,11 +389,11 @@ std::optional<SidecarData> readSidecar(const std::string& ifc_path) {
                 mesh_info.lod1_ebo_byte_offset / sizeof(std::uint32_t) + mesh_info.lod1_index_count);
         }
     }
+    if (vsize > v_raw_total || std::uint64_t(isize) * sizeof(std::uint32_t) > i_raw_total)
+        return std::nullopt;
     data.vertices.assign(vsize, 0);
     data.indices.assign(isize, 0);
     for (const auto& sidecar_chunk : data.chunks) {
-        if (sidecar_chunk.v_comp_off + sidecar_chunk.v_comp_size > geom.size() ||
-            sidecar_chunk.i_comp_off + sidecar_chunk.i_comp_size > geom.size()) return std::nullopt;
         std::vector<std::uint8_t> vraw(static_cast<std::size_t>(sidecar_chunk.v_raw_size));
         std::vector<std::uint8_t> iraw(static_cast<std::size_t>(sidecar_chunk.i_raw_size));
         if (!SidecarCompress::decompress(
