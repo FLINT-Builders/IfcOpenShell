@@ -728,23 +728,34 @@ class Ifc5DPdfWriter(Ifc5Dwriter):
             )
             shutil.copy(typst_template_file_path, temp_dir)
 
+            # IFC values are passed as sys.inputs strings so Typst never parses them as source.
+            sys_inputs = {
+                "schedule_path": csv_file_name,
+                "title": str(self.file.by_type("IfcProject")[0].Name),
+                "schedule_name": cost_schedule_name,
+                "schedule_description": self.cost_schedule.Description or "",
+                "schedule_type": schedule_type,
+                "project_currency": str(project_currency),
+            }
+
             # generate typst main file content and write it
             typst_main_content = ""
             typst_main_content += '#import "{}": *\n'.format("typst_template_ifc_cost_schedule.typ")
             typst_main_content += "#show: project.with(\n"
-            typst_main_content += '  schedule_path: "{}",\n'.format(csv_file_name)
-            typst_main_content += '  title: "{}",\n'.format(self.file.by_type("IfcProject")[0].Name)
-            typst_main_content += '  schedule_name: "{}",\n'.format(cost_schedule_name)
-            typst_main_content += '  schedule_description: "{}",\n'.format(self.cost_schedule.Description or "")
-            typst_main_content += '  schedule_type: "{}",\n'.format(schedule_type)
-            typst_main_content += '  project_currency: "{}",\n'.format(project_currency)
+            for input_name in sys_inputs:
+                typst_main_content += f'  {input_name}: sys.inputs.at("{input_name}"),\n'
             for option_name, default_value in DEFAULT_OPTIONS.items():
                 value = self.options.get(option_name, default_value)
-                if isinstance(value, bool):
-                    formatted_value = str(value).lower()
+                if isinstance(default_value, bool):
+                    if not isinstance(value, bool):
+                        raise ValueError(f"PDF option '{option_name}' must be a bool, got {value!r}.")
+                    sys_inputs[option_name] = "true" if value else "false"
+                    typst_main_content += f'  {option_name}: sys.inputs.at("{option_name}") == "true",\n'
                 else:
-                    formatted_value = str(value)
-                typst_main_content += f"  {option_name}: {formatted_value},\n"
+                    if not isinstance(value, int) or isinstance(value, bool):
+                        raise ValueError(f"PDF option '{option_name}' must be an int, got {value!r}.")
+                    sys_inputs[option_name] = str(value)
+                    typst_main_content += f'  {option_name}: int(sys.inputs.at("{option_name}")),\n'
 
             typst_main_content += ")"
             typst_main_path = os.path.join(temp_dir, "main.typ")
@@ -752,7 +763,7 @@ class Ifc5DPdfWriter(Ifc5Dwriter):
                 typ_file.write(typst_main_content)
 
             # compile pdf file and write it
-            pdf_bytes = typst.compile(typst_main_path)
+            pdf_bytes = typst.compile(typst_main_path, root=temp_dir, sys_inputs=sys_inputs)
             with open(self.output, "wb") as f:
                 f.write(pdf_bytes)
 
