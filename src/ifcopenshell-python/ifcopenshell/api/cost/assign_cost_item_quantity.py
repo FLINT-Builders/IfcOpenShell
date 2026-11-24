@@ -134,6 +134,8 @@ class Usecase:
         self.prop_name = prop_name
         if self.prop_name or formula:
             self.quantities = set(cost_item.CostQuantities or [])
+        if formula:
+            tree = parse_formula(formula)
         for product in products:
             if product.is_a("IfcSpatialElement") and not product.is_a("IfcSpace"):
                 continue
@@ -143,7 +145,6 @@ class Usecase:
                 relating_control=cost_item,
             )
             if formula:
-                tree = ast.parse(formula, mode="eval")
                 collector = VariableExtractor()
                 collector.visit(tree)
                 variables = collector.variables
@@ -250,8 +251,38 @@ OPERATORS = {
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
     ast.Pow: operator.pow,
+}
+
+UNARY_OPERATORS = {
+    ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
+
+# Formulas may come from untrusted sources (e.g. imported CSVs), so they are
+# bounded to keep evaluation from exhausting CPU or memory.
+MAX_FORMULA_LENGTH = 1024
+MAX_FORMULA_DEPTH = 32
+MAX_POWER_EXPONENT = 10
+MAX_POWER_BASE = 1_000_000
+
+
+def parse_formula(formula: str) -> ast.Expression:
+    if len(formula) > MAX_FORMULA_LENGTH:
+        raise ValueError(f"Formula is longer than {MAX_FORMULA_LENGTH} characters")
+    tree = ast.parse(formula, mode="eval")
+    stack = [(tree, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > MAX_FORMULA_DEPTH:
+            raise ValueError(f"Formula is nested deeper than {MAX_FORMULA_DEPTH} levels")
+        stack.extend((child, depth + 1) for child in ast.iter_child_nodes(node))
+    return tree
+
+
+def check_number(value: Any) -> float:
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"Formula operand is not a number: {value!r}")
+    return value
 
 
 def build_full_name(node: ast.expr) -> str:
@@ -283,9 +314,21 @@ class FormulaEvaluator(ast.NodeVisitor):
         self.values = values
 
     def visit_BinOp(self, node: ast.BinOp) -> float:
-        left = self.visit(node.left)
-        right = self.visit(node.right)
-        return OPERATORS[type(node.op)](left, right)  # ty: ignore[too-many-positional-arguments]
+        if type(node.op) not in OPERATORS:
+            raise ValueError(f"Operation not permitted: {type(node.op).__name__}")
+        left = check_number(self.visit(node.left))
+        right = check_number(self.visit(node.right))
+        if isinstance(node.op, ast.Pow):
+            if abs(right) > MAX_POWER_EXPONENT:
+                raise ValueError(f"Exponent {right!r} exceeds the permitted magnitude of {MAX_POWER_EXPONENT}")
+            if abs(left) > MAX_POWER_BASE:
+                raise ValueError(f"Base {left!r} exceeds the permitted magnitude of {MAX_POWER_BASE}")
+        return check_number(OPERATORS[type(node.op)](left, right))  # ty: ignore[too-many-positional-arguments]
+
+    def visit_UnaryOp(self, node: ast.UnaryOp) -> float:
+        if type(node.op) not in UNARY_OPERATORS:
+            raise ValueError(f"Operation not permitted: {type(node.op).__name__}")
+        return UNARY_OPERATORS[type(node.op)](check_number(self.visit(node.operand)))
 
     def visit_Name(self, node: ast.Name) -> float | None:
         return self.values[node.id]
