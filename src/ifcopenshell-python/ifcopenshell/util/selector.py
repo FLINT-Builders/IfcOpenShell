@@ -1191,11 +1191,14 @@ class FacetTransformer(lark.Transformer):
             return tree
 
         tree = []
+        visited = set()
 
-        while container:
+        # Cyclic aggregates in malformed files must not cause infinite loops.
+        while container and container not in visited:
             if container.is_a("IfcProject"):
                 break
             tree.append(container)
+            visited.add(container)
             container = ifcopenshell.util.element.get_aggregate(container)
 
         tree_copy = tree.copy()

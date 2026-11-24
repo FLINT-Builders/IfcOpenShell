@@ -18,7 +18,7 @@
 
 import functools
 from collections import namedtuple
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from typing import Any, Literal, Optional, Union, overload
 
 import ifcopenshell
@@ -1090,16 +1090,25 @@ def get_container(
                 return container
             if container.is_a(ifc_class):
                 return container
-    elif contained_in_structure := getattr(element, "ContainedInStructure", None):
-        container = contained_in_structure[0].RelatingStructure
-        if not ifc_class:
-            return container
-        while container:
-            if container.is_a(ifc_class):
+        return None
+
+    # Cyclic relationships in malformed files must not cause infinite loops.
+    visited = set()
+    while element is not None and element not in visited:
+        visited.add(element)
+        if contained_in_structure := getattr(element, "ContainedInStructure", None):
+            container = contained_in_structure[0].RelatingStructure
+            if not ifc_class:
                 return container
-            container = get_aggregate(container)
-    elif parent := get_parent(element):
-        return get_container(parent, should_get_direct, ifc_class)
+            visited_containers = set()
+            while container is not None and container not in visited_containers:
+                if container.is_a(ifc_class):
+                    return container
+                visited_containers.add(container)
+                container = get_aggregate(container)
+            return None
+        element = get_parent(element)
+    return None
 
 
 def get_referenced_structures(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
@@ -1160,32 +1169,28 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+
+    # Only queue unseen elements, so cyclic relationships cannot loop forever.
+    def add(related: Iterable[ifcopenshell.entity_instance]) -> None:
+        for obj in related:
+            if obj not in results:
+                results.add(obj)
+                queue.append(obj)
+
     while queue:
         element = queue.pop()
         for rel in getattr(element, "ContainsElements", []):
-            related = rel.RelatedElements
-            queue.extend(related)
-            results.update(related)
+            add(rel.RelatedElements)
         for rel in getattr(element, "IsDecomposedBy", []):
-            related = rel.RelatedObjects
-            queue.extend(related)
-            results.update(related)
+            add(rel.RelatedObjects)
         for rel in getattr(element, "HasOpenings", []):
-            related = rel.RelatedOpeningElement
-            queue.append(related)
-            results.add(related)
+            add((rel.RelatedOpeningElement,))
         for rel in getattr(element, "HasFillings", []):
-            related = rel.RelatedBuildingElement
-            queue.append(related)
-            results.add(related)
+            add((rel.RelatedBuildingElement,))
         for rel in getattr(element, "IsNestedBy", []):
-            related = rel.RelatedObjects
-            queue.extend(related)
-            results.update(related)
+            add(rel.RelatedObjects)
         for rel in getattr(element, "HasSurfaceFeatures", []):
-            related = rel.RelatedSurfaceFeatures
-            queue.extend(related)
-            results.update(related)
+            add(rel.RelatedSurfaceFeatures)
         if not is_recursive:
             break
     return results
@@ -1208,12 +1213,16 @@ def get_grouped_by(
     """
     queue = [element]
     results = []
+    seen = set()
     while queue:
         element = queue.pop()
         for rel in getattr(element, "IsGroupedBy", []):
-            related_objects = rel.RelatedObjects
-            queue.extend(related_objects)
-            results.extend(related_objects)
+            for obj in rel.RelatedObjects:
+                # Cyclic group assignments must not cause infinite loops.
+                if obj not in seen:
+                    seen.add(obj)
+                    results.append(obj)
+                    queue.append(obj)
         if not is_recursive:
             break
     return results
@@ -1303,9 +1312,12 @@ def get_parent(
     if not ifc_class:
         return parent
 
-    while parent:
+    # Cyclic relationships in malformed files must not cause infinite loops.
+    visited = {element}
+    while parent is not None and parent not in visited:
         if parent.is_a(ifc_class):
             return parent
+        visited.add(parent)
         parent = get_parent(parent)
 
     return None
@@ -1937,11 +1949,12 @@ def get_openings(element: ifcopenshell.entity_instance) -> Generator[ifcopenshel
     :param element: IfcElement.
     :return: Generator of IfcRelVoidsElements.
     """
-    for element_rel in getattr(element, "HasOpenings", ()):
-        yield element_rel
-
-    if aggregate := get_aggregate(element):
-        yield from get_openings(aggregate)
+    # Cyclic aggregates in malformed files must not cause infinite recursion.
+    visited = set()
+    while element is not None and element not in visited:
+        visited.add(element)
+        yield from getattr(element, "HasOpenings", ())
+        element = get_aggregate(element)
 
 
 def has_openings(element: ifcopenshell.entity_instance) -> bool:
