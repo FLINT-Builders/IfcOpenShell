@@ -94,6 +94,7 @@ SETTING = Literal[
     "element-hierarchy",
     "enable-layerset-slicing",
     "force-space-transparency",
+    "function-step-max-count",
     "function-step-param",
     "function-step-type",
     "generate-uvs",
