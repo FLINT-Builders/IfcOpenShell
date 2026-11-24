@@ -625,8 +625,14 @@ if(BUILD_IFCOPENSHELL_PARSE_TESTS)
     add_subdirectory(../src/ifcparse/tests ifcparse/tests)
 endif()
 
-if(BUILD_EXAMPLES OR BUILD_BONSAIVIEWER)
+if(BUILD_EXAMPLES OR BUILD_BONSAIVIEWER OR BUILD_IFCOPENSHELL_PARSE_TESTS)
     add_subdirectory(../src/helpers helpers)
+endif()
+
+# Cycle-regression tests for the helper library. Registered with the parse
+# tests so Catch2 is already available; they do not change helper code.
+if(BUILD_IFCOPENSHELL_PARSE_TESTS)
+    add_subdirectory(../src/helpers/tests helpers/tests)
 endif()
 
 if(BUILD_IFCPARSE_EXPERIMENTAL_WRAPPER)
