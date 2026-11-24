@@ -119,8 +119,7 @@ async def save_metadata_for_documents_post(request: Request) -> list:
 @router.post("/user/1.0/upload-part/{part_id}", tags=[""])
 async def upload_part(part_id: str, request: Request, current_user: User = Depends(get_current_active_user)):
 
-    # file_name = doc_db.safe_path(part_id)
-    file_name = part_id
+    file_name = doc_db.safe_path(part_id)
 
     # see if the user really has the part-node in the database, before receiving upload of this part
     # and get the document_id of the part
@@ -129,20 +128,18 @@ async def upload_part(part_id: str, request: Request, current_user: User = Depen
     request_body = await request.body()
 
     if document:
+        # use document_id instead as dir_name
+        path = doc_db.child_path("./data/document_parts", doc_db.safe_path(document.document_id))
+        part_path = doc_db.child_path(path, file_name)
+
         # try to receive the uploaded part
         try:
             print("File contents: ", request_body)
 
-            # use document_id instead as dir_name
-            # dir_name = doc_db.safe_path(document.document_id)
-            dir_name = document.document_id
-
-            path = "./data/document_parts/" + dir_name + "/"
-
             if not os.path.exists(path):
                 os.makedirs(path)
 
-            with open(path + file_name, "wb") as f:
+            with open(part_path, "wb") as f:
                 f.write(request_body)
 
         except Exception:

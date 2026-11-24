@@ -201,6 +201,21 @@ class DOCDB(MyDB):
                     # this upload is a new version of an existing document.
                     # When not present, we create a new uuid as new document_id.
                     file.document_id = doc_db.new_uuid()
+                else:
+                    file.document_id = str(file.document_id)
+                    existing_document = tx.run(
+                        """
+                        MATCH (u:User)-[r1:HAS_ACTIONS_ON]->(p:Project)-[r2:CONTAINS]->(d:Document)
+                        WHERE u.username = $username
+                        AND d.document_id = $document_id
+                        RETURN d.document_id AS document_id
+                        LIMIT 1
+                        """,
+                        username=current_user.username,
+                        document_id=file.document_id,
+                    ).single()
+                    if existing_document is None:
+                        raise HTTPException(status_code=404, detail="Document not found.")
 
                 if file.file_name.lower().endswith(tuple(file_types)):
                     file_ending = file.file_name.split(".")[-1].lower()

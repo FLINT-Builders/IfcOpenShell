@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import jsonpickle
 import pytz
 from dateutil import parser
+from fastapi import HTTPException
 from models.request import UserInDB
 from neo4j import GraphDatabase
 from security.secrets import get_secrets
@@ -48,8 +49,15 @@ class MyDB:
 
     @staticmethod
     def safe_path(path_name):
-        safe_path_name = "".join(x for x in path_name if x.isalnum() or "-")
+        safe_path_name = "".join(x for x in path_name if x.isalnum() or x == "-")
         return safe_path_name
+
+    @staticmethod
+    def child_path(directory, name):
+        path = os.path.join(directory, name)
+        if os.path.dirname(os.path.realpath(path)) != os.path.realpath(directory):
+            raise HTTPException(status_code=400, detail="Invalid path.")
+        return path
 
     @staticmethod
     def debug(endpoint: str, request, response):

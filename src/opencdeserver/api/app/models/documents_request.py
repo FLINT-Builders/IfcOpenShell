@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field, constr
 
@@ -20,7 +21,7 @@ class FileToUpload(BaseModel):
         description="This is a client provided id to differentiate between multiple files that are being uploaded in "
         "the same session"
     )
-    document_id: Optional[constr(min_length=1)] = Field(
+    document_id: Optional[UUID] = Field(
         description="When present, indicates that this upload is a new version of an existing document"
     )
 

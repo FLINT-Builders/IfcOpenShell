@@ -218,8 +218,7 @@ def upload_instructions(
 @router.post("/documents/1.0/upload-part/{part_id}", tags=[""])
 async def upload_part(part_id: str, request: Request, current_user: User = Depends(get_current_active_user)):
 
-    # file_name = doc_db.safe_path(part_id)
-    file_name = part_id
+    file_name = doc_db.safe_path(part_id)
 
     # see if the user really has the part-node in the database, before receiving upload of this part
     # and get the document_id of the part
@@ -228,20 +227,18 @@ async def upload_part(part_id: str, request: Request, current_user: User = Depen
     request_body = await request.body()
 
     if document:
+        # use document_id instead as dir_name
+        path = doc_db.child_path("./data/document_parts", doc_db.safe_path(document.document_id))
+        part_path = doc_db.child_path(path, file_name)
+
         # try to receive the uploaded part
         try:
             print("File contents: ", request_body)
 
-            # use document_id instead as dir_name
-            # dir_name = doc_db.safe_path(document.document_id)
-            dir_name = document.document_id
-
-            path = "./data/document_parts/" + dir_name + "/"
-
             if not os.path.exists(path):
                 os.makedirs(path)
 
-            with open(path + file_name, "wb") as f:
+            with open(part_path, "wb") as f:
                 f.write(request_body)
 
         except Exception:
@@ -294,40 +291,37 @@ def upload_completion(
     # check if all parts really are uploaded to document_id-dir
     document_name = doc_db.safe_path(document.document_id)
 
-    path = "./data/document_parts/" + document_name + "/"
+    path = doc_db.child_path("./data/document_parts", document_name)
+    part_paths = [doc_db.child_path(path, doc_db.safe_path(part)) for part in parts]
+    temp_doc_file_name = doc_db.child_path(path, document_name)
+    new_doc_path_name = doc_db.child_path("./data/documents", document.file_description.name)
 
-    for part in parts:
-        part = doc_db.safe_path(part)
-        print("Checking for part " + part + " in dir " + path)
+    for part_path in part_paths:
+        print("Checking for part " + part_path)
 
-        if not os.path.isfile(path + part):
-            print(part + " is not in dir " + path)
+        if not os.path.isfile(part_path):
+            print(part_path + " is not in dir " + path)
             raise HTTPException(status_code=400, detail="All parts not in dir.")
         else:
-            print(part + " is in dir " + path)
+            print(part_path + " is in dir " + path)
 
     # merge parts to a new temporary document
     temp_doc_path = path
-    temp_doc_file_name = path + document_name
     if not os.path.exists(temp_doc_path):
         os.makedirs(temp_doc_path)
 
-    new_doc_path = "./data/documents/"
-    new_doc_path_name = new_doc_path + document.file_description.name
-
     # Read parts and write to temp doc.
     with open(temp_doc_file_name, "ab") as temp_doc:
-        for part in parts:
-            part = doc_db.safe_path(part)
-            with open(temp_doc_path + part, "rb") as part_doc:
+        for part_path in part_paths:
+            with open(part_path, "rb") as part_doc:
                 temp_doc.write(part_doc.read())
 
     # move document to new location in documents dir
     os.rename(temp_doc_file_name, new_doc_path_name)
 
     # remove temp parts
-    for part in parts:
-        os.remove(temp_doc_path + part)
+    for part_path in part_paths:
+        os.remove(part_path)
 
     # remove temp path
     os.rmdir(temp_doc_path)
@@ -362,7 +356,7 @@ def upload_cancellation(upload_session: str, current_user: User = Depends(get_cu
 
         # clean temp dir
         document_name = doc_db.safe_path(document.document_id)
-        path = "./data/document_parts/" + document_name + "/"
+        path = doc_db.child_path("./data/document_parts", document_name)
         shutil.rmtree(path)
 
     except Exception as e:
