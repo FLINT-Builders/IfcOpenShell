@@ -389,7 +389,12 @@ class IfcImporter:
             while True:
                 results.add(spatial_element)
                 spatial_element = ifcopenshell.util.element.get_aggregate(spatial_element)
-                if not spatial_element or spatial_element.is_a() in ("IfcProject", "IfcProjectLibrary"):
+                # Stopping at already collected elements also guards against cyclic aggregates.
+                if (
+                    not spatial_element
+                    or spatial_element.is_a() in ("IfcProject", "IfcProjectLibrary")
+                    or spatial_element in results
+                ):
                     break
         return results
 

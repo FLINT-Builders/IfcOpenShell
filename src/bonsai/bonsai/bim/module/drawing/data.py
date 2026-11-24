@@ -450,48 +450,28 @@ class DecoratorData:
                         return getattr(container, attr_name)
 
             elif key.startswith("space."):
-                container = ifcopenshell.util.element.get_container(element)
-                current = container
-                while current:
-                    if current.is_a("IfcSpace"):
-                        attr_name = key.split(".", 1)[1]
-                        if hasattr(current, attr_name):
-                            return getattr(current, attr_name)
-                        break
-                    current = ifcopenshell.util.element.get_aggregate(current)
+                space = ifcopenshell.util.element.get_container(element, ifc_class="IfcSpace")
+                attr_name = key.split(".", 1)[1]
+                if space and hasattr(space, attr_name):
+                    return getattr(space, attr_name)
 
             elif key.startswith("storey."):
-                container = ifcopenshell.util.element.get_container(element)
-                current = container
-                while current:
-                    if current.is_a("IfcBuildingStorey"):
-                        attr_name = key.split(".", 1)[1]
-                        if hasattr(current, attr_name):
-                            return getattr(current, attr_name)
-                        break
-                    current = ifcopenshell.util.element.get_aggregate(current)
+                storey = ifcopenshell.util.element.get_container(element, ifc_class="IfcBuildingStorey")
+                attr_name = key.split(".", 1)[1]
+                if storey and hasattr(storey, attr_name):
+                    return getattr(storey, attr_name)
 
             elif key.startswith("building."):
-                container = ifcopenshell.util.element.get_container(element)
-                current = container
-                while current:
-                    if current.is_a("IfcBuilding"):
-                        attr_name = key.split(".", 1)[1]
-                        if hasattr(current, attr_name):
-                            return getattr(current, attr_name)
-                        break
-                    current = ifcopenshell.util.element.get_aggregate(current)
+                building = ifcopenshell.util.element.get_container(element, ifc_class="IfcBuilding")
+                attr_name = key.split(".", 1)[1]
+                if building and hasattr(building, attr_name):
+                    return getattr(building, attr_name)
 
             elif key.startswith("site."):
-                container = ifcopenshell.util.element.get_container(element)
-                current = container
-                while current:
-                    if current.is_a("IfcSite"):
-                        attr_name = key.split(".", 1)[1]
-                        if hasattr(current, attr_name):
-                            return getattr(current, attr_name)
-                        break
-                    current = ifcopenshell.util.element.get_aggregate(current)
+                site = ifcopenshell.util.element.get_container(element, ifc_class="IfcSite")
+                attr_name = key.split(".", 1)[1]
+                if site and hasattr(site, attr_name):
+                    return getattr(site, attr_name)
 
             # Parent keys
             elif key.startswith("parent."):
@@ -1129,43 +1109,19 @@ class ElementValuesData:
         if container and hasattr(container, "Name") and container.Name:
             keys.append(("container.Name", f"Container: {container.Name}"))
 
-        space = None
-        current = container
-        while current:
-            if current.is_a("IfcSpace"):
-                space = current
-                break
-            current = ifcopenshell.util.element.get_aggregate(current)
+        space = ifcopenshell.util.element.get_container(element, ifc_class="IfcSpace")
         if space and hasattr(space, "Name") and space.Name:
             keys.append(("space.Name", f"Space: {space.Name}"))
 
-        storey = None
-        current = container
-        while current:
-            if current.is_a("IfcBuildingStorey"):
-                storey = current
-                break
-            current = ifcopenshell.util.element.get_aggregate(current)
+        storey = ifcopenshell.util.element.get_container(element, ifc_class="IfcBuildingStorey")
         if storey and hasattr(storey, "Name") and storey.Name:
             keys.append(("storey.Name", f"Storey: {storey.Name}"))
 
-        building = None
-        current = container
-        while current:
-            if current.is_a("IfcBuilding"):
-                building = current
-                break
-            current = ifcopenshell.util.element.get_aggregate(current)
+        building = ifcopenshell.util.element.get_container(element, ifc_class="IfcBuilding")
         if building and hasattr(building, "Name") and building.Name:
             keys.append(("building.Name", f"Building: {building.Name}"))
 
-        site = None
-        current = container
-        while current:
-            if current.is_a("IfcSite"):
-                site = current
-                break
-            current = ifcopenshell.util.element.get_aggregate(current)
+        site = ifcopenshell.util.element.get_container(element, ifc_class="IfcSite")
         if site and hasattr(site, "Name") and site.Name:
             keys.append(("site.Name", f"Site: {site.Name}"))
 

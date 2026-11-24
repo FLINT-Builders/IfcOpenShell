@@ -78,10 +78,15 @@ class Spatial(bonsai.core.tool.Spatial):
 
     @classmethod
     def get_root_element(cls, element: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
+        # Cyclic relationships in malformed files must not cause infinite loops.
+        visited = {element}
         while True:
-            if parent := (
-                ifcopenshell.util.element.get_aggregate(element) or ifcopenshell.util.element.get_nest(element)
-            ):
+            if (
+                parent := (
+                    ifcopenshell.util.element.get_aggregate(element) or ifcopenshell.util.element.get_nest(element)
+                )
+            ) and parent not in visited:
+                visited.add(parent)
                 element = parent
             else:
                 break
