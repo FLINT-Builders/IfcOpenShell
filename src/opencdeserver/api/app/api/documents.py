@@ -291,6 +291,15 @@ def upload_completion(
     print("Number of parts: " + str(len(parts)))
     document = doc_db.get_document_from_session(upload_session, current_user)
 
+    # The published file is named after the document id, so it must not be able to
+    # point at another document's file.
+    try:
+        valid_document_id = str(UUID(document.document_id)) == document.document_id
+    except ValueError:
+        valid_document_id = False
+    if not valid_document_id:
+        raise HTTPException(status_code=400, detail="Document id is not a valid UUID.")
+
     # check if all parts really are uploaded to document_id-dir
     document_name = doc_db.safe_path(document.document_id)
 

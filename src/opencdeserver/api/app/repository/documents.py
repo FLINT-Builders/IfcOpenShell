@@ -599,6 +599,10 @@ class DOCDB(MyDB):
                 WHERE
                     proj.project_id = d.project
                     AND r5.createDocument = true
+                    AND NOT EXISTS {
+                        MATCH (other:Project)-[:CONTAINS]->(:Document {document_id: d.document_id})
+                        WHERE other <> proj
+                    }
                 DETACH DELETE part
                 DELETE r2
                 CREATE (proj)-[r4:CONTAINS]->(d)
