@@ -82,7 +82,6 @@ class AuginCreateNewModel(bpy.types.Operator):
 
         payload = {
             "user_token": props.token,
-            "partner_token": "Mmf2zpxdgrkHaUNRm6Cv7GLJdBAeb7Rn",
             "project_name": props.project_name,
             "model_filename": props.project_filename + ".ifc",
             "thumb_filename": props.project_filename + ".png",
@@ -92,6 +91,9 @@ class AuginCreateNewModel(bpy.types.Operator):
         }
         response = requests.request("POST", url, data=payload)
         result = response.json()
+        if "s3_key" not in result:
+            self.report({"ERROR"}, "Augin did not accept the new model request")
+            return {"CANCELLED"}
 
         # Upload to S3
         my_config = Config(
