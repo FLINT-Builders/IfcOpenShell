@@ -216,6 +216,23 @@ uint64_t edgeKey(uint32_t a, uint32_t b) {
     return (uint64_t(a) << 32) | uint64_t(b);
 }
 
+// Indices originate in the .ifcview sidecar and are untrusted. Drop every
+// triangle that does not address three vertices of `positions`.
+void dropOutOfRangeTriangles(ViewportWindow::MeshTriangles& tris) {
+    const size_t n_verts = tris.positions.size() / 3;
+    size_t out = 0;
+    for (size_t i = 0; i + 2 < tris.indices.size(); i += 3) {
+        const uint32_t ia = tris.indices[i + 0];
+        const uint32_t ib = tris.indices[i + 1];
+        const uint32_t ic = tris.indices[i + 2];
+        if (ia >= n_verts || ib >= n_verts || ic >= n_verts) continue;
+        tris.indices[out++] = ia;
+        tris.indices[out++] = ib;
+        tris.indices[out++] = ic;
+    }
+    tris.indices.resize(out);
+}
+
 double pointTriangleDistSq(const float p[3],
                            const float a[3], const float b[3], const float c[3]) {
     auto sub = [](const float u[3], const float v[3], double r[3]) {
@@ -536,6 +553,7 @@ void LengthMeasurement::rebuildLaserOverlay(ViewportWindow& vp) {
     bool have_extent = false;
     double min_t1 = 0.0, max_t1 = 0.0, min_t2 = 0.0, max_t2 = 0.0;
     if (vp.readbackMeshTriangles(first_pick_.session_model_id, first_pick_.mesh_id, tris)) {
+        dropOutOfRangeTriangles(tris);
         const size_t n_verts = tris.positions.size() / 3;
         const size_t n_tris  = tris.indices.size() / 3;
         if (n_tris > 0) {
