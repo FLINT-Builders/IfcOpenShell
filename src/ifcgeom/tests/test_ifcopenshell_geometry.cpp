@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -275,6 +276,78 @@ ENDSEC;
 END-ISO-10303-21;
 )IFC";
 
+// IFC4X3_ADD2 alignment curve: one IfcCurveSegment on an IfcLine, wrapped in
+// IfcCompositeCurve, then IfcOffsetCurveByDistances. offset_values is the
+// raw OffsetValues aggregate ("()" or "(#12)"). The sectioned solid directrix
+// and the point-by-distance placements both reference that offset curve, which
+// is how IfcConvert reaches the mapper.
+std::string offset_curve_by_distances_spf(const char* offset_values) {
+    std::string spf = R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCCARTESIANPOINT((0.,0.));
+#2=IFCDIRECTION((1.,0.));
+#3=IFCVECTOR(#2,1.);
+#4=IFCLINE(#1,#3);
+#5=IFCCARTESIANPOINT((0.,0.,0.));
+#6=IFCDIRECTION((0.,0.,1.));
+#7=IFCDIRECTION((1.,0.,0.));
+#8=IFCAXIS2PLACEMENT3D(#5,#6,#7);
+#9=IFCCURVESEGMENT(.CONTINUOUS.,#8,IFCLENGTHMEASURE(0.),IFCLENGTHMEASURE(10.),#4);
+#10=IFCCOMPOSITECURVE((#9),.F.);
+#12=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(0.),1.,0.,$,#10);
+#11=IFCOFFSETCURVEBYDISTANCES(#10,)IFC";
+    spf += offset_values;
+    spf += R"IFC(,$);
+#13=IFCDIRECTION((0.,0.,1.));
+#14=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(0.),$,$,$,#11);
+#15=IFCAXIS2PLACEMENTLINEAR(#14,#13,$);
+#16=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(10.),$,$,$,#11);
+#17=IFCAXIS2PLACEMENTLINEAR(#16,#13,$);
+#18=IFCCARTESIANPOINTLIST2D(((-0.5,0.),(0.5,0.),(0.5,1.),(-0.5,1.),(-0.5,0.)),$);
+#19=IFCINDEXEDPOLYCURVE(#18,$,.F.);
+#20=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#19);
+#21=IFCSECTIONEDSOLIDHORIZONTAL(#11,(#20,#20),(#15,#17));
+#22=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#8,$);
+#23=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#22,$,.MODEL_VIEW.,$);
+#24=IFCSHAPEREPRESENTATION(#23,'Body','AdvancedSweptSolid',(#21));
+#25=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'offset',$,$,$,#26,$,$);
+#26=IFCPRODUCTDEFINITIONSHAPE($,$,(#24));
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+    return spf;
+}
+
+struct offset_curve_file {
+    ifcopenshell::logger log;
+    ifcopenshell::geom::settings settings;
+    std::unique_ptr<ifcopenshell::file> file;
+    std::unique_ptr<ifcopenshell::geom::converter> converter;
+
+    explicit offset_curve_file(const std::string& spf) {
+        log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+        std::istringstream stream(spf);
+        file = std::make_unique<ifcopenshell::file>(stream, static_cast<int>(spf.size()), log);
+        REQUIRE(file->good());
+        converter = std::make_unique<ifcopenshell::geom::converter>(
+            ifcopenshell::geom::kernels::construct(file.get(), "passthrough", settings, log),
+            file.get(),
+            settings,
+            log);
+    }
+};
+
+IfcSchema::IfcOffsetCurveByDistances only_offset_curve(ifcopenshell::file& file) {
+    auto curves = file.instances_by_type<IfcSchema::IfcOffsetCurveByDistances>();
+    REQUIRE(curves.size() == 1);
+    return curves.front();
+}
+
 } // namespace
 
 TEST_CASE("IfcSectionedSolidHorizontal raked end cut does not log GEO 42", "[ifcgeom][infra-sweep]") {
@@ -343,6 +416,99 @@ TEST_CASE("IfcGeom context priorities select representations by subcontext filte
     REQUIRE(
         select_representation(file, wall, {"tesselation[targetview=MODEL_VIEW]", "body"}).id() ==
         tesselation_representation.id());
+}
+
+TEST_CASE("Empty IfcOffsetCurveByDistances OffsetValues does not read past the list", "[ifcgeom][offset-curve]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+
+    // OffsetValues is the empty aggregate (). The parser keeps that as an empty
+    // vector. The basis curve is a real alignment curve, so mapping does not
+    // take the "not a function_item" return. The safe result is a null mapping
+    // for the curve and for every caller that evaluates it: the sectioned-solid
+    // directrix, a point-by-distance placement on that curve, and the body
+    // representation IfcConvert maps. A mapper that logs the empty list and
+    // then calls front() or std::next(begin()) still fails this test.
+    offset_curve_file model(offset_curve_by_distances_spf("()"));
+    auto offset = only_offset_curve(*model.file);
+    REQUIRE(offset.OffsetValues().empty());
+
+    auto basis = model.converter->mapping()->map(offset.BasisCurve());
+    REQUIRE(ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::function_item>(basis));
+
+    auto solids = model.file->instances_by_type<IfcSchema::IfcSectionedSolidHorizontal>();
+    REQUIRE(solids.size() == 1);
+    REQUIRE(solids.front().Directrix().id() == offset.id());
+
+    // Same call IfcConvert's iterator makes for the body representation.
+    auto representations = model.file->instances_by_type<IfcSchema::IfcShapeRepresentation>();
+    REQUIRE(representations.size() == 1);
+    REQUIRE(model.converter->mapping()->map(representations.front()) == nullptr);
+    REQUIRE(model.converter->mapping()->map(offset) == nullptr);
+    REQUIRE(model.log.count("GEO270") >= 1);
+    REQUIRE(model.converter->mapping()->map(solids.front()) == nullptr);
+
+    auto products = model.file->instances_by_type<IfcSchema::IfcBuildingElementProxy>();
+    REQUIRE(products.size() == 1);
+    ifcopenshell::geom::native_element* element = nullptr;
+    REQUIRE_NOTHROW(
+        element = model.converter->create_brep_for_representation_and_product(
+            representations.front(), products.front()));
+    REQUIRE(element == nullptr);
+    delete element;
+}
+
+TEST_CASE("Empty offset curve used as a point-by-distance placement does not read past the list", "[ifcgeom][offset-curve]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+
+    offset_curve_file model(offset_curve_by_distances_spf("()"));
+    auto offset = only_offset_curve(*model.file);
+    REQUIRE(offset.OffsetValues().empty());
+
+    auto basis = model.converter->mapping()->map(offset.BasisCurve());
+    REQUIRE(ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::function_item>(basis));
+
+    auto placements = model.file->instances_by_type<IfcSchema::IfcPointByDistanceExpression>();
+    REQUIRE(placements.size() == 3);
+    std::size_t placed_on_offset = 0;
+    for (auto& placement : placements) {
+        if (placement.BasisCurve().id() != offset.id()) {
+            continue;
+        }
+        ++placed_on_offset;
+        REQUIRE(model.converter->mapping()->map(placement) == nullptr);
+    }
+    REQUIRE(placed_on_offset == 2);
+    REQUIRE(model.converter->mapping()->map(offset) == nullptr);
+    REQUIRE(model.log.count("GEO270") >= 1);
+
+    auto linear_placements = model.file->instances_by_type<IfcSchema::IfcAxis2PlacementLinear>();
+    REQUIRE(linear_placements.size() == 2);
+    for (auto& linear_placement : linear_placements) {
+        REQUIRE(model.converter->mapping()->map(linear_placement) == nullptr);
+    }
+}
+
+TEST_CASE("IfcOffsetCurveByDistances with one offset value still maps", "[ifcgeom][offset-curve]") {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+
+    // One OffsetValues entry at the start of the same basis curve. Rejecting
+    // every offset curve would hide the empty-list bug.
+    offset_curve_file model(offset_curve_by_distances_spf("(#12)"));
+    auto offset = only_offset_curve(*model.file);
+    REQUIRE(offset.OffsetValues().size() == 1);
+
+    auto basis = model.converter->mapping()->map(offset.BasisCurve());
+    REQUIRE(ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::function_item>(basis));
+
+    auto mapped_offset = model.converter->mapping()->map(offset);
+    REQUIRE(ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::function_item>(mapped_offset));
+    REQUIRE(model.log.count("GEO270") == 0);
 }
 
 TEST_CASE("IfcGeom context priorities create tasks from highest priority representation", "[ifcgeom][context]") {
