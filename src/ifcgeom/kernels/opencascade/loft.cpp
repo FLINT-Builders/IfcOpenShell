@@ -233,6 +233,14 @@ bool open_cascade_kernel::convert(const taxonomy::loft::ptr loft, TopoDS_Shape& 
             TopoDS_Wire w;
 
 			if (lp->tags) {
+				if (lp->children.empty()) {
+					logger_.error("GEO", 332, "Loft section has no edges", lp->instance);
+					return false;
+				}
+				if (lp->closed.value_or(false) || lp->tags->size() != lp->children.size() + 1) {
+					logger_.error("GEO", 333, "Expected one tag per point on open loft section", lp->instance);
+					return false;
+				}
                 auto [points, tags] = loop_to_points(lp, lp->tags);
                 BRepBuilderAPI_MakePolygon mp;
                 for (auto& p : points) {

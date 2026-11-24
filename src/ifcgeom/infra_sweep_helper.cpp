@@ -291,6 +291,21 @@ taxonomy::loft::ptr ifcopenshell::geom::make_loft(const ifcopenshell::geom::sett
                             }
                         }
 
+						// loop_to_points() reads the first edge and walks the tags one per point
+						for (const auto& w : {w1, w2}) {
+							if (w->children.empty()) {
+								logger.warning("GEO", 330, "Loft profile has no edges", inst);
+								return nullptr;
+							}
+							if (w->tags && (w->closed.value_or(false) || w->tags->size() != w->children.size() + 1)) {
+								logger.warning("GEO", 331, "Expected one tag per point on open loft profile, but got " +
+									std::to_string(w->tags->size()) + " tags for " + std::to_string(w->children.size()) + " edges",
+									inst
+								);
+								return nullptr;
+							}
+						}
+
 						std::map<std::string, taxonomy::point3::ptr> tag_to_point_on_w1, tag_to_point_on_w2;
 
 						auto loop_to_points = [](const taxonomy::loop::ptr& loop, const std::optional<std::vector<std::string>>& input_tags) -> std::pair<std::vector<taxonomy::point3::ptr>, std::vector<std::set<std::string>>> {

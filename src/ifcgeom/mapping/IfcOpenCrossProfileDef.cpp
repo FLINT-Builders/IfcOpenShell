@@ -60,6 +60,16 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOpenCrossProfileDef& inst) {
         return nullptr;
     }
 
+    if (widths.empty()) {
+        logger_.warning("GEO", 328, "Expected at least one value in Widths, but got an empty list", inst);
+        return nullptr;
+    }
+
+    if (tags.has_value() && tags->size() != widths.size() + 1) {
+        logger_.warning("GEO", 329, "Expected Tags to have one more value than Widths, but got " + std::to_string(tags->size()) + " and " + std::to_string(widths.size()) + " respectively", inst);
+        return nullptr;
+    }
+
    auto horizontal_widths = inst.HorizontalWidths();
 
     double x = start->ccomponents().x();
