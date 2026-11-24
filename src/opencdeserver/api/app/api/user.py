@@ -4,7 +4,7 @@ import sys
 import traceback
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -171,9 +171,10 @@ def document_version_download(
 ) -> FileResponse:
     # The url to download the binary content of this document version.
     # May either directly return the result or redirect to a storage provider
-    keep_characters = (" ", ".", "_", "-")
-    document_id = "".join(c for c in document_id if c.isalnum() or c in keep_characters).rstrip()
-    file_location = "./data/documents/" + document_id + ".ifc"
-    return FileResponse(
-        file_location, media_type="application/x-step", filename="6dbd4d52-14db-11ee-be56-0242ac120002.ifc"
-    )
+    document = doc_db.get_document_version(document_id, version_index, current_user)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document version not found.")
+    file_name = document.file_description.name
+    if os.path.basename(file_name) != file_name or file_name in (".", ".."):
+        raise HTTPException(status_code=404, detail="Document version not found.")
+    return FileResponse("./data/documents/" + file_name, media_type="application/x-step", filename=file_name)
