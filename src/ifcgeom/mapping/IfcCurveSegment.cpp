@@ -1099,8 +1099,8 @@ class curve_segment_evaluator {
             // This functor is the derivative of y(x) => dy/dx = f'(x)
             auto df = [lu=length_unit_,coeffY,mapping=mapping_](double x) -> double {
                 auto begin = coeffY.begin();
-                auto iter = std::next(begin);
                 auto end = coeffY.end();
+                auto iter = begin == end ? end : std::next(begin);
                 double value = 0;
                 // y = A0 + A1*x + A2*x^2 + A3*x^3
                 // y' = 0 + 1*A1*x^0 + 2*A2*x^1 + 3*A3*x^2
@@ -1196,7 +1196,7 @@ class curve_segment_evaluator {
                 },
                 [coeffY](double) -> Eigen::Matrix4d {
                     Eigen::Matrix4d c = Eigen::Matrix4d::Zero();
-                    c(3, 0) = coeffY[2]; // this may need a unit conversion (also assume there is only 3 coefficients)
+                    c(3, 0) = coeffY.size() > 2 ? coeffY[2] : 0.0; // this may need a unit conversion (also assume there is only 3 coefficients)
                      return c;
                 }
             );

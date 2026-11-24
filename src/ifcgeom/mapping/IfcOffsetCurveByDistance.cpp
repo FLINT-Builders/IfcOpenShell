@@ -34,7 +34,17 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
     auto offset_values = inst.OffsetValues();
     if (offset_values.empty()) {
         logger_.error("GEO", 270, "IfcOffsetCurveByDistances must have at least one offset value");
+        return nullptr;
     }
+
+#if !defined SCHEMA_HAS_IfcDistanceExpression
+    for (auto& offset_value : offset_values) {
+        if (!offset_value.DistanceAlong().as<IfcSchema::IfcLengthMeasure>()) {
+            logger_.error("GEO", 269, "IfcOffsetCurveByDistances is only implemented for OffsetValues with an IfcLengthMeasure DistanceAlong", inst);
+            return nullptr;
+        }
+    }
+#endif
 
     auto& first_offset_value = offset_values.front();
 

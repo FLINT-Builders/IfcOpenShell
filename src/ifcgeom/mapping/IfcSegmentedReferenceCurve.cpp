@@ -30,6 +30,10 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcSegmentedReferenceCurve& ins
        logger_.warning("GEO", 291, "Expected IfcSegmentedReferenceCurve.BaseCurve to be IfcGradient", inst); // CT 4.1.7.1.1.3
 
 	auto segments = inst.Segments();
+	if (segments.empty()) {
+		logger_.error("GEO", 293, "IfcSegmentedReferenceCurve must have at least one segment", inst);
+		return nullptr;
+	}
 
 	taxonomy::piecewise_function::span_list spans;
     for (auto& segment : segments) {
