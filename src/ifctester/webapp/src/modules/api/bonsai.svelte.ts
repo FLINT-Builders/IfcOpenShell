@@ -45,6 +45,7 @@ const pendingAudits = new Map<string, PendingAudit>();
 // Check for Bonsai server port in URL parameters
 const urlParams = new URLSearchParams(window.location.search);
 const serverPort = urlParams.get('bonsai_server');
+const serverToken = urlParams.get('bonsai_token');
 
 if (serverPort) {
     Bonsai.enabled = true;
@@ -63,6 +64,7 @@ export const connect = () => new Promise<void>((resolve, reject) => {
     try {
         Bonsai.socket = io(`ws://127.0.0.1:${Bonsai.port}/ifctester`, {
             transports: ['websocket'],
+            auth: { token: serverToken },
             reconnection: false,
             timeout: 5000
         });

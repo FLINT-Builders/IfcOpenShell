@@ -64,7 +64,11 @@ async def no_cache_static_middleware(request: web.Request, handler):
     return response
 
 
-sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="aiohttp", max_http_buffer_size=10000000)
+def is_allowed_origin(origin):
+    return origin in (f"http://127.0.0.1:{sio_port}", f"http://localhost:{sio_port}")
+
+
+sio = socketio.AsyncServer(cors_allowed_origins=is_allowed_origin, async_mode="aiohttp", max_http_buffer_size=10000000)
 app = web.Application(middlewares=[no_cache_static_middleware])
 sio.attach(app)
 

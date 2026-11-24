@@ -17,7 +17,9 @@
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
 import asyncio
+import hmac
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -25,6 +27,7 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.parse
 import webbrowser
 from pathlib import Path
 from typing import Union
@@ -46,10 +49,17 @@ websocket_app = None
 websocket_runner = None
 
 
+def get_webapp_url(webapp_port: int, server: "IfcTesterWebSocketServer") -> str:
+    query = urllib.parse.urlencode({"bonsai_server": server.port, "bonsai_token": server.session_token})
+    return f"http://127.0.0.1:{webapp_port}?{query}"
+
+
 class IfcTesterWebSocketServer:
-    def __init__(self, port):
+    def __init__(self, port, webapp_port=None):
         self.port = port
-        self.sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="aiohttp")
+        self.allowed_origin = f"http://127.0.0.1:{webapp_port}" if webapp_port else None
+        self.session_token = secrets.token_urlsafe(32)
+        self.sio = socketio.AsyncServer(cors_allowed_origins=self.is_allowed_origin, async_mode="aiohttp")
         self.app = web.Application()
         self.sio.attach(self.app)
         self.runner = None
@@ -58,10 +68,22 @@ class IfcTesterWebSocketServer:
         self.shutdown_event = None
 
         # Register namespace
-        self.sio.register_namespace(IfcTesterNamespace("/ifctester"))
+        self.sio.register_namespace(IfcTesterNamespace("/ifctester", self))
 
         # Add health check route
         self.app.router.add_get("/health", self.health_check)
+
+    def is_allowed_origin(self, origin):
+        return self.allowed_origin is not None and origin == self.allowed_origin
+
+    def is_authorized(self, environ, auth):
+        # Engine.IO skips its origin check for requests without an Origin header, so it is required here too.
+        if not self.is_allowed_origin(environ.get("HTTP_ORIGIN")):
+            return False
+        token = auth.get("token") if isinstance(auth, dict) else None
+        if not isinstance(token, str):
+            return False
+        return hmac.compare_digest(token.encode("utf-8"), self.session_token.encode("utf-8"))
 
     async def health_check(self, request):
         return web.Response(text="OK", content_type="text/plain")
@@ -121,10 +143,14 @@ class IfcTesterWebSocketServer:
 
 
 class IfcTesterNamespace(socketio.AsyncNamespace):
-    def __init__(self, namespace):
+    def __init__(self, namespace, bridge: IfcTesterWebSocketServer):
         super().__init__(namespace)
+        self.bridge = bridge
 
-    async def on_connect(self, sid, environ):
+    async def on_connect(self, sid, environ, auth=None):
+        if not self.bridge.is_authorized(environ, auth):
+            print(f"IfcTester webapp client rejected: {sid}")
+            raise socketio.exceptions.ConnectionRefusedError("Unauthorized")
         print(f"IfcTester webapp client connected: {sid}")
         await self.emit("status", {"connected": True}, room=sid)
 
@@ -178,7 +204,7 @@ class IfcTesterNamespace(socketio.AsyncNamespace):
                 json_report = json_reporter.to_string()
 
                 # HTML report
-                html_reporter = ifctester.reporter.Html(ids, hide_skipped=props.hide_skipped_specs)
+                html_reporter = ifctester.reporter.Html(ids, hide_skipped=getattr(props, "hide_skipped_specs", False))
                 html_reporter.report()
                 html_report = html_reporter.to_string()
 
@@ -324,7 +350,8 @@ class StartIfcTesterWebapp(bpy.types.Operator):
 
         try:
             # Start the websocket server in a thread
-            websocket_app = IfcTesterWebSocketServer(websocket_port)
+            websocket_app = IfcTesterWebSocketServer(websocket_port, webapp_port)
+            webapp_url = get_webapp_url(webapp_port, websocket_app)
 
             def run_websocket_server():
                 loop = asyncio.new_event_loop()
@@ -366,7 +393,7 @@ class StartIfcTesterWebapp(bpy.types.Operator):
                 import time
 
                 time.sleep(1.5)
-                webbrowser.open(f"http://127.0.0.1:{webapp_port}?bonsai_server={websocket_port}")
+                webbrowser.open(webapp_url)
 
             browser_thread = threading.Thread(target=delayed_open_browser, daemon=True)
             browser_thread.start()
@@ -463,11 +490,11 @@ class OpenIfcTesterWebapp(bpy.types.Operator):
     def execute(self, context):
         props = tool.Tester.get_tester_props()
 
-        if not props.webapp_is_running:
+        if not props.webapp_is_running or websocket_app is None:
             self.report({"ERROR"}, "IfcTester webapp is not running. Please start it first.")
             return {"CANCELLED"}
 
-        webbrowser.open(f"http://127.0.0.1:{props.webapp_server_port}?bonsai_server={props.websocket_server_port}")
+        webbrowser.open(get_webapp_url(props.webapp_server_port, websocket_app))
         return {"FINISHED"}
 
 
