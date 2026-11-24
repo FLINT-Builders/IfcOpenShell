@@ -283,7 +283,9 @@ class OpenIFCDocument(bpy.types.Operator):
         args = [
             blender_path,
             "--python-expr",
-            "import bpy; bpy.ops.bim.load_project(filepath='{}')".format(filepath),
+            "import bpy, sys; bpy.ops.bim.load_project(filepath=sys.argv[sys.argv.index('--') + 1])",
+            "--",
+            filepath,
         ]
         subprocess.Popen(args)
         self.report({"INFO"}, f"Opening {filepath} in a new Blender instance")
