@@ -8,7 +8,7 @@ element = AFFE_CARA_ELEM(
             GROUP_MA = {{ profile.groupNames }},
             SECTION = 'GENERALE',
             CARA = ('A', 'IY', 'IZ', 'JX'),
-            VALE = ({{ profile.properties.CrossSectionArea }}, {{ profile.properties.MomentOfInertiaY }}, {{ profile.properties.MomentOfInertiaZ }}, {{ profile.properties.TorsionalConstantX }})
+            VALE = ({{ profile.properties.CrossSectionArea | pyliteral }}, {{ profile.properties.MomentOfInertiaY | pyliteral }}, {{ profile.properties.MomentOfInertiaZ | pyliteral }}, {{ profile.properties.TorsionalConstantX | pyliteral }})
         ),
         {%- elif profile.type == "IfcRectangleProfileDef" and profile.ProfileType == "AREA" %}
         _F(
@@ -29,7 +29,7 @@ element = AFFE_CARA_ELEM(
             GROUP_MA = {{ profile.groupNames }},
             SECTION = 'GENERALE',
             CARA = ('A', 'IY', 'IZ', 'JX'),
-            VALE = ({{ profile.properties.CrossSectionArea }}, {{ profile.properties.MomentOfInertiaY }}, {{ profile.properties.MomentOfInertiaZ }}, {{ profile.properties.TorsionalConstantX }})
+            VALE = ({{ profile.properties.CrossSectionArea | pyliteral }}, {{ profile.properties.MomentOfInertiaY | pyliteral }}, {{ profile.properties.MomentOfInertiaZ | pyliteral }}, {{ profile.properties.TorsionalConstantX | pyliteral }})
         ),
         {%- endif %}
         {%- endfor %}
