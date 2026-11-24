@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -7,7 +8,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "ifcgeom/converter.h"
+#include "ifcgeom/infra_sweep_helper.h"
 #include "ifcgeom/kernel_registry.h"
+#include "ifcgeom/taxonomy.h"
 #include "ifcparse/hierarchy_helper.h"
 #include "ifcparse/macros.h"
 #include IFCGEOM_TEST_SCHEMA_HEADER
@@ -381,4 +384,267 @@ TEST_CASE("IfcGeom context priorities create tasks from highest priority represe
     const auto* wall_with_body_only_task = task_for_product(body_first_tasks, wall_with_body_only);
     REQUIRE(wall_with_body_only_task != nullptr);
     REQUIRE(wall_with_body_only_task->representation.id() == body_only_representation.id());
+}
+
+namespace {
+
+// IFC4X3_ADD2 model context shared by the sectioned-surface cases below.
+// The directrix is an IfcCompositeCurve of one IfcCurveSegment on an IfcLine,
+// which maps to a function_item and is long enough to span the two stations.
+constexpr const char* SECTIONED_CONTEXT_AND_DIRECTRIX = R"IFC(
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,(#6),$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);
+#7=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#6,$,.MODEL_VIEW.,$);
+#8=IFCCARTESIANPOINT((0.,0.));
+#9=IFCDIRECTION((1.,0.));
+#10=IFCVECTOR(#9,1.);
+#11=IFCLINE(#8,#10);
+#12=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#13=IFCCURVESEGMENT(.CONTSAMEGRADIENT.,#12,IFCLENGTHMEASURE(0.),IFCLENGTHMEASURE(20.),#11);
+#14=IFCCOMPOSITECURVE((#13),.F.);
+)IFC";
+
+std::string sectioned_surface_file(const std::string& profiles_and_surface) {
+    return std::string("ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\n"
+                       "FILE_NAME('','',(''),(''),'','','');\nFILE_SCHEMA(('IFC4X3_ADD2'));\nENDSEC;\nDATA;") +
+           SECTIONED_CONTEXT_AND_DIRECTRIX + profiles_and_surface + "ENDSEC;\nEND-ISO-10303-21;\n";
+}
+
+struct sectioned_conversion {
+    bool parsed = false;
+    bool produced_brep = false;
+    std::string messages;
+};
+
+bool message_rejects_empty_profile(const std::string& messages) {
+    std::string lower = messages;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower.find("empty") != std::string::npos || lower.find("no edge") != std::string::npos ||
+           lower.find("widths") != std::string::npos;
+}
+
+sectioned_conversion convert_sectioned_file(const std::string& spf, const char* kernel) {
+    sectioned_conversion result;
+    std::istringstream stream(spf);
+    ifcopenshell::logger log;
+    log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+    ifcopenshell::logger::root().clear();
+    ifcopenshell::file file(stream, static_cast<int>(spf.size()), log);
+    auto append_log = [&](ifcopenshell::logger& source) {
+        for (const auto& entry : source.log_messages()) {
+            result.messages += entry.message;
+            result.messages.push_back('\n');
+        }
+    };
+    if (!file.good()) {
+        append_log(log);
+        append_log(ifcopenshell::logger::root());
+        return result;
+    }
+    result.parsed = true;
+
+    ifcopenshell::geom::settings settings;
+    ifcopenshell::geom::converter converter(
+        ifcopenshell::geom::kernels::construct(&file, kernel, settings, log), &file, settings, log);
+
+    std::vector<ifcopenshell::geom::geometry_conversion_task> tasks;
+    std::vector<ifcopenshell::geom::filter_function> filters;
+    converter.mapping()->get_representations(tasks, filters);
+    for (const auto& task : tasks) {
+        if (task.products.empty()) {
+            continue;
+        }
+        auto* elem = converter.create_brep_for_representation_and_product(task.representation, task.products.front());
+        if (elem) {
+            result.produced_brep = true;
+        }
+        delete elem;
+    }
+    append_log(log);
+    append_log(ifcopenshell::logger::root());
+    return result;
+}
+
+void require_empty_profile_rejected(const sectioned_conversion& result) {
+    REQUIRE(result.parsed);
+    REQUIRE_FALSE(result.produced_brep);
+    REQUIRE(message_rejects_empty_profile(result.messages));
+}
+
+} // namespace
+
+// Two distinct IfcOpenCrossProfileDef entities with empty Widths and Slopes on an
+// IfcSectionedSurface. Equal-length empty lists pass mapping and become open loops
+// with no edges. make_loft then indexes children[0]. A fixed build refuses the
+// profile and does not emit a shape.
+TEST_CASE("empty open cross profiles are rejected on IfcSectionedSurface loft", "[ifcgeom][empty-open-profile]") {
+    const auto spf = sectioned_surface_file(R"IFC(
+#20=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(),(),$,$);
+#21=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(),(),$,$);
+#22=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(0.),$,$,$,#14);
+#23=IFCAXIS2PLACEMENTLINEAR(#22,$,$);
+#24=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(10.),$,$,$,#14);
+#25=IFCAXIS2PLACEMENTLINEAR(#24,$,$);
+#26=IFCSECTIONEDSURFACE(#14,(#23,#25),(#20,#21));
+#27=IFCSHAPEREPRESENTATION(#7,'Body','SectionedSurface',(#26));
+#28=IFCPRODUCTDEFINITIONSHAPE($,$,(#27));
+#29=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'empty-surface',$,$,$,#28,$,$);
+)IFC");
+    require_empty_profile_rejected(convert_sectioned_file(spf, "opencascade"));
+}
+
+// Same empty profiles, consumed as faces by IfcSectionedSolidHorizontal. The loft
+// builder still reads the first edge of each open boundary.
+TEST_CASE("empty open cross profiles are rejected on IfcSectionedSolidHorizontal loft", "[ifcgeom][empty-open-profile]") {
+    const auto spf = sectioned_surface_file(R"IFC(
+#20=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(),(),$,$);
+#21=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(),(),$,$);
+#22=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(0.),$,$,$,#14);
+#23=IFCAXIS2PLACEMENTLINEAR(#22,$,$);
+#24=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(10.),$,$,$,#14);
+#25=IFCAXIS2PLACEMENTLINEAR(#24,$,$);
+#26=IFCSECTIONEDSOLIDHORIZONTAL(#14,(#20,#21),(#23,#25));
+#27=IFCSHAPEREPRESENTATION(#7,'Body','AdvancedSweptSolid',(#26));
+#28=IFCPRODUCTDEFINITIONSHAPE($,$,(#27));
+#29=IFCBUILDINGELEMENTPROXY('1bWcr4$892GAeKwryhDILS',$,'empty-solid',$,$,$,#28,$,$);
+)IFC");
+    require_empty_profile_rejected(convert_sectioned_file(spf, "opencascade"));
+}
+
+// One empty open profile, referenced by both stations, carrying tags. make_loft
+// skips interpolation when the profile instances match, and the OpenCASCADE loft
+// conversion then indexes children[0] of the tagged open loop.
+TEST_CASE("empty tagged open profile is rejected by OpenCASCADE loft conversion", "[ifcgeom][empty-open-profile]") {
+    const auto spf = sectioned_surface_file(R"IFC(
+#20=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(),(),('S','E'),$);
+#22=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(0.),$,$,$,#14);
+#23=IFCAXIS2PLACEMENTLINEAR(#22,$,$);
+#24=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(10.),$,$,$,#14);
+#25=IFCAXIS2PLACEMENTLINEAR(#24,$,$);
+#26=IFCSECTIONEDSURFACE(#14,(#23,#25),(#20,#20));
+#27=IFCSHAPEREPRESENTATION(#7,'Body','SectionedSurface',(#26));
+#28=IFCPRODUCTDEFINITIONSHAPE($,$,(#27));
+#29=IFCBUILDINGELEMENTPROXY('2cWcr4$892GAeKwryhDILT',$,'empty-tagged',$,$,$,#28,$,$);
+)IFC");
+    require_empty_profile_rejected(convert_sectioned_file(spf, "opencascade"));
+}
+
+// A profile with edges must still loft. This fails if empty-profile rejection
+// also drops every IfcOpenCrossProfileDef.
+TEST_CASE("open cross profile with edges still lofts", "[ifcgeom][empty-open-profile]") {
+    const auto spf = sectioned_surface_file(R"IFC(
+#20=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(1.,1.),(0.,0.785398),$,$);
+#21=IFCOPENCROSSPROFILEDEF(.CURVE.,$,.F.,(2.,1.),(0.,0.785398),$,$);
+#22=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(0.),$,$,$,#14);
+#23=IFCAXIS2PLACEMENTLINEAR(#22,$,$);
+#24=IFCPOINTBYDISTANCEEXPRESSION(IFCLENGTHMEASURE(10.),$,$,$,#14);
+#25=IFCAXIS2PLACEMENTLINEAR(#24,$,$);
+#26=IFCSECTIONEDSURFACE(#14,(#23,#25),(#20,#21));
+#27=IFCSHAPEREPRESENTATION(#7,'Body','SectionedSurface',(#26));
+#28=IFCPRODUCTDEFINITIONSHAPE($,$,(#27));
+#29=IFCBUILDINGELEMENTPROXY('4dWcr4$892GAeKwryhDILU',$,'open-with-edges',$,$,$,#28,$,$);
+)IFC");
+    const auto result = convert_sectioned_file(spf, "opencascade");
+    REQUIRE(result.parsed);
+    REQUIRE(result.produced_brep);
+    REQUIRE_FALSE(message_rejects_empty_profile(result.messages));
+}
+
+namespace {
+
+ifcopenshell::geom::taxonomy::loop::ptr empty_open_loop(const express::base& instance, bool with_tags) {
+    auto loop = ifcopenshell::geom::taxonomy::make<ifcopenshell::geom::taxonomy::loop>();
+    loop->closed = false;
+    loop->instance = instance;
+    if (with_tags) {
+        loop->tags = std::vector<std::string>{"S", "E"};
+    }
+    return loop;
+}
+
+ifcopenshell::geom::taxonomy::function_item::ptr directrix_function(ifcopenshell::file& file, ifcopenshell::geom::abstract_mapping* mapping) {
+    auto mapped = mapping->map(file.instance_by_id(14));
+    auto fn = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::function_item>(mapped);
+    REQUIRE(fn);
+    REQUIRE(fn->length() > 10.);
+    return fn;
+}
+
+} // namespace
+
+// The empty loops are built here, not by IfcOpenCrossProfileDef mapping, so a
+// fix that only rejects empty Widths still has to guard the loft builder.
+TEST_CASE("make_loft rejects an open cross section loop with no edges", "[ifcgeom][empty-open-profile]") {
+    const auto spf = sectioned_surface_file(R"IFC(
+#20=IFCCARTESIANPOINT((0.,0.,0.));
+#21=IFCCARTESIANPOINT((1.,0.,0.));
+)IFC");
+    std::istringstream stream(spf);
+    ifcopenshell::logger log;
+    log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+    ifcopenshell::logger::root().clear();
+    ifcopenshell::file file(stream, static_cast<int>(spf.size()), log);
+    REQUIRE(file.good());
+
+    ifcopenshell::geom::settings settings;
+    ifcopenshell::geom::converter converter(
+        ifcopenshell::geom::kernels::construct(&file, "passthrough", settings, log), &file, settings, log);
+    auto fn = directrix_function(file, converter.mapping());
+
+    std::vector<ifcopenshell::geom::cross_section> sections;
+    sections.push_back({0.0, empty_open_loop(file.instance_by_id(20), false), Eigen::Vector3d::Zero(), std::nullopt, std::nullopt});
+    sections.push_back({10.0, empty_open_loop(file.instance_by_id(21), false), Eigen::Vector3d::Zero(), std::nullopt, std::nullopt});
+
+    ifcopenshell::logger loft_log;
+    loft_log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+    auto loft = ifcopenshell::geom::make_loft(settings, file.instance_by_id(14), fn, sections, loft_log);
+    REQUIRE(loft == nullptr);
+
+    std::string messages;
+    for (const auto& entry : loft_log.log_messages()) {
+        messages += entry.message;
+        messages.push_back('\n');
+    }
+    REQUIRE(message_rejects_empty_profile(messages));
+}
+
+// Same unchecked read in the OpenCASCADE loft conversion, reached with a loft
+// whose children are already empty open loops.
+TEST_CASE("OpenCASCADE loft conversion rejects an open loop with no edges", "[ifcgeom][empty-open-profile]") {
+    const auto spf = sectioned_surface_file("");
+    std::istringstream stream(spf);
+    ifcopenshell::logger log;
+    log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+    ifcopenshell::logger::root().clear();
+    ifcopenshell::file file(stream, static_cast<int>(spf.size()), log);
+    REQUIRE(file.good());
+
+    ifcopenshell::geom::settings settings;
+    auto kernel = ifcopenshell::geom::kernels::construct(&file, "opencascade", settings, log);
+
+    auto loft = ifcopenshell::geom::taxonomy::make<ifcopenshell::geom::taxonomy::loft>();
+    loft->children.push_back(empty_open_loop(file.instance_by_id(11), true));
+    loft->children.push_back(empty_open_loop(file.instance_by_id(14), true));
+
+    std::vector<ifcopenshell::geom::conversion_result> results;
+    const bool converted = kernel->convert(loft, results);
+    REQUIRE_FALSE(converted);
+    REQUIRE(results.empty());
+
+    std::string messages;
+    for (const auto& entry : log.log_messages()) {
+        messages += entry.message;
+        messages.push_back('\n');
+    }
+    for (const auto& entry : ifcopenshell::logger::root().log_messages()) {
+        messages += entry.message;
+        messages.push_back('\n');
+    }
+    REQUIRE(message_rejects_empty_profile(messages));
 }
