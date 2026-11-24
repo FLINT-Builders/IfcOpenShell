@@ -35,11 +35,17 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcExtrudedAreaSolidTapered& in
 	Eigen::Affine3d af3d(Eigen::Translation3d(height * dir->ccomponents()));
 	Eigen::Matrix4d end_profile = af3d.matrix();
 
+	auto start_profile = map(inst.SweptArea());
+	auto end_profile_item = map(inst.EndSweptArea());
+	if (!start_profile || !end_profile_item) {
+		return nullptr;
+	}
+
 	auto loft = taxonomy::make<taxonomy::loft>();
 	loft->axis = nullptr;
 	loft->children = {
-		taxonomy::cast<taxonomy::face>(map(inst.SweptArea())),
-		taxonomy::cast<taxonomy::face>(map(inst.EndSweptArea()))
+		taxonomy::cast<taxonomy::face>(start_profile),
+		taxonomy::cast<taxonomy::face>(end_profile_item)
 	};
 
 	if (!loft->children.back()->matrix) {

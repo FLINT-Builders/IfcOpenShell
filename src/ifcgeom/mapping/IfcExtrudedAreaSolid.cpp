@@ -49,7 +49,20 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcExtrudedAreaSolid& inst) {
 	}
 #endif
 
+#ifdef SCHEMA_HAS_IfcExtrudedAreaSolidTapered
+	// Reached as a fallback when the tapered mapping failed. Do not substitute
+	// a prismatic extrusion for a tapered solid with an invalid end profile.
+	if (auto tapered = inst.as<IfcSchema::IfcExtrudedAreaSolidTapered>()) {
+		if (!map(tapered.EndSweptArea())) {
+			return nullptr;
+		}
+	}
+#endif
+
 	auto basis = map(inst.SweptArea());
+	if (!basis) {
+		return nullptr;
+	}
 	if (auto bases = taxonomy::dcast<taxonomy::collection>(basis)) {
 		// @todo this requires a unified approach for all sweeps
 		auto c = taxonomy::make<taxonomy::collection>();
