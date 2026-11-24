@@ -22,6 +22,23 @@
 using namespace ifcopenshell::geom;
 
 #include <deque>
+#include <set>
+
+namespace {
+// Placements whose PlacementRelTo chain is being mapped on this thread,
+// used to stop at a cyclic chain instead of recursing indefinitely.
+thread_local std::set<express::base> placements_in_progress;
+
+struct placement_in_progress_guard {
+    express::base inst;
+    explicit placement_in_progress_guard(const express::base& i) : inst(i) {
+        placements_in_progress.insert(inst);
+    }
+    ~placement_in_progress_guard() {
+        placements_in_progress.erase(inst);
+    }
+};
+} // namespace
 
 taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 	if (placement_rel_to_type_ || placement_rel_to_instance_) {
@@ -91,7 +108,11 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 #endif
 
 	bool parent_placement_ignored = false;
-	if (relative_to && (placement_rel_to_type_ || placement_rel_to_instance_)) {
+    if (relative_to && (relative_to == inst || placements_in_progress.count(relative_to))) {
+        ifcopenshell::logger::root().warning("Ignoring cyclic PlacementRelTo:", inst);
+        parent_placement_ignored = true;
+    }
+    if (!parent_placement_ignored && relative_to && (placement_rel_to_type_ || placement_rel_to_instance_)) {
 		std::vector<IfcSchema::IfcProduct> parent_places = relative_to.PlacesObject();
         for (auto& pp : parent_places) {
             if ((placement_rel_to_type_ && pp.declaration().is(*placement_rel_to_type_)) ||
@@ -103,6 +124,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 
 	taxonomy::matrix4::ptr result;
 	if (!parent_placement_ignored && relative_to) {
+        placement_in_progress_guard guard(inst);
         result = taxonomy::make<taxonomy::matrix4>(
 			// @nb this is a bit silly, in 0.7 we didn't have a recursive function
 			// but a while loop to apply the hierarchical placements, so after the
