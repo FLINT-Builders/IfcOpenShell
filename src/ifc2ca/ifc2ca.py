@@ -62,6 +62,8 @@ class Ifc2CA:
         self.file = ios.open(self.path)
         self.folder_path = self.path.parent / f"{self.path.stem}_ifc2ca"
         self.env = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"))
+        # Templates generate Python source, so values must be rendered as literals rather than pasted raw.
+        self.env.filters["pyliteral"] = ascii
 
     # expose GET api functions
     ## functions related to models
@@ -828,7 +830,7 @@ class Ifc2CA:
             json.dump(self.parse_model(model), f, indent=4)
 
         rendered_script = template.render(
-            mesh_size=parameters["mesh_size"],
+            mesh_size=float(parameters["mesh_size"]),
             json_path=str(json_path.resolve()),
             med_path=str(med_path.resolve()),
             mesh_name=mesh_name,

@@ -2,9 +2,9 @@
 {%- for i, (_, material) in enumerate(materials.items()) %}
 {{ "mat" + "_%s" % i }} = DEFI_MATERIAU(
     ELAS = _F(
-        E = {{ material.properties.YoungModulus }},
-        NU = {{ material.properties.PoissonRatio }},
-        RHO = {{ material.properties.MassDensity }}
+        E = {{ material.properties.YoungModulus | pyliteral }},
+        NU = {{ material.properties.PoissonRatio | pyliteral }},
+        RHO = {{ material.properties.MassDensity | pyliteral }}
     )
 )
 {% endfor %}

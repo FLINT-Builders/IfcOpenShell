@@ -31,6 +31,8 @@ class CommandFileConstructor:
     def __init__(self, data: dict):
         self.data = data
         self.env = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"))
+        # Templates generate Python source, so values must be rendered as literals rather than pasted raw.
+        self.env.filters["pyliteral"] = ascii
 
     def getGroupName(self, name):
         if "|" in name:
