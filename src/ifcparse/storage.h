@@ -642,7 +642,7 @@ namespace ifcopenshell {
             entity_instance_by_name byid_read_;
 
             template <typename Reader>
-            shared_pointer_type load(ifcopenshell::spf_lexer<Reader>* tokens, std::optional<size_t> entity_instance_name, const ifcopenshell::declaration* declaration, const ifcopenshell::entity* entity, int attribute_index = -1, bool coerce_attribute_count = true);
+            shared_pointer_type load(ifcopenshell::spf_lexer<Reader>* tokens, std::optional<size_t> entity_instance_name, const ifcopenshell::declaration* declaration, const ifcopenshell::entity* entity, int attribute_index = -1, bool coerce_attribute_count = true, size_t nesting_depth = 0);
             template <typename Reader>
             void try_read_semicolon(ifcopenshell::spf_lexer<Reader>* tokens) const;
 

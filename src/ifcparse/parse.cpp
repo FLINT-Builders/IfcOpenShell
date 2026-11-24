@@ -926,6 +926,23 @@ void set_direct_attribute(
     }
 }
 
+// Valid models nest aggregates and typed values only a few levels deep. The bound keeps the
+// recursion in read_direct_aggregate() and load() from exhausting the native stack.
+constexpr size_t max_nesting_depth = 64;
+
+class nesting_depth_exception : public exception {
+  public:
+    explicit nesting_depth_exception(size_t offset)
+        : exception("Nesting depth exceeds " + std::to_string(max_nesting_depth) + " at offset " + std::to_string(offset)) {}
+};
+
+template <typename Reader>
+void check_nesting_depth(ifcopenshell::spf_lexer<Reader>* tokens, size_t nesting_depth) {
+    if (nesting_depth > max_nesting_depth) {
+        throw nesting_depth_exception(tokens->stream->tell());
+    }
+}
+
 template <typename Reader>
 void skip_aggregate(ifcopenshell::spf_lexer<Reader>* tokens) {
     size_t depth = 1;
@@ -950,8 +967,11 @@ direct_aggregate read_direct_aggregate(
     const ifcopenshell::entity* entity,
     int attribute_index,
     const ifcopenshell::aggregation_type* aggregate_type,
-    ifcopenshell::logger& logger
+    ifcopenshell::logger& logger,
+    size_t nesting_depth
 ) {
+    check_nesting_depth(tokens, nesting_depth);
+
     direct_aggregate aggregate(logger);
     token next = tokens->next();
 
@@ -960,7 +980,7 @@ direct_aggregate read_direct_aggregate(
         } else if (next.is_operator(')')) {
             break;
         } else if (next.is_operator('(')) {
-            auto nested = read_direct_aggregate(storage, tokens, entity_instance_name, entity, attribute_index, nested_aggregation_type(aggregate_type), logger);
+            auto nested = read_direct_aggregate(storage, tokens, entity_instance_name, entity, attribute_index, nested_aggregation_type(aggregate_type), logger, nesting_depth + 1);
             if (nested.values == 0 && nested.storage.index() == 0) {
                 aggregate.append_empty_nested();
             } else {
@@ -974,9 +994,11 @@ direct_aggregate read_direct_aggregate(
             try {
                 const auto* declaration = (storage.schema ? storage.schema : storage.file->schema())->declaration_by_name(next.as_string());
                 tokens->next();
-                auto data = storage.load(tokens, entity_instance_name, declaration, entity, attribute_index);
+                auto data = storage.load(tokens, entity_instance_name, declaration, entity, attribute_index, true, nesting_depth + 1);
                 storage.read_simple_type_instances.push_back(data);
                 aggregate.append(ifcopenshell::reference_or_simple_type{express::base(data)});
+            } catch (const nesting_depth_exception&) {
+                throw;
             } catch (exception& e) {
                 logger.error("SYN", 123, std::string(e.what()) + " at offset " + std::to_string(next.start_pos));
             }
@@ -1011,9 +1033,11 @@ shared_pointer_type ifcopenshell::impl::in_memory_file_storage::load(
     const ifcopenshell::declaration* declaration,
     const ifcopenshell::entity* entity,
     int attribute_index,
-    bool coerce_attribute_count
+    bool coerce_attribute_count,
+    size_t nesting_depth
 ) {
     static_cast<void>(coerce_attribute_count);
+    check_nesting_depth(tokens, nesting_depth);
 
     parameter_type_view parameter_types(declaration);
     const size_t expected_size = parameter_types.size();
@@ -1036,7 +1060,7 @@ shared_pointer_type ifcopenshell::impl::in_memory_file_storage::load(
 
             if (next.is_operator('(')) {
                 if (retain_value) {
-                    auto aggregate = read_direct_aggregate(*this, tokens, entity_instance_name, entity, reference_attribute_index, aggregate_parameter_type(parameter_type), logger_.get());
+                    auto aggregate = read_direct_aggregate(*this, tokens, entity_instance_name, entity, reference_attribute_index, aggregate_parameter_type(parameter_type), logger_.get(), nesting_depth + 1);
                     std::visit([&](const auto& value) {
                         if constexpr (!std::is_same_v<std::decay_t<decltype(value)>, blank>) {
                             set_direct_attribute(storage, entity_instance_name, references_to_resolve, attribute_index_within_data, attribute_index, value);
@@ -1050,12 +1074,14 @@ shared_pointer_type ifcopenshell::impl::in_memory_file_storage::load(
                     const auto* simple_declaration = (schema ? schema : file->schema())->declaration_by_name(next.as_string());
                     tokens->next();
                     if (retain_value) {
-                        auto data = load(tokens, entity_instance_name, simple_declaration, entity, reference_attribute_index);
+                        auto data = load(tokens, entity_instance_name, simple_declaration, entity, reference_attribute_index, true, nesting_depth + 1);
                         read_simple_type_instances.push_back(data);
                         storage.set(attribute_index_within_data, express::base(data));
                     } else {
                         skip_aggregate(tokens);
                     }
+                } catch (const nesting_depth_exception&) {
+                    throw;
                 } catch (exception& e) {
                     logger_.get().message(ifcopenshell::logger::LOG_ERROR, std::string(e.what()) + " at offset " + std::to_string(next.start_pos));
                     --values_read;
@@ -2359,6 +2385,10 @@ std::optional<std::tuple<size_t, const ifcopenshell::declaration*, shared_pointe
                     entity_type,
                     data);
             } catch (const invalid_token_exception& e) {
+                good_ = file_open_status::INVALID_SYNTAX;
+                logger_.get().error(e);
+                break;
+            } catch (const nesting_depth_exception& e) {
                 good_ = file_open_status::INVALID_SYNTAX;
                 logger_.get().error(e);
                 break;
