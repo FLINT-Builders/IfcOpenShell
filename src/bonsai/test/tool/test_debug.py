@@ -41,7 +41,6 @@ class TestAddSchemaIdentifier(NewFile):
         schema = subject.load_express(schema_path)
         subject.add_schema_identifier(schema)
         assert IfcStore.schema_identifiers[-1] == "IFCROGUE"
-        os.remove(schema_path + ".cache.dat")
 
 
 class TestLoadExpress(NewFile):
@@ -50,7 +49,6 @@ class TestLoadExpress(NewFile):
         schema_path = os.path.join(cwd, "..", "files", "test.exp")
         schema = subject.load_express(schema_path)
         assert schema.name() == "IFCROGUE"
-        os.remove(schema_path + ".cache.dat")
 
 
 class TestMergeIdenticalObject(NewFile):
