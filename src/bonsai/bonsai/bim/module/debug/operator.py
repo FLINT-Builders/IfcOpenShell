@@ -890,7 +890,8 @@ class PipInstall(bpy.types.Operator):
 
         subprocess.call([py_exec, "-m", "ensurepip", "--user"])
         subprocess.call([py_exec, "-m", "pip", "install", "--upgrade", "pip"])
-        # Trusted host to make things simpler due to some enterprise network restrictions
+        # Behind a TLS-inspecting proxy, set pip's `cert` option (or PIP_CERT) to the organisation's CA bundle
+        # rather than disabling certificate verification with --trusted-host.
         return_code = subprocess.call(
             [
                 py_exec,
@@ -899,11 +900,8 @@ class PipInstall(bpy.types.Operator):
                 "install",
                 f"--target={target}",
                 "--upgrade",
+                "--",
                 self.name,
-                "--trusted-host",
-                "pypi.org",
-                "--trusted-host",
-                "files.pythonhosted.org",
             ]
         )
         if return_code == 0:
