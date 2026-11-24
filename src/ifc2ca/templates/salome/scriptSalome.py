@@ -29,9 +29,9 @@ import salome_version
 
 flatten = itertools.chain.from_iterable
 
-mesh_size = {{ mesh_size }}
-med_path = r"{{ med_path }}"
-json_path = r"{{ json_path }}"
+mesh_size = {{ mesh_size | pyliteral }}
+med_path = {{ med_path | pyliteral }}
+json_path = {{ json_path | pyliteral }}
 
 with open(json_path, "r") as f:
     data = json.load(f)
@@ -349,7 +349,7 @@ class MODEL:
             smesh.SetName(NETGEN2D_ONLY.GetAlgorithm(), "NETGEN2D_ONLY")
             smesh.SetName(NETGEN2D_Pars, "NETGEN2D_Pars")
 
-        smesh.SetName(bldMesh.GetMesh(), "{{ mesh_name }}")
+        smesh.SetName(bldMesh.GetMesh(), {{ mesh_name | pyliteral }})
 
         elapsed_time = time.time() - init_time
         init_time += elapsed_time
