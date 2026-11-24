@@ -1017,11 +1017,13 @@ def get_facility_parent(
     element: ifcopenshell.entity_instance, ifc_class: str
 ) -> Union[ifcopenshell.entity_instance, None]:
     parent = ifcopenshell.util.element.get_aggregate(element)
-    while parent:
+    visited = {element}
+    while parent and parent not in visited:
         if parent.is_a(ifc_class):
             return parent
         if parent.is_a("IfcProject"):
             return
+        visited.add(parent)
         parent = ifcopenshell.util.element.get_aggregate(parent)
 
 
