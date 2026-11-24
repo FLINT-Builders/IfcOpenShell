@@ -267,6 +267,14 @@ taxonomy::loft::ptr ifcopenshell::geom::make_loft(const ifcopenshell::geom::sett
 							return nullptr;
                         }
 
+						for (const auto& w : {w1, w2}) {
+							// loop_to_points() consumes one tag per point of an open loop
+							if (w->children.empty() || (w->tags && (w->closed.value_or(false) || w->tags->size() != w->children.size() + 1))) {
+								logger.warning("GEO", 329, "Number of tags does not match number of points on loft profile", inst);
+								return nullptr;
+							}
+						}
+
 						if (w1->tags) {
 							// check uniqueness
                             std::set<std::string> tags_seen;

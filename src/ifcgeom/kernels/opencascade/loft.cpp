@@ -233,6 +233,10 @@ bool open_cascade_kernel::convert(const taxonomy::loft::ptr loft, TopoDS_Shape& 
             TopoDS_Wire w;
 
 			if (lp->tags) {
+				if (lp->closed.value_or(false) || lp->children.empty() || lp->tags->size() != lp->children.size() + 1) {
+					ifcopenshell::logger::root().error("GEO", 330, "Number of tags does not match number of points on loft profile");
+					return false;
+				}
                 auto [points, tags] = loop_to_points(lp, lp->tags);
                 BRepBuilderAPI_MakePolygon mp;
                 for (auto& p : points) {
