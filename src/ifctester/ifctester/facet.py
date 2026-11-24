@@ -431,8 +431,14 @@ class Classification(Facet):
         leaf_references = ifcopenshell.util.classification.get_references(inst)
 
         references = leaf_references.copy()
+        # Every reference in a leaf's chain belongs to the same classification as the leaf.
+        reference_classifications = {}
         for leaf_reference in leaf_references:
-            references.update(ifcopenshell.util.classification.get_inherited_references(leaf_reference))
+            classification = ifcopenshell.util.classification.get_classification(leaf_reference)
+            reference_classifications[leaf_reference] = classification
+            for reference in ifcopenshell.util.classification.get_inherited_references(leaf_reference):
+                references.add(reference)
+                reference_classifications.setdefault(reference, classification)
 
         is_pass = bool(references)
         reason = None
@@ -449,7 +455,7 @@ class Classification(Facet):
                 reason = {"type": "VALUE", "actual": values}
 
         if is_pass:
-            classifications = filter(None, (ifcopenshell.util.classification.get_classification(r) for r in references))
+            classifications = filter(None, (reference_classifications[r] for r in references))
             systems = [r.Name for r in classifications]
             is_pass = any([self.system == s for s in systems])
             if not is_pass:
