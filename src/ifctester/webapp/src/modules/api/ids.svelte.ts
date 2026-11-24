@@ -351,13 +351,13 @@ export function stringifyFacet(
     // PartOf facet
     else if (facetType === "partOf") {
         if (clauseType === "applicability") {
-            descriptions.push(`An element with an **${String(facet['@relation'] ?? "")}** relationship`);
+            descriptions.push(`An element with an **${escapeFacetText(facet['@relation'] ?? "")}** relationship`);
 
             if (facet.name) {
                 descriptions.push(`with an entity where IFC class ${stringifyValue(facet.name as FacetValue)}`);
             }
         } else {
-            descriptions.push(`An element shall have an **${String(facet['@relation'] ?? "")}** relationship`);
+            descriptions.push(`An element shall have an **${escapeFacetText(facet['@relation'] ?? "")}** relationship`);
 
             if (facet.name) {
                 descriptions.push(`with an entity where IFC class ${stringifyValue(facet.name as FacetValue)}`);
@@ -387,10 +387,22 @@ export function stringifyFacet(
     return renderFacetString(combined);
 }
 
+// IDS values end up in {@html}; "*" and "`" are escaped too so they cannot form markers for renderFacetString
+function escapeFacetText(value: unknown): string {
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/\*/g, "&#42;")
+        .replace(/`/g, "&#96;");
+}
+
 // Converts value objects to human-readable strings
 function stringifyValue(value?: FacetValue) {
     if (!value) return "is provided";
-    if (value.simpleValue) return `is **${value.simpleValue}**`;
+    if (value.simpleValue) return `is **${escapeFacetText(value.simpleValue)}**`;
     if (value.restriction) return stringifyRestriction(value.restriction);
     return "";
 }
@@ -401,19 +413,19 @@ function stringifyRestriction(restriction: Restriction) {
 
     // Handle enumeration
     if (restriction.enumeration && Array.isArray(restriction.enumeration)) {
-        const values = restriction.enumeration.map(item => `**${item['@value']}**` || '').filter(v => v);
+        const values = restriction.enumeration.map(item => `**${escapeFacetText(item['@value'])}**` || '').filter(v => v);
         return values.length > 0 ? `is one of ${values.join(", ")}` : "has enumeration restriction";
     }
 
     // Handle pattern
     if (restriction.pattern && Array.isArray(restriction.pattern) && restriction.pattern.length > 0) {
-        const pattern = `\`${restriction.pattern[0]['@value']}\`` || '';
+        const pattern = `\`${escapeFacetText(restriction.pattern[0]['@value'])}\`` || '';
         return pattern ? `matches pattern ${pattern}` : "has pattern restriction";
     }
 
     // Handle length restrictions
     if (restriction.length && Array.isArray(restriction.length) && restriction.length.length > 0) {
-        const length = `**${restriction.length[0]['@value']}**` || '';
+        const length = `**${escapeFacetText(restriction.length[0]['@value'])}**` || '';
         return length ? `has length ${length}` : "has length restriction";
     }
 
@@ -422,16 +434,16 @@ function stringifyRestriction(restriction: Restriction) {
         restriction.minExclusive || restriction.maxExclusive) {
         const parts = [];
         if (restriction.minInclusive && restriction.minInclusive.length > 0) {
-            parts.push(`**≥ ${restriction.minInclusive[0]['@value'] || ''}**`);
+            parts.push(`**≥ ${escapeFacetText(restriction.minInclusive[0]['@value'] || '')}**`);
         }
         if (restriction.maxInclusive && restriction.maxInclusive.length > 0) {
-            parts.push(`**≤ ${restriction.maxInclusive[0]['@value'] || ''}**`);
+            parts.push(`**≤ ${escapeFacetText(restriction.maxInclusive[0]['@value'] || '')}**`);
         }
         if (restriction.minExclusive && restriction.minExclusive.length > 0) {
-            parts.push(`**> ${restriction.minExclusive[0]['@value'] || ''}**`);
+            parts.push(`**> ${escapeFacetText(restriction.minExclusive[0]['@value'] || '')}**`);
         }
         if (restriction.maxExclusive && restriction.maxExclusive.length > 0) {
-            parts.push(`**< ${restriction.maxExclusive[0]['@value'] || ''}**`);
+            parts.push(`**< ${escapeFacetText(restriction.maxExclusive[0]['@value'] || '')}**`);
         }
         return parts.length > 0 ? `is in range ${parts.join(", ")}` : "has range restriction";
     }
@@ -440,10 +452,10 @@ function stringifyRestriction(restriction: Restriction) {
     if (restriction.minLength || restriction.maxLength) {
         const parts = [];
         if (restriction.minLength && restriction.minLength.length > 0) {
-            parts.push(`**min length ${restriction.minLength[0]['@value'] || ''}**`);
+            parts.push(`**min length ${escapeFacetText(restriction.minLength[0]['@value'] || '')}**`);
         }
         if (restriction.maxLength && restriction.maxLength.length > 0) {
-            parts.push(`**max length ${restriction.maxLength[0]['@value'] || ''}**`);
+            parts.push(`**max length ${escapeFacetText(restriction.maxLength[0]['@value'] || '')}**`);
         }
         return parts.length > 0 ? `has ${parts.join(", ")}` : "has length range restriction";
     }
