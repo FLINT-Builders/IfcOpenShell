@@ -1,11 +1,16 @@
+import os
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, constr
+from pydantic import BaseModel, Field, conint, constr, validator
 
 from models.documents_common import CallbackLink
 
 # This file contains models used in requests during upload and download of documents.
+
+
+def max_upload_size_in_bytes() -> int:
+    return int(os.environ["SESSION_MAX_FILE_SIZE_BYTES"])
 
 
 # ---- UPLOAD MODELS ----
@@ -36,15 +41,28 @@ class UploadDocuments(BaseModel):
 
 
 class UploadFileDetail(BaseModel):
-    size_in_bytes: int = Field(description="The uploaded file size")
+    size_in_bytes: conint(gt=0) = Field(description="The uploaded file size")
     session_file_id: constr(min_length=1) = Field(
         description="This is a client provided id to differentiate between multiple files that are being uploaded in "
         "the same session"
     )
 
+    @validator("size_in_bytes")
+    def size_in_bytes_within_maximum(cls, size_in_bytes):
+        if size_in_bytes > max_upload_size_in_bytes():
+            raise ValueError("size_in_bytes exceeds the maximum upload size")
+        return size_in_bytes
+
 
 class UploadFileDetails(BaseModel):
     files: list[UploadFileDetail]
+
+    @validator("files")
+    def session_file_ids_unique(cls, files):
+        session_file_ids = [file.session_file_id for file in files]
+        if len(session_file_ids) != len(set(session_file_ids)):
+            raise ValueError("session_file_id must be unique within a request")
+        return files
 
 
 # ---- DOWNLOAD MODELS ----
