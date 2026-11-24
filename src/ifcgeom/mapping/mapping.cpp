@@ -24,6 +24,7 @@
 #include <optional>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "mapping.h"
@@ -193,6 +194,8 @@ std::vector<express::base> mapping::find_openings(const express::base& inst) {
     // Is the IfcElement a decomposition of an IfcElement with any IfcOpeningElements?
     auto obdef = inst.as<IfcSchema::IfcObjectDefinition>();
     if (obdef) {
+        // The parser accepts cyclic aggregation, so the walk stops at a repeat.
+        std::unordered_set<express::base> visited = {obdef};
         for (;;) {
             auto decomposes = obdef.Decomposes();
             if (decomposes.size() != 1) {
@@ -212,7 +215,10 @@ std::vector<express::base> mapping::find_openings(const express::base& inst) {
                 // exception already logged as part of handling of placement
                 break;
             }
-            if (rel_obdef && rel_obdef.as<IfcSchema::IfcElement>() && !rel_obdef.as<IfcSchema::IfcFeatureElementSubtraction>()) {
+            if (!rel_obdef || !visited.insert(rel_obdef).second) {
+                break;
+            }
+            if (rel_obdef.as<IfcSchema::IfcElement>() && !rel_obdef.as<IfcSchema::IfcFeatureElementSubtraction>()) {
                 auto element = rel_obdef.as<IfcSchema::IfcElement>();
                 auto rels = element.HasOpenings();
                 for (auto& rel : rels) {

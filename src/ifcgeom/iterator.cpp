@@ -1,5 +1,7 @@
 #include "iterator.h"
 
+#include <unordered_set>
+
 /**
 * Initialize iterator's list of tasks.
 *
@@ -608,11 +610,13 @@ std::unique_ptr<ifcopenshell::geom::element> ifcopenshell::geom::iterator::get()
 
 			// Add the previously found parent to the vector
 			// We need to find all the parents
+			// The parser accepts cyclic decomposition, so the walk stops at a repeat.
+			std::unordered_set<int> visited = {ret->id(), ret->parent_id()};
 			while (parent_object != NULL && hasParent && parent_object->parent_id() != -1) {
 				// Find the next parent
                 auto pid = parent_object->parent_id();
                 auto ifc_product = ifc_file->instance_by_id(pid);
-				if (ifc_product.declaration().name() == "IfcProject") {
+				if (!visited.insert(pid).second || ifc_product.declaration().name() == "IfcProject") {
                     hasParent = false;
                 } else {
 					try {

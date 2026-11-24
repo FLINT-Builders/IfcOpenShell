@@ -38,6 +38,7 @@
 #include <boost/algorithm/string/case_conv.hpp>
 
 #include <functional>
+#include <unordered_set>
 
 namespace ifcopenshell::geom {
 
@@ -72,7 +73,9 @@ namespace ifcopenshell::geom {
 			// @todo pass settings
 			ifcopenshell::geom::settings s;
             static auto mapping = ifcopenshell::geom::impl::mapping_implementations().construct(prod.file(), s);
-            while ((parent = mapping->get_decomposing_entity(current, traverse_openings))) {
+            // The parser accepts cyclic decomposition, so the walk stops at a repeat.
+            std::unordered_set<express::base> visited = {current};
+            while ((parent = mapping->get_decomposing_entity(current, traverse_openings)) && visited.insert(parent).second) {
                 if (pred(parent)) {
                     return true;
                 }

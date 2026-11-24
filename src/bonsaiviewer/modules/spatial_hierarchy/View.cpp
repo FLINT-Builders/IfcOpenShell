@@ -33,6 +33,7 @@
 #include <QCollator>
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace bonsaiviewer::modules::spatial_hierarchy {
 
@@ -75,7 +76,11 @@ QString displayName(const express::base& element) {
     return QString::fromStdString(element.declaration().name());
 }
 
-TreeNode buildNode(const express::base& element) {
+// The parser accepts cyclic and shared aggregation, so each spatial element is
+// added once, and nesting is capped because the panel walks the tree recursively.
+constexpr int kMaxTreeDepth = 64;
+
+TreeNode buildNode(const express::base& element, std::unordered_set<express::base>& visited, int depth) {
     TreeNode node;
     node.name = displayName(element);
     node.kind = kindOf(element);
@@ -87,8 +92,12 @@ TreeNode buildNode(const express::base& element) {
                long_name && !long_name->empty()) {
         node.detail = QString::fromStdString(*long_name);
     }
-    for (const auto& child : get_spatial_children(element)) {
-        node.children.append(buildNode(child));
+    if (depth < kMaxTreeDepth) {
+        for (const auto& child : get_spatial_children(element)) {
+            if (visited.insert(child).second) {
+                node.children.append(buildNode(child, visited, depth + 1));
+            }
+        }
     }
     sortByName(node.children);
     return node;
@@ -133,9 +142,12 @@ void SpatialHierarchyPanelView::rebuild() {
             try {
                 // IfcProject → IfcSite → … ; start the tree at the project's
                 // spatial children (the project itself has no ItemKind).
+                std::unordered_set<express::base> visited;
                 for (const auto& project : file->instances_by_type("IfcProject")) {
                     for (const auto& child : get_spatial_children(project)) {
-                        nodes_.append(buildNode(child));
+                        if (visited.insert(child).second) {
+                            nodes_.append(buildNode(child, visited, 1));
+                        }
                     }
                 }
             } catch (const std::exception&) {
