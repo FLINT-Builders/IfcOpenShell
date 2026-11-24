@@ -1608,25 +1608,25 @@ def run():
     gprops = tool.Georeference.get_georeference_props()
     # Our model origin becomes their host model origin
     gprops.has_blender_offset = {gprops.has_blender_offset}
-    gprops.blender_offset_x = "{gprops.blender_offset_x}"
-    gprops.blender_offset_y = "{gprops.blender_offset_y}"
-    gprops.blender_offset_z = "{gprops.blender_offset_z}"
-    gprops.blender_x_axis_abscissa = "{gprops.blender_x_axis_abscissa}"
-    gprops.blender_x_axis_ordinate = "{gprops.blender_x_axis_ordinate}"
+    gprops.blender_offset_x = {repr(gprops.blender_offset_x)}
+    gprops.blender_offset_y = {repr(gprops.blender_offset_y)}
+    gprops.blender_offset_z = {repr(gprops.blender_offset_z)}
+    gprops.blender_x_axis_abscissa = {repr(gprops.blender_x_axis_abscissa)}
+    gprops.blender_x_axis_ordinate = {repr(gprops.blender_x_axis_ordinate)}
     pprops = tool.Project.get_project_props()
     pprops.distance_limit = {pprops.distance_limit}
-    pprops.false_origin_mode = "{pprops.false_origin_mode}"
-    pprops.false_origin = "{pprops.false_origin}"
-    pprops.project_north = "{pprops.project_north}"
+    pprops.false_origin_mode = {repr(pprops.false_origin_mode)}
+    pprops.false_origin = {repr(pprops.false_origin)}
+    pprops.project_north = {repr(pprops.project_north)}
     # Use absolute path to be safe from cwd changes.
     try:
-        bpy.ops.bim.load_linked_project(filepath=r"{str(self.filepath_)}", query={repr(self.query)})
+        bpy.ops.bim.load_linked_project(filepath={repr(str(self.filepath_))}, query={repr(self.query)})
     except RuntimeError as e:
         # Operator failed (returned CANCELLED with error report)
         print(f"Failed to load linked project: {{e}}")
         sys.exit(1)
     # Use str instead of as_posix to avoid issues with Windows shared paths.
-    bpy.ops.wm.save_as_mainfile(filepath=r"{str(blend_filepath)}")
+    bpy.ops.wm.save_as_mainfile(filepath={repr(str(blend_filepath))})
 
 try:
     run()
