@@ -3529,6 +3529,12 @@ void ViewportCore::applyCachedModel(std::uint32_t session_model_id,
         Log::warn() << "applyCachedModel without an initialised device";
         return;
     }
+    if (!sidecarChunksInBounds(metadata.meta)) {
+        Log::warn() << "applyCachedModel: sidecar chunk table is out of range for "
+                    << metadata.meta.meshes.size() << " meshes; model " << session_model_id
+                    << " not loaded";
+        return;
+    }
 
     // Replace any existing state for this id.
     auto it = models_gpu_.find(session_model_id);
