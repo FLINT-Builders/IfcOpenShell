@@ -225,11 +225,25 @@
       const tr = document.createElement('tr');
       tr.dataset.id = o.objectId;
       tr.classList.toggle('selected', selected.has(o.objectId));
-      tr.innerHTML =
-        `<td class="mono">${o.guid}</td><td>${o.name || '—'}</td>` +
-        `<td>${o.type || '—'}</td><td>${models[o.model] || o.model}</td>` +
-        `<td><input type="checkbox" ${hidden.has(o.objectId) ? '' : 'checked'}></td>` +
-        `<td><input type="color" class="swatch" value="#cccccc"></td>`;
+      // File names and IFC attributes are untrusted: insert them as text only.
+      for (const text of [o.guid, o.name || '—', o.type || '—', models[o.model] || o.model]) {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      tr.firstChild.className = 'mono';
+      const shownTd = document.createElement('td');
+      const shown = document.createElement('input');
+      shown.type = 'checkbox';
+      shown.checked = !hidden.has(o.objectId);
+      shownTd.appendChild(shown);
+      const colourTd = document.createElement('td');
+      const swatch = document.createElement('input');
+      swatch.type = 'color';
+      swatch.className = 'swatch';
+      swatch.value = '#cccccc';
+      colourTd.appendChild(swatch);
+      tr.append(shownTd, colourTd);
 
       // Click the row to select it; shift-click adds, as in the viewport.
       tr.onclick = (ev) => {
