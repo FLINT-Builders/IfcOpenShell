@@ -45,11 +45,12 @@ def _ref_list(elements) -> list[dict[str, Any]]:
 def _traverse_up(element: ifcopenshell.entity_instance) -> list[dict[str, Any]]:
     """Walk the hierarchy from element up to IfcProject."""
     chain = [_ref(element)]
+    seen = {element.id()}
     current = element
-    while True:
-        parent = ifcopenshell.util.element.get_parent(current)
-        if parent is None:
-            break
+    while (parent := ifcopenshell.util.element.get_parent(current)) is not None:
+        if parent.id() in seen:
+            raise ValueError(f"Cyclic spatial hierarchy at #{parent.id()}")
+        seen.add(parent.id())
         chain.append(_ref(parent))
         current = parent
     return chain
@@ -197,6 +198,7 @@ def relations(
     :param traverse: Set to ``'up'`` to instead return the chain of ancestors
         from the element to ``IfcProject`` as a flat list. Any other value
         gives the default behaviour.
+    :raises ValueError: If ``traverse='up'`` and the hierarchy contains a cycle.
     """
     if traverse == "up":
         return _traverse_up(element)
