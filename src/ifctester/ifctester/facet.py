@@ -517,7 +517,9 @@ class PartOf(Facet):
             is_pass = False
             ancestors = []
             parent = self.get_parent(inst)
-            while parent:
+            visited = {inst}
+            while parent and parent not in visited:
+                visited.add(parent)
                 ancestors.append(parent.is_a().upper())
                 if parent.is_a().upper() == self.name:
                     if self.predefinedType:
@@ -539,7 +541,9 @@ class PartOf(Facet):
             if is_pass and self.name:
                 is_pass = False
                 ancestors = []
-                while aggregate is not None:
+                visited = {inst}
+                while aggregate is not None and aggregate not in visited:
+                    visited.add(aggregate)
                     ancestors.append(aggregate.is_a().upper())
                     if aggregate.is_a().upper() == self.name:
                         if self.predefinedType:
@@ -593,7 +597,9 @@ class PartOf(Facet):
             if is_pass and self.name:
                 is_pass = False
                 ancestors = []
-                while nest is not None:
+                visited = {inst}
+                while nest is not None and nest not in visited:
+                    visited.add(nest)
                     ancestors.append(nest.is_a().upper())
                     if nest.is_a().upper() == self.name:
                         if self.predefinedType:

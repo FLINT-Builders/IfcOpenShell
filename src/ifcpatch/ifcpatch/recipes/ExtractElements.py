@@ -87,6 +87,7 @@ class Patcher(ifcpatch.BasePatcher):
         self.new = ifcopenshell.file(schema_version=self.file.schema_version)
         self.owner_history = None
         self.reuse_identities: dict[int, ifcopenshell.entity_instance] = {}
+        self.decomposition_parents_added: set[ifcopenshell.entity_instance] = set()
         for owner_history in self.file.by_type("IfcOwnerHistory"):
             self.owner_history = self.new.add(owner_history)
             break
@@ -136,6 +137,9 @@ class Patcher(ifcpatch.BasePatcher):
         self, element: ifcopenshell.entity_instance, new_element: ifcopenshell.entity_instance
     ) -> None:
         """element is IfcObjectDefinition"""
+        if element in self.decomposition_parents_added:
+            return
+        self.decomposition_parents_added.add(element)
         for rel in element.Decomposes:
             parent = rel.RelatingObject
             new_parent = self.append_asset(parent)

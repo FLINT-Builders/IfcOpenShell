@@ -78,10 +78,14 @@ class Spatial(bonsai.core.tool.Spatial):
 
     @classmethod
     def get_root_element(cls, element: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
+        visited = {element}
         while True:
-            if parent := (
-                ifcopenshell.util.element.get_aggregate(element) or ifcopenshell.util.element.get_nest(element)
-            ):
+            if (
+                parent := (
+                    ifcopenshell.util.element.get_aggregate(element) or ifcopenshell.util.element.get_nest(element)
+                )
+            ) and parent not in visited:
+                visited.add(parent)
                 element = parent
             else:
                 break
@@ -559,25 +563,30 @@ class Spatial(bonsai.core.tool.Spatial):
     @classmethod
     def create_orientation_slot(cls, container: ifcopenshell.entity_instance) -> None:
         active_slot = bpy.context.scene.transform_orientation_slots[0]
-        placement = container.ObjectPlacement
-        combined_matrix = ifcopenshell.util.placement.get_local_placement(placement)[:3, :3]
+        visited = {container}
+        while True:
+            placement = container.ObjectPlacement
+            combined_matrix = ifcopenshell.util.placement.get_local_placement(placement)[:3, :3]
 
-        if np.allclose(combined_matrix, np.eye(3), atol=1e-6):
-            # this spatial element has global orientation
-            active_slot.type = "GLOBAL"
-            return
-        elif (
-            hasattr(container, "Decomposes")
-            and container.Decomposes
-            and hasattr(container.Decomposes[0].RelatingObject, "ObjectPlacement")
-        ):
-            # this spatial element is part of a decomposition
-            parent_placement = container.Decomposes[0].RelatingObject.ObjectPlacement
-            parent_matrix = ifcopenshell.util.placement.get_local_placement(parent_placement)[:3, :3]
-            if np.allclose(combined_matrix, parent_matrix, atol=1e-6):
-                # this spatial element has the same orientation as its parent
-                cls.create_orientation_slot(container=container.Decomposes[0].RelatingObject)
+            if np.allclose(combined_matrix, np.eye(3), atol=1e-6):
+                # this spatial element has global orientation
+                active_slot.type = "GLOBAL"
                 return
+            elif (
+                hasattr(container, "Decomposes")
+                and container.Decomposes
+                and hasattr(container.Decomposes[0].RelatingObject, "ObjectPlacement")
+                and container.Decomposes[0].RelatingObject not in visited
+            ):
+                # this spatial element is part of a decomposition
+                parent_placement = container.Decomposes[0].RelatingObject.ObjectPlacement
+                parent_matrix = ifcopenshell.util.placement.get_local_placement(parent_placement)[:3, :3]
+                if np.allclose(combined_matrix, parent_matrix, atol=1e-6):
+                    # this spatial element has the same orientation as its parent
+                    container = container.Decomposes[0].RelatingObject
+                    visited.add(container)
+                    continue
+            break
 
         # this spatial element has a unique orientation
         orientation_name = container.is_a() + "/" + container.Name

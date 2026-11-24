@@ -452,7 +452,9 @@ class DecoratorData:
             elif key.startswith("space."):
                 container = ifcopenshell.util.element.get_container(element)
                 current = container
-                while current:
+                visited = set()
+                while current and current not in visited:
+                    visited.add(current)
                     if current.is_a("IfcSpace"):
                         attr_name = key.split(".", 1)[1]
                         if hasattr(current, attr_name):
@@ -463,7 +465,9 @@ class DecoratorData:
             elif key.startswith("storey."):
                 container = ifcopenshell.util.element.get_container(element)
                 current = container
-                while current:
+                visited = set()
+                while current and current not in visited:
+                    visited.add(current)
                     if current.is_a("IfcBuildingStorey"):
                         attr_name = key.split(".", 1)[1]
                         if hasattr(current, attr_name):
@@ -474,7 +478,9 @@ class DecoratorData:
             elif key.startswith("building."):
                 container = ifcopenshell.util.element.get_container(element)
                 current = container
-                while current:
+                visited = set()
+                while current and current not in visited:
+                    visited.add(current)
                     if current.is_a("IfcBuilding"):
                         attr_name = key.split(".", 1)[1]
                         if hasattr(current, attr_name):
@@ -485,7 +491,9 @@ class DecoratorData:
             elif key.startswith("site."):
                 container = ifcopenshell.util.element.get_container(element)
                 current = container
-                while current:
+                visited = set()
+                while current and current not in visited:
+                    visited.add(current)
                     if current.is_a("IfcSite"):
                         attr_name = key.split(".", 1)[1]
                         if hasattr(current, attr_name):
@@ -1131,7 +1139,9 @@ class ElementValuesData:
 
         space = None
         current = container
-        while current:
+        visited = set()
+        while current and current not in visited:
+            visited.add(current)
             if current.is_a("IfcSpace"):
                 space = current
                 break
@@ -1141,7 +1151,9 @@ class ElementValuesData:
 
         storey = None
         current = container
-        while current:
+        visited = set()
+        while current and current not in visited:
+            visited.add(current)
             if current.is_a("IfcBuildingStorey"):
                 storey = current
                 break
@@ -1151,7 +1163,9 @@ class ElementValuesData:
 
         building = None
         current = container
-        while current:
+        visited = set()
+        while current and current not in visited:
+            visited.add(current)
             if current.is_a("IfcBuilding"):
                 building = current
                 break
@@ -1161,7 +1175,9 @@ class ElementValuesData:
 
         site = None
         current = container
-        while current:
+        visited = set()
+        while current and current not in visited:
+            visited.add(current)
             if current.is_a("IfcSite"):
                 site = current
                 break
