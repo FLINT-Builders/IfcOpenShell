@@ -40,13 +40,17 @@ KeyValueTable::KeyValueTable(const QList<KeyValueTableRow>& rows, QWidget* paren
 
     int row_index = 0;
     for (const auto& row_data : rows) {
-        auto* key = new QLabel(row_data.key, this);
+        auto* key = new QLabel(this);
+        key->setTextFormat(Qt::PlainText);
+        key->setText(row_data.key);
         key->setProperty("textRole", "secondary");
         if (row_data.key_minimum_width > 0) {
             key->setMinimumWidth(row_data.key_minimum_width);
         }
 
-        auto* value = new QLabel(row_data.value, this);
+        auto* value = new QLabel(this);
+        value->setTextFormat(Qt::PlainText);
+        value->setText(row_data.value);
         value->setObjectName(row_data.value_object_name.isEmpty()
                                  ? "keyValueValueLabel"
                                  : row_data.value_object_name);
