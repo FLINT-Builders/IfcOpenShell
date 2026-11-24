@@ -192,6 +192,7 @@
 %ignore ComputeCurvature;
 %ignore FunctionStepType;
 %ignore FunctionStepParam;
+%ignore FunctionStepMaxCount;
 %ignore ModelOffset;
 %ignore ModelRotation;
 %ignore TriangulationType;

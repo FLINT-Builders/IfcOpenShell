@@ -462,6 +462,17 @@ force-space-transparency
 
 Overrides transparency of spaces in geometry output.
 
+function-step-max-count
+^^^^^^^^^^^^^^^^^^^^^^^
+
++------+-------------------------------+---------+
+| Type | IfcConvert Option             | Default |
++======+===============================+=========+
+| INT  | ``--function-step-max-count`` | 10000   |
++------+-------------------------------+---------+
+
+Maximum number of steps used when evaluating a function-based curve. When function-step-type and function-step-param would result in more steps, the step size is enlarged so that this number is not exceeded.
+
 function-step-param
 ^^^^^^^^^^^^^^^^^^^
 

@@ -19,6 +19,13 @@ inline taxonomy::function_item::ptr convert_loop_to_function_item(taxonomy::loop
     return ifcopenshell::geom::taxonomy::dcast<taxonomy::function_item>(loop);
 }
 
+#ifndef SWIG
+/// @brief Number of steps used to evaluate a function-based curve of the given length,
+/// derived from the function-step-type and function-step-param settings and limited
+/// to the range [1, function-step-max-count]. Throws for a non-finite length.
+IFC_GEOM_API unsigned function_step_count(const ifcopenshell::geom::settings& settings, double length, ifcopenshell::logger& logger = ifcopenshell::logger::root());
+#endif
+
 /// @brief Abstract class for evaluating a function_item. This class is specialized for each of the function_item types.
 struct IFC_GEOM_API fn_evaluator {
     fn_evaluator(const ifcopenshell::geom::settings& settings, ifcopenshell::logger& logger = ifcopenshell::logger::root()) : settings_(settings), logger_(logger) {

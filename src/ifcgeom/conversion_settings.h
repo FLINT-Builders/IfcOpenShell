@@ -429,6 +429,12 @@ namespace ifcopenshell {
                static constexpr double defaultvalue = 0.5; // ceiling of this value is used when FunctionStepMethod is MinSteps
          };
 
+			struct FunctionStepMaxCount : public SettingBase<FunctionStepMaxCount, int> {
+				static constexpr const char* const name = "function-step-max-count";
+				static constexpr const char* const description = "Maximum number of steps used when evaluating a function-based curve. When function-step-type and function-step-param would result in more steps, the step size is enlarged so that this number is not exceeded.";
+				static constexpr int defaultvalue = 10000;
+			};
+
 			struct ModelOffset : public SettingBase<ModelOffset, std::vector<double>> {
 				static constexpr const char* const name = "model-offset";
 				static constexpr const char* const description = "Applies an arbitrary offset of form x,y,z to all placements.";
@@ -953,6 +959,7 @@ using geometry_setting_types = std::tuple<
 			settings_detail::ComputeCurvature,
 			settings_detail::FunctionStepType,
 			settings_detail::FunctionStepParam,
+			settings_detail::FunctionStepMaxCount,
 			settings_detail::NoParallelMapping,
 			settings_detail::PermissiveShapeReuse,
 			settings_detail::ModelOffset,
@@ -1057,6 +1064,7 @@ using geometry_setting_types = std::tuple<
 			using ComputeCurvature = settings_detail::ComputeCurvature;
 			using FunctionStepType = settings_detail::FunctionStepType;
 			using FunctionStepParam = settings_detail::FunctionStepParam;
+			using FunctionStepMaxCount = settings_detail::FunctionStepMaxCount;
 			using NoParallelMapping = settings_detail::NoParallelMapping;
 			using PermissiveShapeReuse = settings_detail::PermissiveShapeReuse;
 			using ModelOffset = settings_detail::ModelOffset;

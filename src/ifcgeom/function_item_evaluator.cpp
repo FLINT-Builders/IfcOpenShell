@@ -234,21 +234,36 @@ function_item_evaluator::~function_item_evaluator() {
     delete fn_evaluator_;
 }
 
+unsigned ifcopenshell::geom::function_step_count(const ifcopenshell::geom::settings& settings, double length, logger& logger) {
+    if (!std::isfinite(length)) {
+        throw std::runtime_error("Function-based curve has a non-finite length");
+    }
+
+    auto param_type = settings.get<ifcopenshell::geom::settings::FunctionStepType>().get();
+    auto param = settings.get<ifcopenshell::geom::settings::FunctionStepParam>().get();
+    double max_steps = std::max(1, settings.get<ifcopenshell::geom::settings::FunctionStepMaxCount>().get());
+
+    double num_steps;
+    if (param_type == ifcopenshell::geom::settings::FunctionStepMethod::MAXSTEPSIZE) {
+        // parameter is max step size
+        num_steps = std::ceil(length / param);
+    } else {
+        // parameter is minimum number of steps
+        num_steps = std::ceil(param);
+    }
+
+    // Also true for NaN, e.g. from a zero or non-finite step parameter.
+    if (!(num_steps <= max_steps)) {
+        logger.warning("GEO", 404, "Function-based curve of length " + std::to_string(length) + " requires more than " + std::to_string((int)max_steps) + " evaluation steps, step size is enlarged");
+        num_steps = max_steps;
+    }
+
+    return (unsigned)std::max(1., num_steps);
+}
+
 std::vector<double> function_item_evaluator::evaluation_points() const {
     if (!eval_points_.has_value()) {
-        double curve_length = fn_evaluator_->length();
-
-        auto param_type = fn_evaluator_->settings_.get<ifcopenshell::geom::settings::FunctionStepType>().get();
-        auto param = fn_evaluator_->settings_.get<ifcopenshell::geom::settings::FunctionStepParam>().get();
-        unsigned num_steps = 0;
-        if (param_type == ifcopenshell::geom::settings::FunctionStepMethod::MAXSTEPSIZE) {
-            // parameter is max step size
-            num_steps = (unsigned)std::ceil(curve_length / param);
-        } else {
-            // parameter is minimum number of steps
-            num_steps = (unsigned)std::ceil(param);
-        }
-
+        auto num_steps = function_step_count(fn_evaluator_->settings_, fn_evaluator_->length(), logger_);
         eval_points_ = evaluation_points(fn_evaluator_->start(), fn_evaluator_->end(), num_steps);
     }
     return *eval_points_;
