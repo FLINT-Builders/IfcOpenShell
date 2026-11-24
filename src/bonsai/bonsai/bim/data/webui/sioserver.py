@@ -9,7 +9,10 @@ if bonsai_lib_path:
 
 import argparse
 import base64
+import hmac
 import json
+import secrets
+import stat
 import urllib.parse
 import xml.etree.ElementTree as ET
 
@@ -18,6 +21,12 @@ import socketio
 from aiohttp import web
 
 sio_port = 8080  # default port
+
+# Shared secret Bonsai passes when it starts this server. Only /blender clients
+# that present it may publish the drawings and sheets that get_svg serves.
+webui_token = os.environ.get("BONSAI_WEBUI_TOKEN")
+
+HAS_DIR_FD = os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
 
 
 def get_asset_version() -> str:
@@ -64,7 +73,16 @@ async def no_cache_static_middleware(request: web.Request, handler):
     return response
 
 
-sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="aiohttp", max_http_buffer_size=10000000)
+def get_allowed_origins(host: str, port: int) -> list[str]:
+    """Origins of the web UI pages served by this server."""
+    return sorted({f"http://{h}:{port}" for h in (host, "127.0.0.1", "localhost")})
+
+
+sio = socketio.AsyncServer(
+    cors_allowed_origins=get_allowed_origins("127.0.0.1", sio_port),
+    async_mode="aiohttp",
+    max_http_buffer_size=10000000,
+)
 app = web.Application(middlewares=[no_cache_static_middleware])
 sio.attach(app)
 
@@ -72,6 +90,41 @@ sio.attach(app)
 # represents a caching for blender messages
 blender_messages = {}
 blender_theme = {}
+
+# /blender sids that presented webui_token
+trusted_blender_sids = set()
+# opaque svg id -> (blender sid, path), filled only from trusted drawings_data
+published_svgs = {}
+
+
+def is_plain_filename(name: str) -> bool:
+    return bool(name) and name not in (".", "..") and not any(c in name for c in "/\\:")
+
+
+def read_file_in_dir(dir_fd, dir_path: str, name: str) -> bytes:
+    """Read the regular file `name` directly inside a directory, refusing links.
+
+    The file is opened once and its contents are read from that descriptor. On
+    POSIX the lookup is relative to the already opened `dir_fd`. Elsewhere the
+    opened file must be the very same file as the non-followed directory entry.
+    """
+    if not is_plain_filename(name):
+        raise PermissionError(name)
+    if dir_fd is not None:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(os.path.join(dir_path, name), flags)
+    with os.fdopen(fd, "rb") as file:
+        opened = os.fstat(file.fileno())
+        if not stat.S_ISREG(opened.st_mode):
+            raise PermissionError(name)
+        if dir_fd is None:
+            entry = os.lstat(os.path.join(dir_path, name))
+            is_reparse_point = getattr(entry, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            if not stat.S_ISREG(entry.st_mode) or is_reparse_point or not os.path.samestat(opened, entry):
+                raise PermissionError(name)
+        return file.read()
 
 
 # we define two namespaces, one for Bonsai and one for Web UI
@@ -100,8 +153,18 @@ class WebNamespace(socketio.AsyncNamespace):
         )
 
     async def on_get_svg(self, sid, data):
-        file_path = data["path"]
-        svg = await self.process_svg(file_path)
+        svg_id = data.get("id") if isinstance(data, dict) else None
+        published = published_svgs.get(svg_id) if isinstance(svg_id, str) else None
+        if published is None:
+            return
+        file_path = published[1]
+        if not file_path.lower().endswith(".svg"):
+            return
+        try:
+            svg = await self.process_svg(file_path)
+        except (OSError, ET.ParseError) as e:
+            print(f"Could not load drawing {file_path}: {e}")
+            return
         await sio.emit("svg_data", svg, room=sid, namespace="/web")
 
     async def send_cached_messages(self, sid):
@@ -117,33 +180,33 @@ class WebNamespace(socketio.AsyncNamespace):
                 await self.emit("cost_items", {"blenderId": blenderId, "data": messages["cost_items"]}, room=sid)
 
     async def process_svg(self, file_path):
-        def encode_image(filepath):
-            # Encode file content to base64 string
-            with open(filepath, "rb") as file:
-                encoded_string = base64.b64encode(file.read()).decode("utf-8")
-            return f"data:image;base64,{encoded_string}"
+        file_dir = os.path.dirname(file_path) or "."
+        dir_fd = os.open(file_dir, os.O_RDONLY | os.O_DIRECTORY) if HAS_DIR_FD else None
+        try:
+            ET.register_namespace("", "http://www.w3.org/2000/svg")
+            ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
-        file_dir = os.path.dirname(file_path)
+            root = ET.fromstring(read_file_in_dir(dir_fd, file_dir, os.path.basename(file_path)))
 
-        ET.register_namespace("", "http://www.w3.org/2000/svg")
-        ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
+            namespaces = {
+                "svg": "http://www.w3.org/2000/svg",
+                "xlink": "http://www.w3.org/1999/xlink",
+            }
 
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-
-        namespaces = {
-            "svg": "http://www.w3.org/2000/svg",
-            "xlink": "http://www.w3.org/1999/xlink",
-        }
-
-        for element in root.findall(".//svg:image[@xlink:href]", namespaces):
-            href = element.get("{http://www.w3.org/1999/xlink}href")
-            if href and href.endswith((".png", ".svg", ".jpeg")):
-                img_path = os.path.join(file_dir, href)
-                if os.path.exists(img_path):
-                    base64_data = encode_image(img_path)
-                    element.set("{http://www.w3.org/1999/xlink}href", base64_data)
-        return ET.tostring(root, "unicode")
+            # Only images directly inside the drawing's own directory are inlined.
+            for element in root.findall(".//svg:image[@xlink:href]", namespaces):
+                href = element.get("{http://www.w3.org/1999/xlink}href")
+                if href and href.endswith((".png", ".svg", ".jpeg")) and is_plain_filename(href):
+                    try:
+                        image = read_file_in_dir(dir_fd, file_dir, href)
+                    except OSError:
+                        continue
+                    encoded_string = base64.b64encode(image).decode("utf-8")
+                    element.set("{http://www.w3.org/1999/xlink}href", f"data:image;base64,{encoded_string}")
+            return ET.tostring(root, "unicode")
+        finally:
+            if dir_fd is not None:
+                os.close(dir_fd)
 
 
 # Blender namespace
@@ -151,8 +214,11 @@ class BlenderNamespace(socketio.AsyncNamespace):
     def __init__(self, namespace):
         super().__init__(namespace)
 
-    async def on_connect(self, sid, environ):
+    async def on_connect(self, sid, environ, auth=None):
         print(f"Blender client connected: {sid}")
+        token = auth.get("token") if isinstance(auth, dict) else None
+        if webui_token and isinstance(token, str) and hmac.compare_digest(token, webui_token):
+            trusted_blender_sids.add(sid)
         # Notify web client about new connection
         blender_messages[sid] = {}
         await sio.emit("blender_connect", sid, namespace="/web")
@@ -162,7 +228,27 @@ class BlenderNamespace(socketio.AsyncNamespace):
         # Remove client message and notify web client about disconnection
         if sid in blender_messages:
             del blender_messages[sid]
+        trusted_blender_sids.discard(sid)
+        self.unpublish_svgs(sid)
         await sio.emit("blender_disconnect", sid, namespace="/web")
+
+    def unpublish_svgs(self, sid):
+        for svg_id in [svg_id for svg_id, published in published_svgs.items() if published[0] == sid]:
+            del published_svgs[svg_id]
+
+    def publish_svgs(self, sid, data):
+        """Replace drawing and sheet paths with opaque ids that get_svg accepts."""
+        self.unpublish_svgs(sid)
+        drawings_data = data.get("drawings_data") or {}
+        public_drawings_data = {}
+        for kind in ("drawings", "sheets"):
+            entries = []
+            for entry in drawings_data.get(kind) or []:
+                svg_id = secrets.token_urlsafe(16)
+                published_svgs[svg_id] = (sid, str(entry["path"]))
+                entries.append({"name": entry.get("name"), "id": svg_id})
+            public_drawings_data[kind] = entries
+        return {**data, "drawings_data": public_drawings_data}
 
     async def on_data(self, sid, data):
         print(f"Data from Blender client {sid}")
@@ -182,6 +268,10 @@ class BlenderNamespace(socketio.AsyncNamespace):
 
     async def on_drawings_data(self, sid, data):
         print(f"Drawings data from Blender client {sid}")
+        if sid not in trusted_blender_sids:
+            print(f"Ignoring drawings data from unauthenticated Blender client {sid}")
+            return
+        data = self.publish_svgs(sid, data)
         blender_messages[sid]["drwings_data"] = data
         await sio.emit("drawings_data", {"blenderId": sid, "data": data}, namespace="/web")
 
@@ -322,6 +412,7 @@ def main():
 
     args = parser.parse_args()
     sio_port = args.port
+    sio.eio.cors_allowed_origins = get_allowed_origins(args.host, sio_port)
     web.run_app(app, host=args.host, port=sio_port)
 
 

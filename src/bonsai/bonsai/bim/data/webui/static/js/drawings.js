@@ -236,16 +236,16 @@ function displayDrawingsNames(blenderId, ifcFile) {
         const type = id[0];
         const ifcFile = $("#dropdown-menu").val();
 
-        var path = "";
+        var svgId = "";
 
         if (type === "drawing") {
-          path = allDrawings[ifcFile].drawings[index].path;
+          svgId = allDrawings[ifcFile].drawings[index].id;
         } else if (type === "sheet") {
-          path = allDrawings[ifcFile].sheets[index].path;
+          svgId = allDrawings[ifcFile].sheets[index].id;
         }
 
         const msg = {
-          path: path,
+          id: svgId,
         };
         // console.log(msg);
         socket.emit("get_svg", msg);

@@ -23,9 +23,11 @@ import errno
 import json
 import os
 import queue
+import secrets
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -136,6 +138,7 @@ class Web(bonsai.core.tool.Web):
         env = os.environ.copy()
         env["BONSAI_LIB_PATH"] = str(bonsai_lib_path)
         env["BONSAI_VERSION"] = tool.Blender.get_bonsai_version()
+        env["BONSAI_WEBUI_TOKEN"] = cls.create_webui_token(port)
 
         ws_process = subprocess.Popen(
             [sys.executable, ws_path, "--p", str(port), "--host", "127.0.0.1"],
@@ -144,6 +147,37 @@ class Web(bonsai.core.tool.Web):
         )
 
         cls.set_is_running(True)
+
+    @classmethod
+    def get_webui_token_path(cls, port: int) -> Path:
+        return tool.Blender.get_data_dir_path("webui") / f"running_token_{port}"
+
+    @classmethod
+    def create_webui_token(cls, port: int) -> str:
+        """
+        Create the secret a Blender client presents to the WebSocket server on the given port.
+
+        It is stored in a file only the current user can read, so other Bonsai instances
+        connecting to the same port can present it too.
+
+        :param port: The port number of the WebSocket server.
+        :return: The new token.
+        """
+        token = secrets.token_urlsafe(32)
+        token_path = cls.get_webui_token_path(port)
+        fd, tmp_path = tempfile.mkstemp(dir=token_path.parent, prefix=".running_token_")
+        with os.fdopen(fd, "w") as f:
+            f.write(token)
+        os.replace(tmp_path, token_path)
+        return token
+
+    @classmethod
+    def read_webui_token(cls, port: int) -> Optional[str]:
+        try:
+            with open(cls.get_webui_token_path(port), "r") as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
 
     @classmethod
     def connect_websocket_server(cls, port: int) -> None:
@@ -173,7 +207,8 @@ class Web(bonsai.core.tool.Web):
         ws_thread.start()
 
         ws_url = f"ws://localhost:{port}/blender"
-        ws_thread.run_coro(cls.sio_connect(ws_url))
+        token = cls.read_webui_token(port)
+        ws_thread.run_coro(cls.sio_connect(ws_url, {"token": token} if token else None))
         cls.set_is_connected(True)
         bpy.app.timers.register(cls.check_operator_queue)
 
@@ -214,12 +249,17 @@ class Web(bonsai.core.tool.Web):
         with open(pid_file, "r") as f:
             pids = json.load(f)
 
-        if str(ws_process.pid) in pids:
-            del pids[str(ws_process.pid)]
+        port = pids.pop(str(ws_process.pid), None)
 
         # Write the updated PIDs back to the file
         with open(pid_file, "w") as f:
             json.dump(pids, f, indent=4)
+
+        if port is not None:
+            try:
+                os.remove(cls.get_webui_token_path(port))
+            except OSError:
+                pass
 
         ws_process.kill()
         ws_process = None
@@ -839,7 +879,7 @@ class Web(bonsai.core.tool.Web):
         cls.send_webui_data(theme, "theme", "theme_data", use_web_data=False)
 
     @classmethod
-    async def sio_connect(cls, url: str) -> None:
+    async def sio_connect(cls, url: str, auth: Optional[dict] = None) -> None:
         """
         Asynchronously establishes a WebSocket connection and sets up event listeners.
 
@@ -847,8 +887,9 @@ class Web(bonsai.core.tool.Web):
         an event listener for the `web_operator` event within the `/blender` namespace.
 
         :param url: The URL of the WebSocket server to connect to.
+        :param auth: Authentication data sent to the server, e.g. the server's token.
         """
-        await sio.connect(url, transports=["websocket"], namespaces="/blender")
+        await sio.connect(url, transports=["websocket"], namespaces="/blender", auth=auth)
         sio.on("web_operator", cls.sio_listen_web_operator, namespace="/blender")
 
     @classmethod
