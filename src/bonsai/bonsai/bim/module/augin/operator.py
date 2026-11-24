@@ -44,6 +44,7 @@ class AuginLogin(bpy.types.Operator):
 
         if result["success_feedback"]["success"]:
             props.token = result["token"]
+            props.password = ""
         else:
             self.report({"ERROR"}, "Login failed :(")
         return {"FINISHED"}
