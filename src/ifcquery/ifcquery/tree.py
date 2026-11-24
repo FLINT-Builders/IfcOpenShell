@@ -33,15 +33,22 @@ def _element_summary(element: ifcopenshell.entity_instance) -> dict[str, Any]:
     }
 
 
-def _build_spatial_node(element: ifcopenshell.entity_instance) -> dict[str, Any]:
+def _build_spatial_node(
+    element: ifcopenshell.entity_instance, visited: set[ifcopenshell.entity_instance] | None = None
+) -> dict[str, Any]:
     """Recursively build a spatial tree node."""
     node = _element_summary(element)
+    # Cyclic aggregates in malformed files must not cause infinite recursion.
+    if visited is None:
+        visited = set()
+    visited.add(element)
 
     # Get aggregated children (Site in Project, Building in Site, Storey in Building, etc.)
     aggregates = []
     for rel in getattr(element, "IsDecomposedBy", []):
         for child in rel.RelatedObjects:
-            aggregates.append(_build_spatial_node(child))
+            if child not in visited:
+                aggregates.append(_build_spatial_node(child, visited))
 
     # Get contained elements (walls, slabs, etc. in a storey/space)
     contained = []
