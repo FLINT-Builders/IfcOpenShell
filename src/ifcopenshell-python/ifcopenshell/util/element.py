@@ -1160,32 +1160,27 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    visited = {element}
     while queue:
         element = queue.pop()
+        related = []
         for rel in getattr(element, "ContainsElements", []):
-            related = rel.RelatedElements
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedElements)
         for rel in getattr(element, "IsDecomposedBy", []):
-            related = rel.RelatedObjects
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedObjects)
         for rel in getattr(element, "HasOpenings", []):
-            related = rel.RelatedOpeningElement
-            queue.append(related)
-            results.add(related)
+            related.append(rel.RelatedOpeningElement)
         for rel in getattr(element, "HasFillings", []):
-            related = rel.RelatedBuildingElement
-            queue.append(related)
-            results.add(related)
+            related.append(rel.RelatedBuildingElement)
         for rel in getattr(element, "IsNestedBy", []):
-            related = rel.RelatedObjects
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedObjects)
         for rel in getattr(element, "HasSurfaceFeatures", []):
-            related = rel.RelatedSurfaceFeatures
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedSurfaceFeatures)
+        for subelement in related:
+            if subelement not in visited:
+                visited.add(subelement)
+                results.add(subelement)
+                queue.append(subelement)
         if not is_recursive:
             break
     return results
@@ -1208,12 +1203,15 @@ def get_grouped_by(
     """
     queue = [element]
     results = []
+    visited = {element}
     while queue:
         element = queue.pop()
         for rel in getattr(element, "IsGroupedBy", []):
-            related_objects = rel.RelatedObjects
-            queue.extend(related_objects)
-            results.extend(related_objects)
+            for related_object in rel.RelatedObjects:
+                if related_object not in visited:
+                    visited.add(related_object)
+                    results.append(related_object)
+                    queue.append(related_object)
         if not is_recursive:
             break
     return results
