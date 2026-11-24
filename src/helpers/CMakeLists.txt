@@ -100,3 +100,11 @@ install(TARGETS helpers EXPORT ${IFCOPENSHELL_EXPORT_TARGETS})
 install(FILES ${HELPER_H_FILES}
     DESTINATION ${INCLUDEDIR}/helpers
 )
+
+# Fails while si_scale_from_named_unit_s follows a cyclic IfcConversionBasedUnit
+# forever. The executable is the spec for that fix; it is not installed.
+add_executable(test_cyclic_unit_scale tests/test_cyclic_unit_scale.cpp)
+target_link_libraries(test_cyclic_unit_scale PRIVATE helpers)
+set_target_properties(test_cyclic_unit_scale PROPERTIES
+    BUILD_RPATH "$<TARGET_FILE_DIR:IfcParse>"
+)
