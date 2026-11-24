@@ -33,6 +33,9 @@
 #include <QCollator>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <unordered_set>
 
 namespace bonsaiviewer::modules::spatial_hierarchy {
 
@@ -75,7 +78,18 @@ QString displayName(const express::base& element) {
     return QString::fromStdString(element.declaration().name());
 }
 
-TreeNode buildNode(const express::base& element) {
+// Real spatial decompositions are a handful of levels deep; the cap keeps a
+// pathologically deep file from exhausting the stack here and in the panel.
+constexpr std::size_t kMaxDepth = 64;
+
+// `ancestors` holds the ids on the path from the project down to `element`; a
+// child already on that path is a cyclic aggregation and is left out.
+// `expanded` holds every id whose children were already added in this
+// rebuild; an element aggregated by more than one parent is listed under each
+// but expanded only once, so shared children cannot multiply the tree.
+TreeNode buildNode(const express::base& element,
+                   std::unordered_set<uint32_t>& ancestors,
+                   std::unordered_set<uint32_t>& expanded) {
     TreeNode node;
     node.name = displayName(element);
     node.kind = kindOf(element);
@@ -87,8 +101,14 @@ TreeNode buildNode(const express::base& element) {
                long_name && !long_name->empty()) {
         node.detail = QString::fromStdString(*long_name);
     }
-    for (const auto& child : get_spatial_children(element)) {
-        node.children.append(buildNode(child));
+    if (ancestors.size() < kMaxDepth && expanded.insert(element.id()).second) {
+        ancestors.insert(element.id());
+        for (const auto& child : get_spatial_children(element)) {
+            if (ancestors.count(child.id()) == 0) {
+                node.children.append(buildNode(child, ancestors, expanded));
+            }
+        }
+        ancestors.erase(element.id());
     }
     sortByName(node.children);
     return node;
@@ -133,9 +153,11 @@ void SpatialHierarchyPanelView::rebuild() {
             try {
                 // IfcProject → IfcSite → … ; start the tree at the project's
                 // spatial children (the project itself has no ItemKind).
+                std::unordered_set<uint32_t> ancestors;
+                std::unordered_set<uint32_t> expanded;
                 for (const auto& project : file->instances_by_type("IfcProject")) {
                     for (const auto& child : get_spatial_children(project)) {
-                        nodes_.append(buildNode(child));
+                        nodes_.append(buildNode(child, ancestors, expanded));
                     }
                 }
             } catch (const std::exception&) {
