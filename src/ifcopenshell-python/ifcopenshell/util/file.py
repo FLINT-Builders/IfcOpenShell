@@ -90,8 +90,13 @@ class IfcHeaderExtractor:
         # https://www.steptools.com/stds/step/IS_final_p21e3.html#clause-8
         data = HeaderMetadata()
         max_lines_to_parse = 50
+        max_line_length = 64 * 1024
+        remaining_length = 1024 * 1024
         for _ in range(max_lines_to_parse):
-            line = next(ifc_file)
+            line = ifc_file.readline(min(max_line_length, remaining_length))
+            if not line:
+                break
+            remaining_length -= len(line)
             if isinstance(line, bytes):
                 line = line.decode("utf-8")
             if line.startswith("FILE_DESCRIPTION"):
@@ -112,5 +117,11 @@ class IfcHeaderExtractor:
         return data
 
     def extract_ifc_zip(self) -> HeaderMetadata:
-        archive = zipfile.ZipFile(self.filepath, "r")
-        return self.extract_ifc_spf(archive.open(archive.filelist[0]))
+        with zipfile.ZipFile(self.filepath, "r") as archive:
+            info = archive.filelist[0]
+            # zipfile only caps decompressed output per read for these methods,
+            # other methods can expand a tiny chunk into gigabytes on a single read.
+            if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                return HeaderMetadata()
+            with archive.open(info) as ifc_file:
+                return self.extract_ifc_spf(ifc_file)
