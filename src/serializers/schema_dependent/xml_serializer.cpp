@@ -23,6 +23,7 @@
 #include <boost/foreach.hpp>
 
 #include "xml_serializer.h"
+#include "recursion_guard.h"
 
 #include <algorithm>
 
@@ -188,9 +189,9 @@ std::string qualify_unrooted_instance(const express::base& inst) {
 // A function to be called recursively. Template specialization is used
 // to descend into decomposition, containment and property relationships.
 template <typename A>
-ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, A instance, ptree& tree, express::base parent = express::base()) {
+ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, A instance, ptree& tree, recursion_guard& guard, express::base parent = express::base()) {
 	if (instance.declaration().is(IfcSchema::IfcObjectDefinition::Class())) {
-		return descend(log, mapping, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent);
+		return descend(log, mapping, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, guard, parent);
 	} else {
 		return format_entity_instance(log, mapping, instance, tree);
 	}
@@ -230,13 +231,18 @@ auto get_related(ifcopenshell::logger& log, T t, F f, G g) {
 // Descends into the tree by recursing into IfcRelContainedInSpatialStructure,
 // IfcRelDecomposes, IfcRelDefinesByType, IfcRelDefinesByProperties relations.
 template <>
-ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcObjectDefinition product, ptree& tree, express::base parent) {
+ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcObjectDefinition product, ptree& tree, recursion_guard& guard, express::base parent) {
 	if (product.declaration().is(IfcSchema::IfcElement::Class())) {
 		auto voids = product.as<IfcSchema::IfcElement>().FillsVoids();
 		if (voids.size() == 1 && voids.front().RelatingOpeningElement() != parent) {
 			// Fills are placed under their corresponding opening, return early to avoid duplication.
 			return nullptr;
 		}
+	}
+
+	recursion_guard::scope scope(guard, product);
+	if (!scope) {
+		return nullptr;
 	}
 
 	ptree& child = *format_entity_instance(log, mapping, product, tree);
@@ -246,7 +252,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 			log, opening, &IfcSchema::IfcOpeningElement::HasFillings, &IfcSchema::IfcRelFillsElement::RelatedBuildingElement);
 
 		for (auto& f : fills) {
-			descend(log, mapping, f, child, product);
+			descend(log, mapping, f, child, guard, product);
 		}
 	}
 
@@ -256,7 +262,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 			(log, structure, &IfcSchema::IfcSpatialStructureElement::ContainsElements, &IfcSchema::IfcRelContainedInSpatialStructure::RelatedElements);
 
 		for (auto& el : elements) {
-			descend(log, mapping, el, child, product);
+			descend(log, mapping, el, child, guard, product);
 		}
 	}
 
@@ -265,7 +271,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
             log, element, &IfcSchema::IfcElement::HasOpenings, &IfcSchema::IfcRelVoidsElement::RelatedOpeningElement);
 
         for (auto& op : openings) {
-            descend(log, mapping, op, child, product);
+            descend(log, mapping, op, child, guard, product);
         }
     }
 
@@ -286,7 +292,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 #endif
 
 	for (auto& ob : structures) {
-		descend(log, mapping, ob, child, product);
+		descend(log, mapping, ob, child, guard, product);
 	}
 
 	if (auto object = product.as<IfcSchema::IfcObject>()) {
@@ -365,17 +371,20 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 }
 
 // Format IfcProperty instances and insert into the DOM. IfcComplexProperties are flattened out.
-void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcProperty>& properties, ptree& node) {
+void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcProperty>& properties, ptree& node, recursion_guard& guard) {
     for (auto& p : properties) {
         if (auto complex = p.as<IfcSchema::IfcComplexProperty>()) {
-			format_properties(log, mapping, complex.HasProperties(), node);
+			recursion_guard::scope scope(guard, complex);
+			if (scope) {
+				format_properties(log, mapping, complex.HasProperties(), node, guard);
+			}
 		} else {
 			format_entity_instance(log, mapping, p, node);
 		}
 	}
 }
 
-void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcGroup group, ptree& node, std::set<std::string> notRootGroups) {
+void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcGroup group, ptree& node, std::set<std::string> notRootGroups, recursion_guard& guard) {
 	// @todo tfk: instead of a set<string> shouldn't we just have a set<IfcGroup>, the current approach
 	// might not work with non-unique or NIL group names.
 
@@ -387,37 +396,52 @@ void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_ma
     if (notRootGroups.find(*group.Name()) != notRootGroups.end()) {
         return;
     }
+    recursion_guard::scope scope(guard, group);
+    if (!scope) {
+        return;
+    }
     // Write one group to root
-    ptree* node2 = descend(log, mapping, group, node);
+    recursion_guard decomposition;
+    ptree* node2 = descend(log, mapping, group, node, decomposition);
+    if (!node2) {
+        return;
+    }
     auto father = group.IsGroupedBy();
     for (auto& ii : father)
     {
         auto objs = ii.RelatedObjects();
         for (auto entity : objs) {
             if (entity.as<IfcSchema::IfcGroup>() && entity.Name()) {
-                writeGroupToNode(log, mapping, entity.as<IfcSchema::IfcGroup>(), *node2, notRootGroups);
+                writeGroupToNode(log, mapping, entity.as<IfcSchema::IfcGroup>(), *node2, notRootGroups, guard);
                 notRootGroups.emplace(*entity.Name());
             }
             else {
                 // Write child to father group
-                descend(log, mapping, entity, *node2);
+                descend(log, mapping, entity, *node2, decomposition);
             }
         }
     }
 }
 
 // Format IfcElementQuantity instances and insert into the DOM.
-void format_quantities(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcPhysicalQuantity>& quantities, ptree& node) {
+void format_quantities(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcPhysicalQuantity>& quantities, ptree& node, recursion_guard& guard) {
 	for (auto& p : quantities) {
 		ptree* node2 = format_entity_instance(log, mapping, p, node);
 		if (node2 && p.declaration().is(IfcSchema::IfcPhysicalComplexQuantity::Class())) {
-            format_quantities(log, mapping, p.as<IfcSchema::IfcPhysicalComplexQuantity>().HasQuantities(), *node2);
+			recursion_guard::scope scope(guard, p);
+			if (scope) {
+				format_quantities(log, mapping, p.as<IfcSchema::IfcPhysicalComplexQuantity>().HasQuantities(), *node2, guard);
+			}
 		}
 	}
 }
 
 // Format IfcTask instances and insert into the DOM.
-void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcTask task, ptree& node) {
+void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcTask task, ptree& node, recursion_guard& guard) {
+	recursion_guard::scope scope(guard, task);
+	if (!scope) {
+		return;
+	}
 	ptree* ntask = format_entity_instance(log, mapping, task, node);
 
 	if (ntask) {
@@ -516,7 +540,7 @@ void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mappin
 			for (auto& object : related_objects)
 			{
                 if (auto task2 = object.as<IfcSchema::IfcTask>()) {
-                    format_tasks(log, mapping, task2, *ntask);
+                    format_tasks(log, mapping, task2, *ntask, guard);
                 }
 			}
 		}
@@ -612,15 +636,17 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
         log.message(ifcopenshell::logger::LOG_ERROR, "SER", 19, ss.str());
 	}
 
+	recursion_guard guard;
+
 	// Descend into the decomposition structure of the IFC file.
-	descend(log, mapping_, project, decomposition);
+	descend(log, mapping_, project, decomposition, guard);
 
 	// Write all property sets and values as XML nodes.
 	auto psets = file->instances_by_type<IfcSchema::IfcPropertySet>();
 	for (auto& pset : psets) {
 		ptree* node = format_entity_instance(log, mapping_, pset, properties);
 		if (node) {
-			format_properties(log, mapping_, pset.HasProperties(), *node);
+			format_properties(log, mapping_, pset.HasProperties(), *node, guard);
 		}
 	}
 
@@ -628,7 +654,7 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
 	auto gsets = file->instances_by_type<IfcSchema::IfcGroup>();
 	std::set<std::string> notRootGroups; //selfname, fathername
 	for (auto& g : gsets) {
-		writeGroupToNode(log, mapping_, g, groups, notRootGroups);
+		writeGroupToNode(log, mapping_, g, groups, notRootGroups, guard);
 	}
 	for (auto it = groups.begin(); it != groups.end();) {
 		if (notRootGroups.find(it->second.get<std::string>("<xmlattr>.Name")) != notRootGroups.end()) {
@@ -643,7 +669,7 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
 	for (auto& qto : qtosets) {
 		ptree* node = format_entity_instance(log, mapping_, qto, quantities);
 		if (node) {
-			format_quantities(log, mapping_, qto.Quantities(), *node);
+			format_quantities(log, mapping_, qto.Quantities(), *node, guard);
 		}
 	}
 
@@ -660,7 +686,7 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
 				for(auto& object : objects) {
 					if (object && object.declaration().is(IfcSchema::IfcTask::Class())) {
 						IfcSchema::IfcTask task = object.as<IfcSchema::IfcTask>();
-						format_tasks(log, mapping_, task, *nschedule);
+						format_tasks(log, mapping_, task, *nschedule, guard);
 					}
 				}
 			}
@@ -725,7 +751,7 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
 	// Write all type objects as XML nodes.
 	auto type_objects = file->instances_by_type<IfcSchema::IfcTypeObject>();
     for (auto& type_object : type_objects) {
-		ptree* node = descend(log, mapping_, type_object, types);
+		ptree* node = descend(log, mapping_, type_object, types, guard);
 
 		if (node && type_object.HasPropertySets()) {
 			auto property_sets = *type_object.HasPropertySets();
