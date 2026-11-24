@@ -3570,6 +3570,7 @@ class ImportRepresentationItems(bpy.types.Operator, tool.Ifc.Operator):
                 continue  # In theory, an item can be used multiple times (e.g. in a boolean stack).
             item = tool.Ifc.get().by_id(item_id)
             if item.is_a("IfcBooleanResult"):
+                processed_ids.add(item_id)
                 queue.append(item.FirstOperand.id())
                 queue.append(item.SecondOperand.id())
                 boolean_ids.add(item.SecondOperand.id())

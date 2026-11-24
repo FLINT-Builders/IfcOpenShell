@@ -191,9 +191,11 @@ class MaterialCreator:
                 items.extend(item.MappingSource.MappedRepresentation.Items)
             if item.is_a("IfcBooleanResult"):
                 operand = item.FirstOperand
-                while True:
+                visited = {item}
+                while operand not in visited:
                     items.append(operand)
                     if operand.is_a("IfcBooleanResult"):
+                        visited.add(operand)
                         operand = operand.FirstOperand
                     else:
                         break
