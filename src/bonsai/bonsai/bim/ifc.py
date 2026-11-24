@@ -42,6 +42,10 @@ from bonsai.tool.brick import BrickStore
 
 IFC_CONNECTED_TYPE = Union[bpy.types.Material, bpy.types.Object]
 
+IFCZIP_MAX_ENTRIES = 512
+IFCZIP_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+IFCZIP_MAX_COMPRESSION_RATIO = 100
+
 
 class OperationData(TypedDict):
     id: int
@@ -239,10 +243,17 @@ class IfcStore:
         extension = path.split(".")[-1]
         prefs = tool.Blender.get_addon_preferences()
         if extension.lower() == "ifczip":
-            with tempfile.TemporaryDirectory() as unzipped_path:
-                with zipfile.ZipFile(path, "r") as zip_ref:
-                    zip_ref.extractall(unzipped_path)
-                for filename in Path(unzipped_path).glob("**/*.ifc"):
+            with zipfile.ZipFile(path, "r") as zip_ref:
+                try:
+                    member = IfcStore.get_ifczip_member(zip_ref)
+                except ValueError as e:
+                    print(f"Refusing to load {path}. Error details: {e}")
+                    return
+                if member is None:
+                    return
+                with tempfile.TemporaryDirectory() as unzipped_path:
+                    filename = os.path.join(unzipped_path, "model.ifc")
+                    IfcStore.extract_ifczip_member(zip_ref, member, filename)
                     IfcStore.file = ifcopenshell.open(filename)
                     return
         elif extension.lower() == "ifcxml":
@@ -252,6 +263,33 @@ class IfcStore:
         else:
             IfcStore.file = ifcopenshell.open(path)
         tool.Ifc.after_file_loaded()
+
+    @staticmethod
+    def get_ifczip_member(zip_ref: zipfile.ZipFile) -> zipfile.ZipInfo | None:
+        """Validate archive limits and return the first .ifc member, if any."""
+        members = zip_ref.infolist()
+        if len(members) > IFCZIP_MAX_ENTRIES:
+            raise ValueError(f"IFC-ZIP archive has more than {IFCZIP_MAX_ENTRIES} entries.")
+        uncompressed_size = sum(member.file_size for member in members)
+        compressed_size = sum(member.compress_size for member in members)
+        if uncompressed_size > IFCZIP_MAX_UNCOMPRESSED_BYTES:
+            raise ValueError(f"IFC-ZIP archive expands to more than {IFCZIP_MAX_UNCOMPRESSED_BYTES} bytes.")
+        if uncompressed_size > compressed_size * IFCZIP_MAX_COMPRESSION_RATIO:
+            raise ValueError(f"IFC-ZIP archive compression ratio exceeds {IFCZIP_MAX_COMPRESSION_RATIO}.")
+        for member in members:
+            if not member.is_dir() and member.filename.lower().endswith(".ifc"):
+                return member
+
+    @staticmethod
+    def extract_ifczip_member(zip_ref: zipfile.ZipFile, member: zipfile.ZipInfo, filename: str) -> None:
+        # Declared sizes come from the archive itself, so enforce them while decompressing.
+        written = 0
+        with zip_ref.open(member) as source, open(filename, "wb") as target:
+            while chunk := source.read(1024 * 1024):
+                written += len(chunk)
+                if written > member.file_size:
+                    raise ValueError("IFC-ZIP member is larger than its declared size.")
+                target.write(chunk)
 
     @staticmethod
     def get_schema() -> ifcopenshell.ifcopenshell_wrapper.schema_definition:
