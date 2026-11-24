@@ -21,7 +21,42 @@
 #define mapping POSTFIX_SCHEMA(mapping)
 using namespace ifcopenshell::geom;
 
+#include <algorithm>
 #include <deque>
+#include <string>
+#include <vector>
+
+namespace {
+	// Mapping recurses once per PlacementRelTo level, so longer chains are
+	// rejected before they can exhaust the stack.
+	constexpr std::size_t max_placement_depth = 256;
+
+	IfcSchema::IfcObjectPlacement get_placement_rel_to(const IfcSchema::IfcObjectPlacement& placement) {
+#ifdef SCHEMA_IfcObjectPlacement_HAS_PlacementRelTo
+		return placement.PlacementRelTo();
+#else
+		if (auto local = placement.as<IfcSchema::IfcLocalPlacement>()) {
+			return local.PlacementRelTo();
+		}
+		return {};
+#endif
+	}
+
+	// The parser accepts cyclic PlacementRelTo chains, which would otherwise
+	// recurse until the stack overflows.
+	void check_placement_chain(const IfcSchema::IfcObjectPlacement& inst) {
+		std::vector<IfcSchema::IfcObjectPlacement> chain = {inst};
+		for (auto placement = get_placement_rel_to(inst); placement; placement = get_placement_rel_to(placement)) {
+			if (std::find(chain.begin(), chain.end(), placement) != chain.end()) {
+				throw ifcopenshell::exception("Cyclic PlacementRelTo chain at #" + std::to_string(inst.id()));
+			}
+			if (chain.size() >= max_placement_depth) {
+				throw ifcopenshell::exception("PlacementRelTo chain too deep at #" + std::to_string(inst.id()));
+			}
+			chain.push_back(placement);
+		}
+	}
+}
 
 taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 	if (placement_rel_to_type_ || placement_rel_to_instance_) {
@@ -82,13 +117,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 		return nullptr;
 	}
 
-#ifdef SCHEMA_IfcObjectPlacement_HAS_PlacementRelTo
-	relative_to = inst.PlacementRelTo();
-#else
-	if (inst.as<IfcSchema::IfcLocalPlacement>()) {
-		relative_to = inst.as<IfcSchema::IfcLocalPlacement>().PlacementRelTo();
-	}
-#endif
+	relative_to = get_placement_rel_to(inst);
 
 	bool parent_placement_ignored = false;
 	if (relative_to && (placement_rel_to_type_ || placement_rel_to_instance_)) {
@@ -103,6 +132,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 
 	taxonomy::matrix4::ptr result;
 	if (!parent_placement_ignored && relative_to) {
+		check_placement_chain(inst);
         result = taxonomy::make<taxonomy::matrix4>(
 			// @nb this is a bit silly, in 0.7 we didn't have a recursive function
 			// but a while loop to apply the hierarchical placements, so after the
