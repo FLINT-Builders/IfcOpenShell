@@ -368,6 +368,11 @@ class DOCDB(MyDB):
             return session.execute_write(save_metadata_for_documents_work)
 
     def get_upload_instructions(self, upload_session, server_context, document: UploadFileDetail, user: User):
+        size_in_bytes = int(document.size_in_bytes)
+        max_size_in_bytes = max_upload_size_in_bytes()
+        if size_in_bytes < 1 or size_in_bytes > max_size_in_bytes:
+            raise HTTPException(status_code=400, detail="Invalid file size.")
+
         def update_file_size_work(tx) -> str:
             cypher = """
                 MATCH (u:User)-[r1:HAS]->(us:Session:Upload)-[r2:CONTAINS]->(d:Document)
@@ -382,7 +387,7 @@ class DOCDB(MyDB):
                 username=user.username,
                 upload_session=upload_session,
                 session_file_id=document.session_file_id,
-                size_in_bytes=document.size_in_bytes,
+                size_in_bytes=size_in_bytes,
             )
             summary = result.consume()
             if summary.counters.properties_set < 1:
@@ -437,13 +442,13 @@ class DOCDB(MyDB):
             return upload_part_uuid
 
         # calculate the number of file parts to send
-        number_of_parts = math.ceil(int(document.size_in_bytes) / int(os.environ["SESSION_MAX_FILE_SIZE_BYTES"]))
-        part_length = math.ceil(int(document.size_in_bytes) / number_of_parts)
+        number_of_parts = math.ceil(size_in_bytes / max_size_in_bytes)
+        part_length = math.ceil(size_in_bytes / number_of_parts)
         for part_number in range(number_of_parts):
             content_range_start = part_number * part_length
             content_range_end = ((part_number + 1) * part_length) - 1
-            if content_range_end > document.size_in_bytes:
-                content_range_end = document.size_in_bytes - 1
+            if content_range_end > size_in_bytes:
+                content_range_end = size_in_bytes - 1
             content_length = content_range_end - content_range_start + 1
             upload_part_uuid = uuid4()
             upload_part_url = "upload-part/" + str(upload_part_uuid)
