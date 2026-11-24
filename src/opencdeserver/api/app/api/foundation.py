@@ -17,8 +17,6 @@ secrets = get_secrets()
 router = APIRouter(route_class=LoggingRoute)
 
 http_basic = HTTPBasic()
-oauth2_state = None
-authorization_code = None
 
 templates = Jinja2Templates(directory="templates")
 
@@ -180,9 +178,6 @@ def code(
     scope: str = "",
 ):
 
-    global oauth2_state
-    oauth2_state = state
-
     print("Username: " + username + ". Password: " + password)
     user = authenticate_user(username, password)
 
@@ -201,12 +196,11 @@ def code(
     # This functions adds the authorization code to the user node in the graph.
     # The authorization code node self-destructs after time delay SECURITY_AUTHORIZATION_CODE_EXPIRE_SECONDS
 
-    global authorization_code
-    new_authorization_code = str(uuid4())
+    authorization_code = str(uuid4())
 
-    if foundation_db.create_authorization_code(username, new_authorization_code, scope):
-        authorization_code = new_authorization_code
-        print(f"Authorization code: {authorization_code}")
+    if not foundation_db.create_authorization_code(username, authorization_code, scope):
+        raise HTTPException(status_code=400, detail="Authorization code was not created.")
+    print(f"Authorization code: {authorization_code}")
 
     # 5. When the access code is returned, the server redirects the user to redirect_uri.
     #   http://localhost:10445/Callback&scope=test&code=xxx&state=xxx
