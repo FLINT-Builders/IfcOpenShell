@@ -1017,11 +1017,14 @@ def get_facility_parent(
     element: ifcopenshell.entity_instance, ifc_class: str
 ) -> Union[ifcopenshell.entity_instance, None]:
     parent = ifcopenshell.util.element.get_aggregate(element)
-    while parent:
+    # Cyclic aggregates in malformed files must not cause infinite loops.
+    visited = {element}
+    while parent and parent not in visited:
         if parent.is_a(ifc_class):
             return parent
         if parent.is_a("IfcProject"):
             return
+        visited.add(parent)
         parent = ifcopenshell.util.element.get_aggregate(parent)
 
 
@@ -1030,7 +1033,13 @@ def val(x: Any) -> Any:
     return x if x not in ("", "n/a") else None
 
 
-def get_area_measurement(element: ifcopenshell.entity_instance) -> Union[str, None]:
+def get_area_measurement(
+    element: ifcopenshell.entity_instance, visited: Optional[set[ifcopenshell.entity_instance]] = None
+) -> Union[str, None]:
+    # Cyclic aggregates in malformed files must not cause infinite recursion.
+    if visited is None:
+        visited = set()
+    visited.add(element)
     for relationship in getattr(element, "IsDefinedBy", []) or []:
         if relationship.is_a("IfcRelDefinesByProperties"):
             definition = relationship.RelatingPropertyDefinition
@@ -1038,7 +1047,9 @@ def get_area_measurement(element: ifcopenshell.entity_instance) -> Union[str, No
                 return definition.MethodOfMeasurement
     for rel in getattr(element, "IsDecomposedBy", []):
         for related_object in rel.RelatedObjects:
-            result = get_area_measurement(related_object)
+            if related_object in visited:
+                continue
+            result = get_area_measurement(related_object, visited)
             if result:
                 return result
 
