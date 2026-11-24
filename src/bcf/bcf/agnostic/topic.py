@@ -1,5 +1,6 @@
 import tempfile
-from pathlib import Path
+import uuid
+from pathlib import Path, PureWindowsPath
 from typing import Optional, Union
 
 from typing_extensions import assert_never
@@ -13,6 +14,22 @@ import bcf.v3.model
 import bcf.v3.topic
 
 TopicHandler = Union[bcf.v2.topic.TopicHandler, bcf.v3.topic.TopicHandler]
+
+
+def _safe_filename(*candidates: Optional[str]) -> str:
+    """Return the final path component of the first candidate that is a usable filename.
+
+    Filenames come from the BCF XML, so they are untrusted. ``PureWindowsPath`` splits on
+    both ``/`` and ``\\`` and drops drive prefixes regardless of the current platform.
+    Trailing dots and spaces are stripped because Windows ignores them when opening files.
+    """
+    for candidate in candidates:
+        if not candidate:
+            continue
+        name = PureWindowsPath(candidate).name.rstrip(". ")
+        if name not in ("", ".", ".."):
+            return name
+    return uuid.uuid4().hex
 
 
 def extract_file(
@@ -95,7 +112,10 @@ def extract_file(
             filename = Path(reference).name
 
     if not outfile:
-        outfile = Path(tempfile.mkdtemp()) / filename
+        directory = Path(tempfile.mkdtemp()).resolve()
+        outfile = (directory / _safe_filename(filename, reference)).resolve()
+        if outfile.parent != directory:
+            raise ValueError(f"Refusing to extract '{filename}' outside of '{directory}'.")
 
     with open(outfile, "wb") as f:
         f.write(bytes_data)
