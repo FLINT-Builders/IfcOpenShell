@@ -15,7 +15,8 @@ $(document).ready(function () {
 
 function connectSocket() {
   const url = "ws://localhost:" + SOCKET_PORT + "/web";
-  socket = io(url);
+  const token = document.querySelector('meta[name="bonsai-webui-token"]').content;
+  socket = io(url, { auth: { token: token } });
 
   socket.on("blender_connect", handleBlenderConnect);
   socket.on("blender_disconnect", handleBlenderDisconnect);

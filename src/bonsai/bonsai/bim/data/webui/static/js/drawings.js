@@ -21,7 +21,8 @@ $(document).ready(function () {
 // Function to connect to Socket.IO server
 function connectSocket() {
   const url = "ws://localhost:" + SOCKET_PORT + "/web";
-  socket = io(url);
+  const token = document.querySelector('meta[name="bonsai-webui-token"]').content;
+  socket = io(url, { auth: { token: token } });
   console.log("socket: ", socket);
 
   // Register socket event handlers

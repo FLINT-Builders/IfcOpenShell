@@ -23,11 +23,13 @@ import errno
 import json
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -161,6 +163,8 @@ class Web(bonsai.core.tool.Web):
             print(f"Already connected to websocket server on port: {port}")
             return
 
+        token = cls.get_websocket_token(port)
+
         sio = socketio.AsyncClient(
             reconnection=True,
             reconnection_attempts=RECONNECTION_ATTEMPTS,
@@ -173,9 +177,26 @@ class Web(bonsai.core.tool.Web):
         ws_thread.start()
 
         ws_url = f"ws://localhost:{port}/blender"
-        ws_thread.run_coro(cls.sio_connect(ws_url))
+        ws_thread.run_coro(cls.sio_connect(ws_url, token))
         cls.set_is_connected(True)
         bpy.app.timers.register(cls.check_operator_queue)
+
+    @classmethod
+    def get_websocket_token(cls, port: int) -> str:
+        """
+        Read the per-session token that the WebSocket server embeds in its pages.
+
+        :param port: The port number of the WebSocket server.
+
+        :return: The token to present in the Socket.IO auth payload.
+        """
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{port}/", timeout=5) as response:
+            html = response.read().decode("utf-8")
+        match = re.search(r'<meta name="bonsai-webui-token" content="([^"]+)"', html)
+        if match is None:
+            raise RuntimeError(f"No session token found on websocket server port: {port}")
+        return match.group(1)
 
     @classmethod
     def disconnect_websocket_server(cls) -> None:
@@ -757,6 +778,8 @@ class Web(bonsai.core.tool.Web):
                 reference_path = os.path.normpath(reference_path)
                 drawings_data.append({"name": reference_name, "path": reference_path})
 
+            # The server only serves drawings from inside this directory.
+            cls.send_webui_data(data=ifc_file_dir, data_key="project_dir", event="project_dir", use_web_data=False)
             cls.send_webui_data(
                 data={"drawings": drawings_data, "sheets": sheets_data}, data_key="drawings_data", event="drawings_data"
             )
@@ -839,7 +862,7 @@ class Web(bonsai.core.tool.Web):
         cls.send_webui_data(theme, "theme", "theme_data", use_web_data=False)
 
     @classmethod
-    async def sio_connect(cls, url: str) -> None:
+    async def sio_connect(cls, url: str, token: str) -> None:
         """
         Asynchronously establishes a WebSocket connection and sets up event listeners.
 
@@ -847,8 +870,9 @@ class Web(bonsai.core.tool.Web):
         an event listener for the `web_operator` event within the `/blender` namespace.
 
         :param url: The URL of the WebSocket server to connect to.
+        :param token: The per-session token the server requires in the auth payload.
         """
-        await sio.connect(url, transports=["websocket"], namespaces="/blender")
+        await sio.connect(url, transports=["websocket"], namespaces="/blender", auth={"token": token})
         sio.on("web_operator", cls.sio_listen_web_operator, namespace="/blender")
 
     @classmethod

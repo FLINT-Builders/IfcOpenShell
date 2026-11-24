@@ -9,7 +9,9 @@ if bonsai_lib_path:
 
 import argparse
 import base64
+import hmac
 import json
+import secrets
 import urllib.parse
 import xml.etree.ElementTree as ET
 
@@ -18,6 +20,66 @@ import socketio
 from aiohttp import web
 
 sio_port = 8080  # default port
+
+# Per-process secret embedded in the served pages. Every Socket.IO client must present it.
+session_token = secrets.token_urlsafe(32)
+env_project_dir = os.environ.get("BONSAI_WEBUI_PROJECT_DIR")
+blender_project_dirs = {}
+
+
+def get_local_hosts(port: int) -> set[str]:
+    return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+
+def get_local_origins(port: int) -> list[str]:
+    return [f"http://{host}" for host in sorted(get_local_hosts(port))]
+
+
+def is_valid_token(auth) -> bool:
+    if not isinstance(auth, dict):
+        return False
+    token = auth.get("token")
+    if not isinstance(token, str):
+        return False
+    return hmac.compare_digest(token.encode("utf-8"), session_token.encode("utf-8"))
+
+
+def open_beneath(root: str, relative_path: str):
+    """Open root/relative_path without following symlinks that may have been swapped in after resolution."""
+    parts = relative_path.split(os.sep)
+    if os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        return open(os.path.join(root, relative_path), "rb")
+    dir_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            os.close(dir_fd)
+            dir_fd = next_fd
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
+    return os.fdopen(fd, "rb")
+
+
+def open_project_file(path, extensions: tuple[str, ...]):
+    """Open a file only if its canonical path is inside a project directory."""
+    if not isinstance(path, str) or not path:
+        return None
+    real_path = os.path.realpath(path)
+    if not real_path.lower().endswith(extensions):
+        return None
+    roots = {env_project_dir, *blender_project_dirs.values()}
+    for root in roots:
+        if not root:
+            continue
+        root = os.path.realpath(root)
+        try:
+            if os.path.commonpath([root, real_path]) != root or real_path == root:
+                continue
+            return open_beneath(root, os.path.relpath(real_path, root))
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def get_asset_version() -> str:
@@ -64,8 +126,18 @@ async def no_cache_static_middleware(request: web.Request, handler):
     return response
 
 
-sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="aiohttp", max_http_buffer_size=10000000)
-app = web.Application(middlewares=[no_cache_static_middleware])
+@web.middleware
+async def local_host_middleware(request: web.Request, handler):
+    """Reject requests addressed to another host name, so DNS rebinding cannot read the session token."""
+    if request.headers.get("Host") not in get_local_hosts(sio_port):
+        raise web.HTTPForbidden()
+    return await handler(request)
+
+
+sio = socketio.AsyncServer(
+    cors_allowed_origins=get_local_origins(sio_port), async_mode="aiohttp", max_http_buffer_size=10000000
+)
+app = web.Application(middlewares=[local_host_middleware, no_cache_static_middleware])
 sio.attach(app)
 
 
@@ -81,7 +153,9 @@ class WebNamespace(socketio.AsyncNamespace):
     def __init__(self, namespace):
         super().__init__(namespace)
 
-    async def on_connect(self, sid, environ):
+    async def on_connect(self, sid, environ, auth=None):
+        if not is_valid_token(auth):
+            raise socketio.exceptions.ConnectionRefusedError("unauthorized")
         print(f"Web client connected: {sid}")
         await sio.emit("theme_data", blender_theme, namespace="/web", room=sid)
         if blender_messages:
@@ -100,8 +174,11 @@ class WebNamespace(socketio.AsyncNamespace):
         )
 
     async def on_get_svg(self, sid, data):
-        file_path = data["path"]
+        file_path = data.get("path") if isinstance(data, dict) else None
         svg = await self.process_svg(file_path)
+        if svg is None:
+            print(f"Refused to read drawing outside the project directory: {file_path}")
+            return
         await sio.emit("svg_data", svg, room=sid, namespace="/web")
 
     async def send_cached_messages(self, sid):
@@ -117,18 +194,25 @@ class WebNamespace(socketio.AsyncNamespace):
                 await self.emit("cost_items", {"blenderId": blenderId, "data": messages["cost_items"]}, room=sid)
 
     async def process_svg(self, file_path):
-        def encode_image(filepath):
+        image_extensions = (".png", ".svg", ".jpeg")
+
+        def encode_image(image_file):
             # Encode file content to base64 string
-            with open(filepath, "rb") as file:
-                encoded_string = base64.b64encode(file.read()).decode("utf-8")
+            with image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
             return f"data:image;base64,{encoded_string}"
+
+        svg_file = open_project_file(file_path, (".svg",))
+        if svg_file is None:
+            return None
 
         file_dir = os.path.dirname(file_path)
 
         ET.register_namespace("", "http://www.w3.org/2000/svg")
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
 
-        tree = ET.parse(file_path)
+        with svg_file:
+            tree = ET.parse(svg_file)
         root = tree.getroot()
 
         namespaces = {
@@ -138,10 +222,10 @@ class WebNamespace(socketio.AsyncNamespace):
 
         for element in root.findall(".//svg:image[@xlink:href]", namespaces):
             href = element.get("{http://www.w3.org/1999/xlink}href")
-            if href and href.endswith((".png", ".svg", ".jpeg")):
-                img_path = os.path.join(file_dir, href)
-                if os.path.exists(img_path):
-                    base64_data = encode_image(img_path)
+            if href and href.endswith(image_extensions):
+                image_file = open_project_file(os.path.join(file_dir, href), image_extensions)
+                if image_file is not None:
+                    base64_data = encode_image(image_file)
                     element.set("{http://www.w3.org/1999/xlink}href", base64_data)
         return ET.tostring(root, "unicode")
 
@@ -151,7 +235,9 @@ class BlenderNamespace(socketio.AsyncNamespace):
     def __init__(self, namespace):
         super().__init__(namespace)
 
-    async def on_connect(self, sid, environ):
+    async def on_connect(self, sid, environ, auth=None):
+        if not is_valid_token(auth):
+            raise socketio.exceptions.ConnectionRefusedError("unauthorized")
         print(f"Blender client connected: {sid}")
         # Notify web client about new connection
         blender_messages[sid] = {}
@@ -162,7 +248,13 @@ class BlenderNamespace(socketio.AsyncNamespace):
         # Remove client message and notify web client about disconnection
         if sid in blender_messages:
             del blender_messages[sid]
+        blender_project_dirs.pop(sid, None)
         await sio.emit("blender_disconnect", sid, namespace="/web")
+
+    async def on_project_dir(self, sid, data):
+        project_dir = data.get("project_dir") if isinstance(data, dict) else None
+        if isinstance(project_dir, str) and project_dir:
+            blender_project_dirs[sid] = project_dir
 
     async def on_data(self, sid, data):
         print(f"Data from Blender client {sid}")
@@ -245,28 +337,36 @@ class BlenderNamespace(socketio.AsyncNamespace):
 async def schedules(request):
     with open("templates/index.html", "r") as f:
         template = f.read()
-    html_content = pystache.render(template, {"port": sio_port, "version": bonsai_version, "v": asset_version})
+    html_content = pystache.render(
+        template, {"port": sio_port, "version": bonsai_version, "v": asset_version, "token": session_token}
+    )
     return web.Response(text=html_content, content_type="text/html")
 
 
 async def costing(request):
     with open("templates/costing.html", "r") as f:
         template = f.read()
-    html_content = pystache.render(template, {"port": sio_port, "version": bonsai_version, "v": asset_version})
+    html_content = pystache.render(
+        template, {"port": sio_port, "version": bonsai_version, "v": asset_version, "token": session_token}
+    )
     return web.Response(text=html_content, content_type="text/html")
 
 
 async def sequencing(request):
     with open("templates/gantt.html", "r") as f:
         template = f.read()
-    html_content = pystache.render(template, {"port": sio_port, "version": bonsai_version, "v": asset_version})
+    html_content = pystache.render(
+        template, {"port": sio_port, "version": bonsai_version, "v": asset_version, "token": session_token}
+    )
     return web.Response(text=html_content, content_type="text/html")
 
 
 async def documentation(request):
     with open("templates/drawings.html", "r") as f:
         template = f.read()
-    html_content = pystache.render(template, {"port": sio_port, "version": bonsai_version, "v": asset_version})
+    html_content = pystache.render(
+        template, {"port": sio_port, "version": bonsai_version, "v": asset_version, "token": session_token}
+    )
     return web.Response(text=html_content, content_type="text/html")
 
 
@@ -275,7 +375,9 @@ async def documentation(request):
 async def demo(request):
     with open("templates/demo.html", "r") as f:
         template = f.read()
-    html_content = pystache.render(template, {"port": sio_port, "version": bonsai_version, "v": asset_version})
+    html_content = pystache.render(
+        template, {"port": sio_port, "version": bonsai_version, "v": asset_version, "token": session_token}
+    )
     return web.Response(text=html_content, content_type="text/html")
 
 
@@ -322,6 +424,7 @@ def main():
 
     args = parser.parse_args()
     sio_port = args.port
+    sio.eio.cors_allowed_origins = get_local_origins(sio_port)
     web.run_app(app, host=args.host, port=sio_port)
 
 
