@@ -83,7 +83,9 @@ def _walk_clipping(item) -> tuple:
     """Return (base_solid, [clipping_plane_dicts]) from a BooleanClippingResult chain."""
     planes = []
     current = item
-    while current.is_a("IfcBooleanClippingResult"):
+    seen = set()
+    while current.is_a("IfcBooleanClippingResult") and current.id() not in seen:
+        seen.add(current.id())
         plane = _half_space_plane(current.SecondOperand)
         if plane:
             planes.append(plane)
@@ -103,16 +105,19 @@ def _swept_solid_dict(item) -> dict:
 
 
 def _summarize_rep(rep) -> dict:
+    seen = {rep.id()}
+    while rep.RepresentationType == "MappedRepresentation":
+        mapped_item = next((item for item in rep.Items if item.is_a("IfcMappedItem")), None)
+        if mapped_item is None or (mapped_rep := mapped_item.MappingSource.MappedRepresentation).id() in seen:
+            break
+        seen.add(mapped_rep.id())
+        rep = mapped_rep
+
     rep_type = rep.RepresentationType or ""
     result: dict[str, Any] = {"representation_type": rep_type}
     items = list(rep.Items)
 
-    if rep_type == "MappedRepresentation":
-        for item in items:
-            if item.is_a("IfcMappedItem"):
-                return _summarize_rep(item.MappingSource.MappedRepresentation)
-
-    elif rep_type == "SweptSolid":
+    if rep_type == "SweptSolid":
         result["solids"] = [_swept_solid_dict(item) for item in items]
 
     elif rep_type == "Clipping":
