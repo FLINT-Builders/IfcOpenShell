@@ -62,6 +62,22 @@ FILE_FORMAT = Literal[
     "pd",
 ]
 
+# Spreadsheet applications evaluate cells starting with these as formulas.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def neutralize_formula(value):
+    # Existing quote prefixes are escaped too, so unneutralize_formula is an exact inverse.
+    if isinstance(value, str) and value.lstrip("'").startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def unneutralize_formula(value):
+    if isinstance(value, str) and value.startswith("'") and value.lstrip("'").startswith(FORMULA_PREFIXES):
+        return value[1:]
+    return value
+
 
 class IfcCsv:
     attributes: list[str]
@@ -134,6 +150,7 @@ class IfcCsv:
         self.summarise_results(summaries, attributes)
         self.sort_results(sort, attributes, include_global_id)
         self.format_results(formatting, attributes, null)
+        self.neutralize_results()
 
         if format == "csv":
             self.export_csv(output, delimiter=delimiter)
@@ -265,6 +282,12 @@ class IfcCsv:
                 summary_value = '"' + str(summary_value).replace('"', '\\"') + '"'
                 summary_value = ifcopenshell.util.selector.format(format_query.replace("{{value}}", summary_value))
                 self.summaries[index] = summary_label + ": " + str(summary_value)
+
+    def neutralize_results(self):
+        for row in self.results:
+            for i, value in enumerate(row):
+                row[i] = neutralize_formula(value)
+        self.summaries = [neutralize_formula(s) for s in self.summaries]
 
     def sort_results(self, sort, attributes, include_global_id):
         if not self.results:
@@ -497,6 +520,7 @@ class IfcCsv:
         for i, value in enumerate(row):
             if i == 0:
                 continue  # Skip GlobalId
+            value = unneutralize_formula(value)
             if value == null:
                 value = None
             elif value == empty:
