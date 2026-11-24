@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Hashable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union, final
@@ -38,6 +39,10 @@ from bonsai.bim.ifc import IFC_CONNECTED_TYPE, IfcStore
 
 if TYPE_CHECKING:
     from bpy.stub_internal import rna_enums
+
+# Two leading separators (UNC, \\?\, \\.\ and Blender's //), the NT \??\ prefix, or a URL scheme.
+# A single letter before ":" is a Windows drive and is allowed.
+NON_LOCAL_URI_PATTERN = re.compile(r"[\\/]{2}|[\\/]\?\?[\\/]|[A-Za-z][A-Za-z0-9+.\-]+:")
 
 
 class Ifc(bonsai.core.tool.Ifc):
@@ -353,6 +358,19 @@ class Ifc(bonsai.core.tool.Ifc):
             # TODO: When does it occur and why we return empty path in this case?
             return str(uri)
         return cls.normalize_path(ifc_path / uri)
+
+    @classmethod
+    def resolve_local_uri(cls, uri: str | Path) -> Union[str, None]:
+        """Like :meth:`resolve_uri`, but return ``None`` unless ``uri`` is a local filesystem path.
+
+        UNC and other ``\\\\``-prefixed paths, ``\\??\\`` paths, URLs and Blender ``//`` paths are
+        rejected without touching the filesystem: on Windows even checking whether a network path
+        exists sends the user's credentials to that host.
+        """
+        uri = os.fspath(uri)
+        if not uri.strip() or NON_LOCAL_URI_PATTERN.match(uri.lstrip()):
+            return None
+        return cls.resolve_uri(uri)
 
     @classmethod
     def get_uri(cls, uri: str | Path, use_relative_path: bool) -> str:
