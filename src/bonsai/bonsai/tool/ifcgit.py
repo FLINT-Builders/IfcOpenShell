@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import tempfile
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Union
 
@@ -40,6 +41,41 @@ try:
     import git
     import git.exc
     import git.objects
+
+    class SafeGitCommand(git.Git):
+        """Runs git without letting the repository's own config start other programs"""
+
+        git_version_info = None
+
+        def execute(self, command, *args, env=None, **kwargs):
+            return super().execute(command, *args, env=self.get_safe_env(env), **kwargs)
+
+        def get_safe_env(self, env=None) -> dict[str, str]:
+            """Return env with config overrides that stop git starting programs set by the repository"""
+            if SafeGitCommand.git_version_info is None:
+                SafeGitCommand.git_version_info = git.Git().version_info
+            if SafeGitCommand.git_version_info < (2, 31):
+                # Older git ignores GIT_CONFIG_COUNT, so the overrides below would not apply.
+                raise git.exc.GitCommandError("git", 1, "Git 2.31 or newer is required")
+            env = dict(env or {})
+            # Read on every call: an include.path can point at a tracked file that a checkout changes.
+            config = super().execute(
+                [self.GIT_PYTHON_GIT_EXECUTABLE, "config", "--list", "--show-scope", "-z"],
+                env=env,
+                stdout_as_string=False,
+                strip_newline_in_stdout=False,
+            )
+            overrides = IfcGit.get_config_overrides(config)
+            count = int({**os.environ, **self._environment, **env}.get("GIT_CONFIG_COUNT") or 0)
+            env["GIT_CONFIG_COUNT"] = str(count + len(overrides))
+            for i, (key, value) in enumerate(overrides, count):
+                env[f"GIT_CONFIG_KEY_{i}"] = key
+                env[f"GIT_CONFIG_VALUE_{i}"] = value
+            return env
+
+    class SafeRepo(git.Repo):
+        GitCommandWrapperType = SafeGitCommand
+
 except ImportError:
     print("Warning: GitPython not available.")
 
@@ -54,6 +90,88 @@ if TYPE_CHECKING:
 class IfcGit(bonsai.core.tool.IfcGit):
     STEP_IDS = dict[str, set[int]]
 
+    MERGETOOL_CMDS = {
+        "ifcmerge": "ifcmerge $BASE $LOCAL $REMOTE $MERGED > $MERGED.ifcmerge",
+        "ifcmerge-forward": "ifcmerge --prioritise-local $BASE $LOCAL $REMOTE $MERGED > $MERGED.ifcmerge",
+    }
+
+    # Config keys naming a program to run, with the value used when only the repository sets them.
+    # An empty value disables drivers and filters, or makes git fail rather than run anything.
+    COMMAND_CONFIG = (
+        ("core.askpass", ""),
+        ("core.editor", ":"),
+        ("core.pager", "cat"),
+        ("core.sshcommand", "ssh"),
+        ("core.alternaterefscommand", ""),
+        ("sequence.editor", ":"),
+        ("pager.*", "false"),
+        ("diff.external", ""),
+        ("diff.*.command", ""),
+        ("diff.*.textconv", ""),
+        ("filter.*.clean", ""),
+        ("filter.*.smudge", ""),
+        ("filter.*.process", ""),
+        ("merge.*.driver", ""),
+        ("gpg.program", "gpg"),
+        ("gpg.openpgp.program", "gpg"),
+        ("gpg.x509.program", "gpgsm"),
+        ("gpg.ssh.program", "ssh-keygen"),
+        ("gpg.ssh.defaultkeycommand", ""),
+    )
+
+    @classmethod
+    def get_config_overrides(cls, config: bytes) -> list[tuple[str, str]]:
+        """Config that stops git running programs set by the repository itself
+
+        :param config: Output of ``git config --list --show-scope -z``
+        """
+        overrides = [
+            ("core.fsmonitor", "false"),
+            ("core.hooksPath", os.devnull),
+            ("protocol.ext.allow", "never"),
+            ("submodule.recurse", "false"),
+            ("fetch.recurseSubmodules", "false"),
+            ("push.recurseSubmodules", "no"),
+            ("gc.auto", "0"),
+            ("maintenance.auto", "false"),
+        ]
+        overrides += [(f"mergetool.{tool}.cmd", cmd) for tool, cmd in cls.MERGETOOL_CMDS.items()]
+
+        items = os.fsdecode(config).split("\0")
+        trusted = []
+        untrusted = set()
+        for scope, item in zip(items[0::2], items[1::2]):
+            key, _, value = item.partition("\n")
+            if scope in ("system", "global", "command"):
+                trusted.append((key, value))
+            else:
+                untrusted.add(key)
+
+        def is_credential_helper(key: str) -> bool:
+            return key == "credential.helper" or fnmatchcase(key, "credential.*.helper")
+
+        reset_credential_helpers = False
+        for key in sorted(untrusted):
+            if is_credential_helper(key):
+                reset_credential_helpers = True
+            elif key == "core.gitproxy":
+                # The first matching value wins, so it can't be overridden.
+                overrides.append(("protocol.git.allow", "never"))
+            elif fnmatchcase(key, "remote.*.uploadpack") or fnmatchcase(key, "remote.*.receivepack"):
+                # The first value wins, so block the local transport that runs it.
+                overrides.append(("protocol.file.allow", "never"))
+            else:
+                for pattern, default in cls.COMMAND_CONFIG:
+                    if fnmatchcase(key, pattern):
+                        values = [v for k, v in trusted if k == key]
+                        overrides.append((key, values[-1] if values else default))
+                        break
+        if reset_credential_helpers:
+            # An empty helper clears the list, then the user's own helpers are added back.
+            overrides.append(("credential.helper", ""))
+            overrides += [(k, v) for k, v in trusted if is_credential_helper(k)]
+        return overrides
+
     @classmethod
     def get_ifcgit_props(cls) -> IfcGitProperties:
         assert (scene := bpy.context.scene)
@@ -61,18 +179,18 @@ class IfcGit(bonsai.core.tool.IfcGit):
 
     @classmethod
     def init_repo(cls, path_dir: str) -> None:
-        IfcGitRepo.repo = git.Repo.init(path_dir)
+        IfcGitRepo.repo = SafeRepo.init(path_dir)
         cls.config_info_attributes(IfcGitRepo.repo)
 
     @classmethod
     def clone_repo(cls, remote_url: str, local_folder: str) -> git.Repo:
-        repo = git.Repo.clone_from(
+        repo = SafeRepo.clone_from(
             url=remote_url,
             to_path=local_folder,
         )
         # Close the repo to release stale subprocess
         repo.close()
-        IfcGitRepo.repo = git.Repo(local_folder)
+        IfcGitRepo.repo = SafeRepo(local_folder)
         cls.config_info_attributes(IfcGitRepo.repo)
         return IfcGitRepo.repo
 
@@ -109,7 +227,7 @@ class IfcGit(bonsai.core.tool.IfcGit):
             return IfcGitRepo.repo
 
         try:
-            repo = git.Repo(path_dir)
+            repo = SafeRepo(path_dir)
         except git.exc.InvalidGitRepositoryError:
             parentdir_path = os.path.abspath(os.path.join(path_dir, os.pardir))
             if parentdir_path == path_dir:
@@ -129,7 +247,8 @@ class IfcGit(bonsai.core.tool.IfcGit):
         if os.name == "nt":
             cls.dos2unix(path_file)
         repo.index.add(os.path.normpath(path_file))
-        repo.index.commit(message="Added " + os.path.relpath(path_file, repo.working_dir))
+        # GitPython runs hooks itself, outside the git config overrides.
+        repo.index.commit(message="Added " + os.path.relpath(path_file, repo.working_dir), skip_hooks=True)
 
     @classmethod
     def git_checkout(cls, path_file: str) -> None:
@@ -146,7 +265,7 @@ class IfcGit(bonsai.core.tool.IfcGit):
         if os.name == "nt":
             cls.dos2unix(path_file)
         repo.index.add(os.path.normpath(path_file))
-        repo.index.commit(message=commit_message)
+        repo.index.commit(message=commit_message, skip_hooks=True)
 
     @classmethod
     def add_tag(cls, repo: git.Repo, hexsha: str, tag_name: str, tag_message: str = "") -> None:
@@ -345,9 +464,9 @@ class IfcGit(bonsai.core.tool.IfcGit):
 
         # NOTE this is calling the git binary in a subprocess
         if not hash_a:
-            diff_lines = repo.git.diff(hash_b, path_ifc).split("\n")
+            diff_lines = repo.git.diff("--no-ext-diff", "--no-textconv", hash_b, path_ifc).split("\n")
         else:
-            diff_lines = repo.git.diff(hash_a, hash_b, path_ifc).split("\n")
+            diff_lines = repo.git.diff("--no-ext-diff", "--no-textconv", hash_a, hash_b, path_ifc).split("\n")
 
         inserted = set()
         deleted = set()
@@ -523,26 +642,16 @@ class IfcGit(bonsai.core.tool.IfcGit):
     @classmethod
     def config_ifcmerge(cls) -> None:
         config_reader = IfcGitRepo.repo.config_reader()
-        section = 'mergetool "ifcmerge"'
-        new_cmd = "ifcmerge $BASE $LOCAL $REMOTE $MERGED > $MERGED.ifcmerge"
-        if not config_reader.has_section(section):
-            with IfcGitRepo.repo.config_writer() as config_writer:
-                config_writer.set_value(section, "cmd", new_cmd)
-                config_writer.set_value(section, "trustExitCode", True)
-        elif config_reader.get_value(section, "cmd") != new_cmd:
-            with IfcGitRepo.repo.config_writer() as config_writer:
-                config_writer.set_value(section, "cmd", new_cmd)
-                config_writer.set_value(section, "trustExitCode", True)
-        section = 'mergetool "ifcmerge-forward"'
-        new_cmd = "ifcmerge --prioritise-local $BASE $LOCAL $REMOTE $MERGED > $MERGED.ifcmerge"
-        if not config_reader.has_section(section):
-            with IfcGitRepo.repo.config_writer() as config_writer:
-                config_writer.set_value(section, "cmd", new_cmd)
-                config_writer.set_value(section, "trustExitCode", True)
-        elif config_reader.get_value(section, "cmd") != new_cmd:
-            with IfcGitRepo.repo.config_writer() as config_writer:
-                config_writer.set_value(section, "cmd", new_cmd)
-                config_writer.set_value(section, "trustExitCode", True)
+        for tool_name, new_cmd in cls.MERGETOOL_CMDS.items():
+            section = f'mergetool "{tool_name}"'
+            if not config_reader.has_section(section):
+                with IfcGitRepo.repo.config_writer() as config_writer:
+                    config_writer.set_value(section, "cmd", new_cmd)
+                    config_writer.set_value(section, "trustExitCode", True)
+            elif config_reader.get_value(section, "cmd") != new_cmd:
+                with IfcGitRepo.repo.config_writer() as config_writer:
+                    config_writer.set_value(section, "cmd", new_cmd)
+                    config_writer.set_value(section, "trustExitCode", True)
 
     @classmethod
     def config_push(cls, repo: git.Repo) -> None:
@@ -733,8 +842,9 @@ class IfcGit(bonsai.core.tool.IfcGit):
         # Avoid `text=True` as it's causing issues with colorful output.
         try:
             subprocess.check_output(
-                ("git", "diff", "--no-index", f"--color={color}", "--", path, "-"),
+                ("git", "diff", "--no-index", "--no-ext-diff", "--no-textconv", f"--color={color}", "--", path, "-"),
                 input=ifc_str.encode(),
+                env={**os.environ, **SafeGitCommand().get_safe_env()},
             )
         except subprocess.CalledProcessError as e:
             if e.returncode == 1:
