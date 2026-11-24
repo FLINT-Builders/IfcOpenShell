@@ -2,6 +2,7 @@
 
 add_executable(test_ifcopenshell_geometry
     test_ifcopenshell_geometry.cpp
+    test_open_cross_profile_tags.cpp
 )
 list(GET SCHEMA_VERSIONS -1 IFCGEOM_TEST_SCHEMA_VERSION)
 set(IFCGEOM_TEST_SCHEMA_TARGET parse_schema_ifc${IFCGEOM_TEST_SCHEMA_VERSION})
@@ -11,6 +12,13 @@ if(NOT TARGET ${IFCGEOM_TEST_SCHEMA_TARGET})
 endif()
 if(NOT TARGET ${IFCGEOM_TEST_MAPPING_TARGET})
     message(FATAL_ERROR "test_ifcopenshell_geometry requires ${IFCGEOM_TEST_MAPPING_TARGET}.")
+endif()
+# IfcOpenCrossProfileDef indexes Tags with std::vector::operator[]. That
+# operator is unchecked unless this macro is set. The open-cross tests
+# require a short Tags list to be rejected; with the macro an out-of-bounds
+# index aborts, so the test fails until the access is guarded.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_definitions(${IFCGEOM_TEST_MAPPING_TARGET} PRIVATE _GLIBCXX_ASSERTIONS)
 endif()
 target_include_directories(test_ifcopenshell_geometry PRIVATE "${CMAKE_SOURCE_DIR}/../src")
 target_compile_definitions(test_ifcopenshell_geometry PRIVATE
