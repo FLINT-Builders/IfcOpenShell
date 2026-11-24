@@ -4509,13 +4509,19 @@ void ViewportCore::streamingModelProgress(int idx, int& resident_chunks,
 
 namespace {
 
+// Compared as offset/remaining so a large length cannot wrap the sum on 32-bit
+// (wasm32) builds.
+bool stringSliceInTable(const std::string& table, std::uint32_t offset, std::uint32_t length) {
+    return length > 0 && offset <= table.size() && length <= table.size() - offset;
+}
+
 // Resolve one element record against its model's string table. Offsets that run
 // past the table (or carry zero length) yield an empty string rather than a
 // fabricated one — the sidecar writes no string for an unnamed element.
 ViewportCore::ElementRef makeElementRef(const ModelGpuData& m, int model_index,
                                         const ElementTableRecord& e) {
     auto str = [&m](std::uint32_t offset, std::uint32_t length) {
-        return (length > 0 && std::size_t(offset) + length <= m.string_table.size())
+        return stringSliceInTable(m.string_table, offset, length)
                    ? m.string_table.substr(offset, length)
                    : std::string();
     };
@@ -4556,7 +4562,7 @@ void ViewportCore::visitModelElements(
     auto slice = [&m](std::uint32_t offset, std::uint32_t length,
                       const char*& out_ptr, std::uint32_t& out_len) {
         // Out-of-range or zero-length offsets mean "no string was written".
-        if (length > 0 && std::size_t(offset) + length <= m.string_table.size()) {
+        if (stringSliceInTable(m.string_table, offset, length)) {
             out_ptr = m.string_table.data() + offset;
             out_len = length;
         } else {

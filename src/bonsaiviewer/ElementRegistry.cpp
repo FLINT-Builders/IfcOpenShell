@@ -92,7 +92,7 @@ void ElementRegistry::onSidecarElementsReady(uint32_t /*session_model_id*/,
                                              std::vector<ElementTableRecord> elements,
                                              std::string string_table) {
     auto string_from_table = [&](uint32_t offset, uint32_t length) -> QString {
-        if (length == 0 || offset + length > string_table.size()) return {};
+        if (length == 0 || offset > string_table.size() || length > string_table.size() - offset) return {};
         return QString::fromStdString(string_table.substr(offset, length));
     };
 
