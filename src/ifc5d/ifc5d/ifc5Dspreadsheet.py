@@ -121,11 +121,16 @@ class IfcDataGetter:
         cost_item: ifcopenshell.entity_instance,
         index: int = 1,
         hierarchy: str = "1",
+        visited: Optional[set[int]] = None,
     ) -> list[CostItem]:
         """
         :param cost_items_data: A list to fill with cost items.
         :param index: Current hierarchy depth.
+        :param visited: IDs of cost items already listed, so that nesting cycles are not followed.
         """
+        if visited is None:
+            visited = set()
+        visited.add(cost_item.id())
         cost_items_data: list[CostItem] = []
 
         quantity_data = IfcDataGetter.get_cost_item_quantity(file, cost_item)
@@ -170,8 +175,12 @@ class IfcDataGetter:
         index += 1
         child_hierarchy = hierarchy + ".1"
         for i, nested_cost in enumerate(ifcopenshell.util.cost.get_nested_cost_items(cost_item), 1):
+            if nested_cost.id() in visited:
+                continue
             child_hierarchy = f"{hierarchy}.{i}"
-            cost_items_data.extend(IfcDataGetter.get_cost_items_data(file, nested_cost, index, child_hierarchy))
+            cost_items_data.extend(
+                IfcDataGetter.get_cost_items_data(file, nested_cost, index, child_hierarchy, visited)
+            )
         return cost_items_data
 
     @staticmethod

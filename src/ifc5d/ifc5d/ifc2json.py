@@ -50,13 +50,17 @@ class ifc5D2json:
                 self.extract_cost_item_data(cost_item, schedule_data)
         return schedule_data
 
-    def extract_cost_item_data(self, cost_item: ifcopenshell.entity_instance, json_data):
+    def extract_cost_item_data(self, cost_item: ifcopenshell.entity_instance, json_data, visited=None):
+        if visited is None:
+            visited = set()
+        visited.add(cost_item.id())
         data = {}
         self.extract_cost_item_quantities(cost_item, data)
         self.populate_cost_values(cost_item, data)
         self.populate_nesting_index(cost_item, data)
         cost_rate = ifcopenshell.util.cost.get_cost_rate(self.file, cost_item)
-        data = {**data, **cost_item.get_info(recursive=True)}
+        # Cost value components may refer back to themselves, which a recursive get_info cannot represent.
+        data = {**data, **cost_item.get_info(recursive=True, ignore=("Components",))}
         data["id"] = cost_item.id()
         data["IsNestedBy"] = []
         data["IsSum"] = self.check_if_cost_item_is_sum(cost_item)
@@ -69,7 +73,8 @@ class ifc5D2json:
         json_data.append(data)
         for rel in cost_item.IsNestedBy or []:
             for sub_cost in rel.RelatedObjects:
-                self.extract_cost_item_data(sub_cost, data["IsNestedBy"])
+                if sub_cost.id() not in visited:
+                    self.extract_cost_item_data(sub_cost, data["IsNestedBy"], visited)
 
     def get_cost_classifications(self, cost_item: ifcopenshell.entity_instance) -> list:
         results = []
@@ -133,7 +138,10 @@ class ifc5D2json:
         if is_sum:
             data["TotalAppliedValue"] = None
 
-    def extract_cost_value(self, root_element, root_element_data, cost_value):
+    def extract_cost_value(self, root_element, root_element_data, cost_value, visited=None):
+        if visited is None:
+            visited = set()
+        visited.add(cost_value.id())
         value_data = cost_value.get_info()
         del value_data["AppliedValue"]
         if value_data["UnitBasis"]:
@@ -157,7 +165,8 @@ class ifc5D2json:
 
         self._cost_values[cost_value.id()] = value_data
         for component in cost_value.Components or []:
-            self.extract_cost_value(root_element, root_element_data, component)
+            if component.id() not in visited:
+                self.extract_cost_value(root_element, root_element_data, component, visited)
 
     def extract_cost_item_quantities(self, cost_item, data):
         data["TotalCostQuantity"] = ifcopenshell.util.cost.get_total_quantity(cost_item)
