@@ -103,16 +103,19 @@ def _swept_solid_dict(item) -> dict:
 
 
 def _summarize_rep(rep) -> dict:
+    visited = {rep}
+    while rep.RepresentationType == "MappedRepresentation":
+        mapped_item = next((item for item in rep.Items if item.is_a("IfcMappedItem")), None)
+        if mapped_item is None or (mapped_rep := mapped_item.MappingSource.MappedRepresentation) in visited:
+            break
+        visited.add(mapped_rep)
+        rep = mapped_rep
+
     rep_type = rep.RepresentationType or ""
     result: dict[str, Any] = {"representation_type": rep_type}
     items = list(rep.Items)
 
-    if rep_type == "MappedRepresentation":
-        for item in items:
-            if item.is_a("IfcMappedItem"):
-                return _summarize_rep(item.MappingSource.MappedRepresentation)
-
-    elif rep_type == "SweptSolid":
+    if rep_type == "SweptSolid":
         result["solids"] = [_swept_solid_dict(item) for item in items]
 
     elif rep_type == "Clipping":
