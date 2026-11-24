@@ -108,9 +108,15 @@ bool parseSidecarHead(const std::uint8_t* data, std::size_t n,
 // Parse the v15 geometry metadata block (mesh dict, instance dict,
 // georef, chunk TOC) — everything needed to set up + draw the scene. `data`
 // points at the first geometry metadata byte; `n` is geometry_metadata_bytes. Returns false
-// on any bounds overrun, leaving out_meta partially filled.
+// on any bounds overrun or out-of-range chunk TOC entry, leaving out_meta
+// partially filled.
 bool parseSidecarGeometryMetadata(const std::uint8_t* data, std::size_t n,
                                   SidecarData& out_meta);
+
+// True when every chunk TOC entry is a mesh range inside `meta.meshes` and the
+// ranges together cover at most meshes.size() meshes, so walking the TOC costs
+// O(meshes) whatever the file says. An empty TOC is valid.
+bool sidecarChunksInBounds(const SidecarData& meta);
 
 // Parse the v15 element metadata block (element table + string table — the
 // IFC property tree, used for UI/picking, never for rendering). Fetched on

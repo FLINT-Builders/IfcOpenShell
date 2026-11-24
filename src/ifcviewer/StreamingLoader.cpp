@@ -110,6 +110,19 @@ bool parseSidecarGeometryMetadata(const uint8_t* data, size_t n, SidecarData& ou
     if (!c.take(&out.project_length_to_meters, sizeof(double)))     return false;
     if (!c.take(&out.map_unit_to_meters, sizeof(double)))          return false;
     if (!c.takeVec(out.chunks)) return false;
+    return sidecarChunksInBounds(out);
+}
+
+bool sidecarChunksInBounds(const SidecarData& meta) {
+    const uint64_t n_meshes = meta.meshes.size();
+    if (meta.chunks.size() > n_meshes) return false;
+    uint64_t total_meshes = 0;
+    for (const SidecarChunk& chunk : meta.chunks) {
+        const uint64_t end = uint64_t(chunk.first_mesh) + chunk.mesh_count;
+        if (chunk.first_mesh >= n_meshes || end > n_meshes) return false;
+        total_meshes += chunk.mesh_count;
+        if (total_meshes > n_meshes) return false;
+    }
     return true;
 }
 
