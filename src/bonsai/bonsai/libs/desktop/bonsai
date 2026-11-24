@@ -10,10 +10,9 @@
 : ${BLENDER_EXE:=blender}
 
 
-ESCAPED_FILEPATH="${@//\"/\\\"}"
-
-if [[ $# -eq 1 && -f "$@" ]]; then
-    "${BLENDER_EXE}" --python-expr 'import bpy; bpy.data.batch_remove(bpy.data.objects); bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True); bpy.ops.bim.load_project(filepath="'"${ESCAPED_FILEPATH}"'")'
+if [[ $# -eq 1 && -f "$1" ]]; then
+    # The path is passed after '--' and read from sys.argv so it is never parsed as Python source.
+    "${BLENDER_EXE}" --python-expr 'import bpy; import sys; filepath = sys.argv[sys.argv.index("--") + 1]; bpy.data.batch_remove(bpy.data.objects); bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True); bpy.ops.bim.load_project(filepath=filepath)' -- "$1"
 else
     "${BLENDER_EXE}" --python-expr 'import bpy; bpy.data.batch_remove(bpy.data.objects); bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True); bpy.ops.bim.create_project()'
 fi;
