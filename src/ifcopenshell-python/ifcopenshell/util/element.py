@@ -1094,9 +1094,11 @@ def get_container(
         container = contained_in_structure[0].RelatingStructure
         if not ifc_class:
             return container
-        while container:
+        seen = set()
+        while container and container.id() not in seen:
             if container.is_a(ifc_class):
                 return container
+            seen.add(container.id())
             container = get_aggregate(container)
     elif parent := get_parent(element):
         return get_container(parent, should_get_direct, ifc_class)
@@ -1303,9 +1305,11 @@ def get_parent(
     if not ifc_class:
         return parent
 
-    while parent:
+    seen = set()
+    while parent and parent.id() not in seen:
         if parent.is_a(ifc_class):
             return parent
+        seen.add(parent.id())
         parent = get_parent(parent)
 
     return None

@@ -288,7 +288,11 @@ def main():
         except RuntimeError:
             print(f"Error: Element #{element_id} not found", file=sys.stderr)
             sys.exit(1)
-        result = relations.relations(model, element, traverse=args.traverse)
+        try:
+            result = relations.relations(model, element, traverse=args.traverse)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
     elif args.command == "clash":
         try:
             element_id = parse_element_id(args.element_id)
