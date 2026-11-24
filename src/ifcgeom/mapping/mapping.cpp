@@ -24,6 +24,7 @@
 #include <optional>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "mapping.h"
@@ -193,7 +194,9 @@ std::vector<express::base> mapping::find_openings(const express::base& inst) {
     // Is the IfcElement a decomposition of an IfcElement with any IfcOpeningElements?
     auto obdef = inst.as<IfcSchema::IfcObjectDefinition>();
     if (obdef) {
-        for (;;) {
+        std::unordered_set<uint32_t> visited;
+        // Stop at a cyclic aggregation chain.
+        while (obdef && visited.insert(obdef.id()).second) {
             auto decomposes = obdef.Decomposes();
             if (decomposes.size() != 1) {
                 // If we have multiple decompositions, not allowed by schema,

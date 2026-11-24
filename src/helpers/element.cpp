@@ -30,8 +30,10 @@
 #include <boost/logic/tribool.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <sstream>
 #include <type_traits>
+#include <unordered_set>
 
 namespace {
 
@@ -180,17 +182,19 @@ std::vector<express::base> get_spatial_children_s(const express::base& element) 
 
 // ifcopenshell.util.element.get_container (should_get_direct=false, no
 // ifc_class): the directly containing spatial element, or the container of the
-// aggregate parent for an aggregated part.
+// aggregate parent for an aggregated part. A cyclic aggregation chain has no
+// container.
 template <typename Schema>
-express::base get_container_s(const express::base& element) {
-    if (const auto product = element.template as<typename Schema::IfcElement>()) {
-        const auto relationships = product.ContainedInStructure();
-        if (!relationships.empty()) {
-            return relationships.front().RelatingStructure();
+express::base get_container_s(express::base element) {
+    std::unordered_set<uint32_t> visited;
+    while (element && visited.insert(element.id()).second) {
+        if (const auto product = element.template as<typename Schema::IfcElement>()) {
+            const auto relationships = product.ContainedInStructure();
+            if (!relationships.empty()) {
+                return relationships.front().RelatingStructure();
+            }
         }
-    }
-    if (const express::base aggregate = get_aggregate_s<Schema>(element)) {
-        return get_container_s<Schema>(aggregate);
+        element = get_aggregate_s<Schema>(element);
     }
     return {};
 }
