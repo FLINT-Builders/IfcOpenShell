@@ -610,10 +610,9 @@ class SelectFilterElements(bpy.types.Operator):
 
     def execute(self, context):
         filter_groups = tool.Search.get_filter_groups(self.module)
-        query = tool.Search.get_query_for_selected_elements()
+        query, text = tool.Search.get_query_for_selected_elements()
         filter_groups[self.group_index].filters[self.index].value = query
-        if query.startswith("bpy.data.texts['"):
-            text: bpy.types.Text = eval(query)
+        if text is not None:
             name = text.name
             self.report({"INFO"}, f'List of Global Ids was saved to the text file "{name}" in the current .blend file')
         return {"FINISHED"}

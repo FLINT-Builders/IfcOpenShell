@@ -243,7 +243,7 @@ class ExtractSelectedElements(bpy.types.Operator):
             self.report({"ERROR"}, "Only supported for the 'ExtractElements' recipe.")
             return {"CANCELLED"}
 
-        query = tool.Search.get_query_for_selected_elements()
+        query, _ = tool.Search.get_query_for_selected_elements()
         props.ifc_patch_args_attr[0].string_value = query
         return {"FINISHED"}
 
