@@ -71,6 +71,16 @@ add_ifcviewer_unit_test(test_streaming_loader
     LIBS ${ZSTD_LIBRARY}
 )
 
+# Decompression-size bounds. Same sources as the streaming loader test.
+# The cases fail until a claimed size is rejected before allocation.
+add_ifcviewer_unit_test(test_sidecar_decompress_bounds
+    SOURCES
+        ${IFCVIEWER_SRC}/StreamingLoader.cpp
+        ${IFCVIEWER_SRC}/SidecarCache.cpp
+        ${IFCVIEWER_SRC}/SidecarCompress.cpp
+    LIBS ${ZSTD_LIBRARY}
+)
+
 add_ifcviewer_unit_test(test_instanced_geometry)
 
 # ChunkPlanner: Morton sort + greedy-pack — pure CPU, no Qt / no wgpu.
