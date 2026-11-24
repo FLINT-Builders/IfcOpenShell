@@ -21,10 +21,8 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import tempfile
 import traceback
 import uuid
-import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, NotRequired, Optional, TypedDict, Union
@@ -239,12 +237,8 @@ class IfcStore:
         extension = path.split(".")[-1]
         prefs = tool.Blender.get_addon_preferences()
         if extension.lower() == "ifczip":
-            with tempfile.TemporaryDirectory() as unzipped_path:
-                with zipfile.ZipFile(path, "r") as zip_ref:
-                    zip_ref.extractall(unzipped_path)
-                for filename in Path(unzipped_path).glob("**/*.ifc"):
-                    IfcStore.file = ifcopenshell.open(filename)
-                    return
+            IfcStore.file = ifcopenshell.open(path)
+            return
         elif extension.lower() == "ifcxml":
             raise NotImplementedError("Reading .ifcXML files is not currently supported.")
         elif prefs.should_stream:
