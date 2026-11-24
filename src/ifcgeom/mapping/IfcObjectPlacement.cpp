@@ -22,6 +22,83 @@
 using namespace ifcopenshell::geom;
 
 #include <deque>
+#include <map>
+#include <set>
+#include <vector>
+
+namespace {
+IfcSchema::IfcObjectPlacement placement_rel_to(const IfcSchema::IfcObjectPlacement& inst) {
+#ifdef SCHEMA_IfcObjectPlacement_HAS_PlacementRelTo
+    return inst.PlacementRelTo();
+#else
+    if (auto local = inst.as<IfcSchema::IfcLocalPlacement>()) {
+        return local.PlacementRelTo();
+    }
+    return IfcSchema::IfcObjectPlacement();
+#endif
+}
+
+// State of the PlacementRelTo walk on this thread. The outermost placement
+// maps its ancestors from the root down so that every nested map() finds its
+// parent in `parents` instead of recursing once per level, and a cyclic chain
+// is cut at `cycle_cut`, the placement whose parent closes the cycle.
+struct placement_walk_state {
+    bool active = false;
+    std::map<express::base, taxonomy::ptr> parents;
+    express::base cycle_cut;
+    std::set<express::base> in_progress;
+};
+thread_local placement_walk_state placement_walk;
+
+struct placement_walk_scope {
+    placement_walk_scope() {
+        placement_walk.active = true;
+    }
+    ~placement_walk_scope() {
+        placement_walk.active = false;
+        placement_walk.parents.clear();
+        placement_walk.cycle_cut = express::base();
+    }
+};
+
+struct placement_in_progress_guard {
+    express::base inst;
+    explicit placement_in_progress_guard(const express::base& i) : inst(i) {
+        placement_walk.in_progress.insert(inst);
+    }
+    ~placement_in_progress_guard() {
+        placement_walk.in_progress.erase(inst);
+    }
+};
+
+taxonomy::ptr map_parent_placement(mapping* m, const IfcSchema::IfcObjectPlacement& inst, const IfcSchema::IfcObjectPlacement& relative_to) {
+    auto it = placement_walk.parents.find(relative_to);
+    if (it != placement_walk.parents.end()) {
+        return it->second;
+    }
+    if (placement_walk.active) {
+        return m->map(relative_to);
+    }
+
+    placement_walk_scope scope;
+    std::set<express::base> seen = {inst};
+    std::vector<IfcSchema::IfcObjectPlacement> chain;
+    for (auto placement = relative_to; placement;) {
+        seen.insert(placement);
+        chain.push_back(placement);
+        auto next = placement_rel_to(placement);
+        if (next && seen.count(next)) {
+            placement_walk.cycle_cut = placement;
+            break;
+        }
+        placement = next;
+    }
+    for (auto jt = chain.rbegin(); jt != chain.rend(); ++jt) {
+        placement_walk.parents[*jt] = m->map(*jt);
+    }
+    return placement_walk.parents[relative_to];
+}
+} // namespace
 
 taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 	if (placement_rel_to_type_ || placement_rel_to_instance_) {
@@ -82,16 +159,15 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 		return nullptr;
 	}
 
-#ifdef SCHEMA_IfcObjectPlacement_HAS_PlacementRelTo
-	relative_to = inst.PlacementRelTo();
-#else
-	if (inst.as<IfcSchema::IfcLocalPlacement>()) {
-		relative_to = inst.as<IfcSchema::IfcLocalPlacement>().PlacementRelTo();
-	}
-#endif
+    relative_to = placement_rel_to(inst);
 
 	bool parent_placement_ignored = false;
-	if (relative_to && (placement_rel_to_type_ || placement_rel_to_instance_)) {
+    if (relative_to && (relative_to == inst || inst == placement_walk.cycle_cut ||
+                        placement_walk.in_progress.count(relative_to))) {
+        ifcopenshell::logger::root().warning("Ignoring cyclic PlacementRelTo:", inst);
+        parent_placement_ignored = true;
+    }
+    if (!parent_placement_ignored && relative_to && (placement_rel_to_type_ || placement_rel_to_instance_)) {
 		std::vector<IfcSchema::IfcProduct> parent_places = relative_to.PlacesObject();
         for (auto& pp : parent_places) {
             if ((placement_rel_to_type_ && pp.declaration().is(*placement_rel_to_type_)) ||
@@ -103,13 +179,18 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcObjectPlacement& inst) {
 
 	taxonomy::matrix4::ptr result;
 	if (!parent_placement_ignored && relative_to) {
+        taxonomy::ptr parent;
+        {
+            placement_in_progress_guard guard(inst);
+            parent = map_parent_placement(this, inst, relative_to);
+        }
         result = taxonomy::make<taxonomy::matrix4>(
 			// @nb this is a bit silly, in 0.7 we didn't have a recursive function
 			// but a while loop to apply the hierarchical placements, so after the
 			// loop we could apply the global offset. Since we have a recursive
 			// function now we need to undo the global offset when recursing.
 			offset_and_rotation_.inverse() *
-			taxonomy::cast<taxonomy::matrix4>(map(relative_to))->ccomponents() *
+			taxonomy::cast<taxonomy::matrix4>(parent)->ccomponents() *
 			taxonomy::cast<taxonomy::matrix4>(map(transform))->ccomponents()
 		);
 	} else {

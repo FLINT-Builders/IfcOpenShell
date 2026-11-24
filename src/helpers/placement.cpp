@@ -25,7 +25,9 @@
 #include "schema_dispatch.i"
 
 #include <cstddef>
+#include <cstdint>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -112,20 +114,23 @@ Eigen::Matrix4d get_axis2_placement_s(const express::base& placement) {
     return Eigen::Matrix4d::Identity();
 }
 
+// A cyclic PlacementRelTo chain applies each placement in the cycle once.
 template <typename Schema>
 Eigen::Matrix4d get_local_placement_s(const express::base& placement) {
-    if (auto local = placement.template as<typename Schema::IfcLocalPlacement>()) {
-        Eigen::Matrix4d parent = Eigen::Matrix4d::Identity();
-        if (const auto relative_to = local.PlacementRelTo()) {
-            parent = get_local_placement_s<Schema>(relative_to);
-        }
-        const auto relative = local.RelativePlacement();
-        if (!relative) {
-            return parent;
-        }
-        return parent * get_axis2_placement_s<Schema>(relative.concrete());
+    auto local = placement.template as<typename Schema::IfcLocalPlacement>();
+    if (!local) {
+        return get_axis2_placement_s<Schema>(placement);
     }
-    return get_axis2_placement_s<Schema>(placement);
+    Eigen::Matrix4d result = Eigen::Matrix4d::Identity();
+    std::unordered_set<uint32_t> seen;
+    while (local && seen.insert(local.identity()).second) {
+        if (const auto relative = local.RelativePlacement()) {
+            result = get_axis2_placement_s<Schema>(relative.concrete()) * result;
+        }
+        const auto relative_to = local.PlacementRelTo();
+        local = relative_to ? relative_to.template as<typename Schema::IfcLocalPlacement>() : typename Schema::IfcLocalPlacement();
+    }
+    return result;
 }
 
 // ifcopenshell.util.placement.get_storey_elevation: the Z of the storey's
