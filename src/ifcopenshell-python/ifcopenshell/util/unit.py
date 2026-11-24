@@ -814,10 +814,16 @@ def get_named_unit_scale(unit: ifcopenshell.entity_instance) -> float:
     :func:`get_derived_unit_scale` for that.
 
     :param unit: The IfcNamedUnit.
-    :returns: The scale factor.
+    :returns: The scale factor, or 1.0 if the conversion chain is cyclic or
+        deeper than 16 levels.
     """
     scale = 1.0
+    depth = 0
     while unit.is_a("IfcConversionBasedUnit"):
+        # UnitComponent may form a cycle, which the parser does not reject.
+        depth += 1
+        if depth > 16:
+            return 1.0
         conversion_factor = unit.ConversionFactor
         scale *= conversion_factor.ValueComponent.wrappedValue
         unit = conversion_factor.UnitComponent
