@@ -35,7 +35,7 @@ class AuginLogin(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        props = context.scene.AuginProperties
+        props = context.window_manager.AuginProperties
 
         url = "https://server.auge.pro.br/API/v3/augin_rest.php/user_login"
         payload = {"email": props.username, "password": props.password}
@@ -44,6 +44,7 @@ class AuginLogin(bpy.types.Operator):
 
         if result["success_feedback"]["success"]:
             props.token = result["token"]
+            props.password = ""
         else:
             self.report({"ERROR"}, "Login failed :(")
         return {"FINISHED"}
@@ -55,7 +56,7 @@ class AuginReset(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        props = context.scene.AuginProperties
+        props = context.window_manager.AuginProperties
         props.is_success = False
         return {"FINISHED"}
 
@@ -69,7 +70,7 @@ class AuginCreateNewModel(bpy.types.Operator):
         import boto3
         from botocore.config import Config
 
-        props = context.scene.AuginProperties
+        props = context.window_manager.AuginProperties
 
         # Create project
         url = "https://server.auge.pro.br/API/v3/augin_rest.php/new_model"

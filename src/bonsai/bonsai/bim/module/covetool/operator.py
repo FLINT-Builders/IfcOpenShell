@@ -39,6 +39,7 @@ class Login(bpy.types.Operator):
         token = api.login(props.username, props.password)
         if token:
             props.token = token
+            props.password = ""
 
             projects = api.get_request("projects")
             for project in projects:

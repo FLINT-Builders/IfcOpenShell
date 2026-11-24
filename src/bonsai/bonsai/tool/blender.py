@@ -2282,8 +2282,8 @@ class Blender(bonsai.core.tool.Blender):
 
     @classmethod
     def get_covetool_props(cls) -> CoveToolProperties:
-        assert (scene := bpy.context.scene)
-        return scene.CoveToolProperties  # pyright: ignore[reportAttributeAccessIssue]
+        assert (wm := bpy.context.window_manager)
+        return wm.CoveToolProperties  # pyright: ignore[reportAttributeAccessIssue]
 
     @classmethod
     def get_ifc_definition_id(cls, obj: IFC_CONNECTED_TYPE) -> int:

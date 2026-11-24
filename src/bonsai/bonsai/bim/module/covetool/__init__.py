@@ -17,6 +17,7 @@
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
 import bpy
+from bpy.app.handlers import persistent
 
 from . import operator, prop, ui
 
@@ -32,9 +33,19 @@ classes = (
 )
 
 
+@persistent
+def remove_legacy_scene_credentials(*args):
+    # Older versions stored credentials on the scene, which is saved to the .blend.
+    for scene in bpy.data.scenes:
+        scene.pop("CoveToolProperties", None)
+
+
 def register():
-    bpy.types.Scene.CoveToolProperties = bpy.props.PointerProperty(type=prop.CoveToolProperties)
+    # WindowManager properties are not saved to the .blend, keeping credentials out of shared files.
+    bpy.types.WindowManager.CoveToolProperties = bpy.props.PointerProperty(type=prop.CoveToolProperties)
+    bpy.app.handlers.load_post.append(remove_legacy_scene_credentials)
 
 
 def unregister():
-    del bpy.types.Scene.CoveToolProperties
+    del bpy.types.WindowManager.CoveToolProperties
+    bpy.app.handlers.load_post.remove(remove_legacy_scene_credentials)

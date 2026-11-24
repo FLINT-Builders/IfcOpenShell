@@ -79,7 +79,7 @@ class CoveToolSimpleAnalysis(bpy.types.PropertyGroup):
 
 class CoveToolProperties(bpy.types.PropertyGroup):
     username: bpy.props.StringProperty(name="Username")
-    password: bpy.props.StringProperty(name="Password")
+    password: bpy.props.StringProperty(name="Password", subtype="PASSWORD")
     token: bpy.props.StringProperty(name="Token")
     projects: bpy.props.CollectionProperty(name="Projects", type=CoveToolProject)
     active_project_index: bpy.props.IntProperty(name="Active Project Index")

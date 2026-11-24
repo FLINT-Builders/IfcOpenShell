@@ -17,6 +17,7 @@
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
 import bpy
+from bpy.app.handlers import persistent
 
 from . import operator, prop, ui
 
@@ -29,9 +30,19 @@ classes = (
 )
 
 
+@persistent
+def remove_legacy_scene_credentials(*args):
+    # Older versions stored credentials on the scene, which is saved to the .blend.
+    for scene in bpy.data.scenes:
+        scene.pop("AuginProperties", None)
+
+
 def register():
-    bpy.types.Scene.AuginProperties = bpy.props.PointerProperty(type=prop.AuginProperties)
+    # WindowManager properties are not saved to the .blend, keeping credentials out of shared files.
+    bpy.types.WindowManager.AuginProperties = bpy.props.PointerProperty(type=prop.AuginProperties)
+    bpy.app.handlers.load_post.append(remove_legacy_scene_credentials)
 
 
 def unregister():
-    del bpy.types.Scene.AuginProperties
+    del bpy.types.WindowManager.AuginProperties
+    bpy.app.handlers.load_post.remove(remove_legacy_scene_credentials)

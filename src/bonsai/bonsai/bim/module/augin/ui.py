@@ -34,8 +34,7 @@ class BIM_PT_augin(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
 
-        scene = context.scene
-        props = scene.AuginProperties
+        props = context.window_manager.AuginProperties
 
         if not props.token:
             row = layout.row()
