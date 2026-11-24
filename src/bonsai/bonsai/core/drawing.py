@@ -168,10 +168,14 @@ def open_layout(drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance
 
 def remove_sheet(ifc: type[tool.Ifc], drawing: type[tool.Drawing], sheet: ifcopenshell.entity_instance) -> None:
     for reference in drawing.get_document_references(sheet):
-        if drawing.get_reference_description(reference) in ("LAYOUT", "SHEET", "REVISION", "RASTER"):
+        description = drawing.get_reference_description(reference)
+        if description in ("LAYOUT", "SHEET", "REVISION", "RASTER"):
             uri = ifc.resolve_uri(drawing.get_document_uri(reference))
             if drawing.does_file_exist(uri):
-                drawing.delete_file(uri)
+                if description == "RASTER":
+                    drawing.delete_file(uri, suffixes=(".png", ".jpg", ".jpeg"))
+                else:
+                    drawing.delete_file(uri)
     ifc.run("document.remove_information", information=sheet)
     drawing.import_sheets()
 
