@@ -133,9 +133,8 @@ async def upload_part(part_id: str, request: Request, current_user: User = Depen
         try:
             print("File contents: ", request_body)
 
-            # use document_id instead as dir_name
-            # dir_name = doc_db.safe_path(document.document_id)
-            dir_name = document.document_id
+            # use the server generated storage name of this upload as dir_name
+            dir_name = doc_db.safe_path(document.file_description.name)
 
             path = "./data/document_parts/" + dir_name + "/"
 
