@@ -73,7 +73,16 @@ async def no_cache_static_middleware(request: web.Request, handler):
     return response
 
 
-sio = socketio.AsyncServer(cors_allowed_origins="*", async_mode="aiohttp", max_http_buffer_size=10000000)
+def get_allowed_origins(host: str, port: int) -> list[str]:
+    """Origins of the web UI pages served by this server."""
+    return sorted({f"http://{h}:{port}" for h in (host, "127.0.0.1", "localhost")})
+
+
+sio = socketio.AsyncServer(
+    cors_allowed_origins=get_allowed_origins("127.0.0.1", sio_port),
+    async_mode="aiohttp",
+    max_http_buffer_size=10000000,
+)
 app = web.Application(middlewares=[no_cache_static_middleware])
 sio.attach(app)
 
@@ -403,6 +412,7 @@ def main():
 
     args = parser.parse_args()
     sio_port = args.port
+    sio.eio.cors_allowed_origins = get_allowed_origins(args.host, sio_port)
     web.run_app(app, host=args.host, port=sio_port)
 
 
