@@ -15,6 +15,7 @@ Example usage:
 
 """
 
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -184,28 +185,39 @@ def main() -> None:
 
     print("Download third party dependencies...")
     BONSAI_DATA = PACKAGE_PATH / "bonsai" / "bim" / "data"
+    # Keep the commits and checksums in sync with src/bonsai/Makefile.
+    jsgantt_url = "https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/e00867a23d114553615acf919ad109e47df0df6a/dist"
     downloads = (
         (
-            "https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/master/dist/jsgantt.js",
+            f"{jsgantt_url}/jsgantt.js",
             BONSAI_DATA / "gantt" / "jsgantt.js",
+            "4e377db9465291d5407efe1b2cb5cc51f928c7b8a4438acfcb0d6a478eb715ef",
         ),
         (
-            "https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/master/dist/jsgantt.css",
+            f"{jsgantt_url}/jsgantt.css",
             BONSAI_DATA / "gantt" / "jsgantt.css",
+            "7c5c908c1a707c0906736bcde5a28faffd24fc253cbf6060f29adf4561139dd0",
         ),
         (
-            "https://github.com/BrickSchema/Brick/releases/download/nightly/Brick.ttl",
+            "https://github.com/BrickSchema/Brick/releases/download/v1.5.0/Brick.ttl",
             BONSAI_DATA / "brick" / "Brick.ttl",
+            "f665c93e5426a66257a8f34173ceb87a4674b9b15286e0390a5a61cfb905f8a9",
         ),
         (
             "https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js",
             BONSAI_DATA / "webui" / "static" / "js" / "jquery.min.js",
+            None,
         ),
     )
 
-    for url, filepath in downloads:
+    for url, filepath, sha256 in downloads:
         print(f"Downloading {url} -> {filepath}")
-        urllib.request.urlretrieve(url, filepath)
+        with urllib.request.urlopen(url) as response:
+            data = response.read()
+        if sha256 is not None and hashlib.sha256(data).hexdigest() != sha256:
+            print(f"Checksum mismatch for {url}, not writing {filepath}.")
+            exit(1)
+        filepath.write_bytes(data)
 
     input("Dev environment is all set!! \nPress Enter to continue...")
 

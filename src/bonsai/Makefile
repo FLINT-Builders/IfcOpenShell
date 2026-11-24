@@ -21,6 +21,7 @@ PYTHON:=python3
 PIP:=pip3
 PATCH:=patch
 SED:=sed -i
+SHA256SUM:=sha256sum
 VENV_ACTIVATE:=bin/activate
 
 ifeq ($(OS),Windows_NT)
@@ -37,6 +38,7 @@ HOSTOS:=macos
 PYTHON:=python3
 PATCH:=patch -d
 SED:=sed -i '' -e
+SHA256SUM:=shasum -a 256
 endif
 endif
 
@@ -67,6 +69,27 @@ PYPI_VERSION:=3.$(PYMINOR)
 endif # def PYVERSION
 
 IFCMERGE_VERSION:=2026-04-07
+
+# Third-party build inputs are pinned to commits and checksums so that changes
+# to upstream branches or release assets cannot alter what gets packaged.
+BPYPOLYSKEL_COMMIT:=bd1ce5b2e9dc2028595e6a3e116926e1c58e45dd
+IFCJSON_COMMIT:=2b782ca9063e4cdca79976dc2e21b3f783117b80
+BONSAI_TRANSLATIONS_COMMIT:=fd047f2b4ee45163d79846974bbd69a0e8484ea6
+JSGANTT_COMMIT:=e00867a23d114553615acf919ad109e47df0df6a
+JSGANTT_JS_SHA256:=4e377db9465291d5407efe1b2cb5cc51f928c7b8a4438acfcb0d6a478eb715ef
+JSGANTT_CSS_SHA256:=7c5c908c1a707c0906736bcde5a28faffd24fc253cbf6060f29adf4561139dd0
+BRICK_VERSION:=v1.5.0
+BRICK_TTL_SHA256:=f665c93e5426a66257a8f34173ceb87a4674b9b15286e0390a5a61cfb905f8a9
+
+# $(call fetch_verified,URL,SHA256,DIR) downloads URL outside the package tree
+# and only moves it into build/DIR once its checksum matches.
+fetch_verified = mkdir -p build/downloads && cd build/downloads && wget -O $(notdir $(1)) $(1) \
+	&& echo "$(2)  $(notdir $(1))" | $(SHA256SUM) -c && mv $(notdir $(1)) ../$(3)/
+
+# $(call checkout_commit,URL,COMMIT,DIR) fetches exactly COMMIT into DIR. Unlike
+# pip's "git+URL@COMMIT", a branch or tag named like COMMIT cannot take its place.
+checkout_commit = git init -q $(3) && git -C $(3) fetch -q --depth 1 $(1) $(2) \
+	&& git -C $(3) checkout -q --detach FETCH_HEAD && test "$$(git -C $(3) rev-parse HEAD)" = "$(2)"
 
 ifdef PLATFORM
 SUPPORTED_PLATFORMS := linux macosm1 win
@@ -208,20 +231,19 @@ endif
 	cd build/bonsai/bim/data/webui/static/js/ && wget https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js
 
 	# Provides jsgantt-improved supports for web-based construction sequencing gantt charts
-	cd build/bonsai/bim/data/gantt/ && wget https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/master/dist/jsgantt.js
-	cd build/bonsai/bim/data/gantt/ && wget https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/master/dist/jsgantt.css
+	$(call fetch_verified,https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/$(JSGANTT_COMMIT)/dist/jsgantt.js,$(JSGANTT_JS_SHA256),bonsai/bim/data/gantt)
+	$(call fetch_verified,https://raw.githubusercontent.com/jsGanttImproved/jsgantt-improved/$(JSGANTT_COMMIT)/dist/jsgantt.css,$(JSGANTT_CSS_SHA256),bonsai/bim/data/gantt)
 
 	# Provides IFCJSON functionality. Upstream (IFCJSON-Team) is dormant and has no wheel
 	# packaging, so we maintain our own fork under the IfcOpenShell organisation.
-	cd build && . env/$(VENV_ACTIVATE) && $(PYTHON) -m pip wheel "git+https://github.com/IfcOpenShell/IFC2JSON_python.git@main" --no-deps -w wheels/
+	cd build && $(call checkout_commit,https://github.com/IfcOpenShell/IFC2JSON_python.git,$(IFCJSON_COMMIT),sources/IFC2JSON_python) && . env/$(VENV_ACTIVATE) && $(PYTHON) -m pip wheel ./sources/IFC2JSON_python --no-deps -w wheels/
 
 	# Brickschema requires pkg_resources which is provided by Blender.
 	# Provides Brickschema functionality
-	# For now lets bundle the latest nightly schema
-	cd build/bonsai/bim/data/brick/ && wget https://github.com/BrickSchema/Brick/releases/download/nightly/Brick.ttl
+	$(call fetch_verified,https://github.com/BrickSchema/Brick/releases/download/$(BRICK_VERSION)/Brick.ttl,$(BRICK_TTL_SHA256),bonsai/bim/data/brick)
 
 	# Required for hipped roof generation
-	cd build && . env/$(VENV_ACTIVATE) && $(PYTHON) -m pip wheel "git+https://github.com/prochitecture/bpypolyskel" --no-deps -w wheels/
+	cd build && $(call checkout_commit,https://github.com/prochitecture/bpypolyskel,$(BPYPOLYSKEL_COMMIT),sources/bpypolyskel) && . env/$(VENV_ACTIVATE) && $(PYTHON) -m pip wheel ./sources/bpypolyskel --no-deps -w wheels/
 
 	# folder for executable files
 	mkdir -p build/bonsai/libs/bin
@@ -234,7 +256,7 @@ else
 endif
 
 	# Generate translations module for Bonsai build
-	git clone https://github.com/IfcOpenShell/bonsai-translations.git build/working
+	$(call checkout_commit,https://github.com/IfcOpenShell/bonsai-translations.git,$(BONSAI_TRANSLATIONS_COMMIT),build/working)
 	$(PYTHON) scripts/bonsai_translations.py -i "build/working" -o "build/bonsai"
 	rm -rf build/working
 
