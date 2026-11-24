@@ -547,6 +547,7 @@ fn download_ifcfed(
     } else {
         item_id.to_string()
     };
+    let file_name = cache_file_name(&file_name)?;
     if !file_name.to_lowercase().ends_with(".ifcfed") {
         return Err(RpcError::internal(format!(
             "Item '{file_name}' is not an .ifcfed file."
@@ -607,7 +608,7 @@ fn resolve_scripted_model(
     let version_id = item.version_id.clone().unwrap_or_default();
 
     let directory = cache::model_dir(&entry.source.project_id, &entry.source.item_id, &version_id);
-    let model_path = directory.join(&file_name);
+    let model_path = directory.join(cache_file_name(&file_name)?);
     if !model_path.exists() {
         cache::prepare_sole_child_dir(&directory)
             .map_err(|e| RpcError::internal(format!("Cache dir prep failed: {e}")))?;
@@ -644,7 +645,7 @@ fn download_picked_model(
     let version_id = item.version_id.clone().unwrap_or_default();
 
     let directory = cache::model_dir(project_id, entry_id, &version_id);
-    let model_path = directory.join(&file_name);
+    let model_path = directory.join(cache_file_name(&file_name)?);
     if !model_path.exists() {
         cache::prepare_sole_child_dir(&directory)
             .map_err(|e| RpcError::internal(format!("Cache dir prep failed: {e}")))?;
@@ -672,7 +673,7 @@ fn cache_ifcfed_locally(
 ) -> Result<PathBuf, RpcError> {
     let directory = cache::prepare_sole_child_dir(&cache::ifcfed_dir(project_id, item_id))
         .map_err(|e| RpcError::internal(format!("Cache dir prep failed: {e}")))?;
-    let cached_path = directory.join(file_name);
+    let cached_path = directory.join(cache_file_name(file_name)?);
     std::fs::copy(src, &cached_path)
         .map_err(|e| RpcError::internal(format!("Cache copy failed: {e}")))?;
     Ok(cached_path)
@@ -688,7 +689,7 @@ fn cache_model_locally(
     let directory = cache::model_dir(project_id, item_id, version_id);
     cache::prepare_sole_child_dir(&directory)
         .map_err(|e| RpcError::internal(format!("Cache dir prep failed: {e}")))?;
-    let cached_path = directory.join(file_name);
+    let cached_path = directory.join(cache_file_name(file_name)?);
     std::fs::copy(src, &cached_path)
         .map_err(|e| RpcError::internal(format!("Cache copy failed: {e}")))?;
     Ok(cached_path)
@@ -774,6 +775,16 @@ fn file_name_of(path: &Path) -> String {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned()
+}
+
+/// Item and project names come from the cloud or the .ifcfed. Only their
+/// last component may be joined onto a cache dir: an absolute or UNC name
+/// would replace the dir, and Windows probes UNC paths over SMB.
+fn cache_file_name(name: &str) -> Result<String, RpcError> {
+    Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| RpcError::internal(format!("'{name}' is not a usable file name.")))
 }
 
 #[cfg(test)]
