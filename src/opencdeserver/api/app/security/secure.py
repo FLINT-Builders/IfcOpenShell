@@ -71,7 +71,6 @@ async def get_current_user(security_scopes: SecurityScopes, token: str = Depends
     print(authenticate_value)
 
     try:
-        print("Token: ", token)
         payload = jwt.decode(token, secrets["security_secret_key"], algorithms=[os.environ["SECURITY_ALGORITHM"]])
         username_from_token: str = payload.get("username")
         print("Token username: ", username_from_token)
