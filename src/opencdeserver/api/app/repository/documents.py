@@ -62,12 +62,15 @@ class DOCDB(MyDB):
 
     # ---- CUSTOM (NON DOCUMENTS API) UPLOAD FUNCTION ----
 
-    def create_node_for_uploaded_file(self, selection_session, project, document_version) -> Union[Document, bool]:
+    def create_node_for_uploaded_file(
+        self, selection_session, project, document_version, save_file
+    ) -> Union[Document, bool]:
         def create_document_node_work(tx) -> bool:
             cypher = """
                 MATCH (ss:Session:Select)<-[r1:HAS]-(u:User)-[r2:HAS_ACTIONS_ON]->(p:Project)
                 WHERE ss.selection_session = $selection_session
                 AND p.project_id = $project
+                AND r2.createDocument = true
                 CREATE (p)-[r3:CONTAINS]->(d:Document)
                 SET
                     d.document_id = $document_id,
@@ -104,6 +107,8 @@ class DOCDB(MyDB):
             summary = result.consume()
             if summary.counters.nodes_created < 1:
                 raise HTTPException(status_code=400, detail="Document node was not created.")
+
+            save_file()
             return True
 
         def find_document_node_work(tx) -> Union[Document, bool]:
@@ -341,6 +346,9 @@ class DOCDB(MyDB):
                     WHERE u.username = $username
                     AND us.upload_session = $upload_session
                     AND d.session_file_id = $session_file_id
+                MATCH (u)-[r3:HAS_ACTIONS_ON]->(p:Project)
+                    WHERE p.project_id = $project
+                    AND r3.createDocument = true
                 SET
                     d.version_number = $version_number,
                     d.version_index = $version_index,
@@ -578,27 +586,31 @@ class DOCDB(MyDB):
         with self.driver.session() as session:
             return session.execute_read(get_document_work)
 
-    def document_upload_finish(self, upload_session: UUID, current_user: User, project) -> bool:
+    def document_upload_finish(self, upload_session: UUID, current_user: User, publish) -> bool:
+        # publish runs inside the transaction, only once the project has been authorized,
+        # so a failed authorization leaves no file behind and a failed publish rolls back.
         def upload_finish_work(tx):
             cypher = """
                 MATCH (u:User)-[r1:HAS]->(us:Session:Upload)-[r2:CONTAINS]->(d:Document)-[r3:HAS]->(part:Part)
                 WHERE u.username = $username
                     AND us.upload_session = $upload_session
                     AND part.uploaded = True
-                MATCH (proj:Project)
+                MATCH (u)-[r5:HAS_ACTIONS_ON]->(proj:Project)
                 WHERE
-                    proj.project_id = $project
+                    proj.project_id = d.project
+                    AND r5.createDocument = true
                 DETACH DELETE part
                 DELETE r2
                 CREATE (proj)-[r4:CONTAINS]->(d)
             """
-            result = tx.run(cypher, username=current_user.username, upload_session=upload_session, project=project)
+            result = tx.run(cypher, username=current_user.username, upload_session=upload_session)
 
             summary = result.consume()
             if summary.counters.nodes_deleted < 1:
                 raise HTTPException(status_code=400, detail="Graph could not be upload finished.")
-            else:
-                return True
+
+            publish()
+            return True
 
         with self.driver.session() as session:
             return session.execute_write(upload_finish_work)
