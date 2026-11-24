@@ -152,7 +152,8 @@ def regenerate_sheet(
     titleblock_uri = drawing.get_document_uri(sheet, "TITLEBLOCK")
     assert titleblock_uri
 
-    drawing.create_svg_sheet(sheet, drawing.sanitise_filename(Path(titleblock_uri).stem))
+    if not drawing.create_svg_sheet(sheet, drawing.sanitise_filename(Path(titleblock_uri).stem)):
+        return
     try:
         drawing.add_drawings(sheet)
     except FileNotFoundError:

@@ -25,11 +25,12 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 from collections.abc import Iterable, Sequence
 from fractions import Fraction
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal, NamedTuple, Optional, Union
 
 import bmesh
 import bpy
@@ -500,14 +501,15 @@ class Drawing(bonsai.core.tool.Drawing):
         )
 
     @classmethod
-    def create_svg_sheet(cls, document: ifcopenshell.entity_instance, titleblock: str) -> str:
+    def create_svg_sheet(cls, document: ifcopenshell.entity_instance, titleblock: str) -> Union[str, None]:
+        """Create the sheet layout, return its path or ``None`` if it could not be written."""
         import bonsai.bim.module.drawing.sheeter as sheeter
 
         sheet_builder = sheeter.SheetBuilder()
         uri = cls.get_document_uri(document, "LAYOUT")
         assert uri
-        sheet_builder.create(uri, titleblock)
-        return uri
+        if sheet_builder.create(uri, titleblock):
+            return uri
 
     @classmethod
     def add_drawings(cls, sheet: ifcopenshell.entity_instance) -> None:
@@ -1496,17 +1498,253 @@ class Drawing(bonsai.core.tool.Drawing):
     def does_file_exist(cls, uri: str) -> bool:
         return os.path.exists(uri)
 
+    class UnsafeDocumentPathError(PermissionError):
+        pass
+
+    # Without dir_fd support (Windows) folders are checked by path instead of being opened one by one.
+    HAS_DIR_FD = {os.open, os.mkdir, os.rename, os.stat, os.unlink} <= os.supports_dir_fd
+
+    @classmethod
+    def get_document_roots(cls) -> list[str]:
+        """Folders that files at document locations may be written to, moved within or deleted from.
+
+        Document locations come from the IFC, so they are only trusted inside the project folder
+        and inside absolute folders from the user's preferences.
+        """
+        roots = []
+        if ifc_path := tool.Ifc.get_path():
+            ifc_path = os.path.abspath(ifc_path)
+            roots.append(os.path.dirname(ifc_path) if os.path.isfile(ifc_path) else ifc_path)
+        doc_prefs = tool.Blender.get_addon_preferences().doc
+        for path in (doc_prefs.sheets_dir, doc_prefs.layouts_dir, doc_prefs.titleblocks_dir, doc_prefs.drawings_dir):
+            if path and os.path.isabs(path):
+                roots.append(os.path.abspath(path))
+        return roots
+
+    @classmethod
+    def split_document_path(cls, uri: str) -> tuple[str, list[str]]:
+        """Split ``uri`` into a document root and the path components below it."""
+        path = os.path.abspath(uri)
+        for root in cls.get_document_roots():
+            for base in dict.fromkeys((root, os.path.realpath(root))):
+                try:
+                    is_inside = os.path.normcase(os.path.commonpath((path, base))) == os.path.normcase(base)
+                except ValueError:
+                    continue
+                parts = Path(os.path.relpath(path, base)).parts if is_inside else ()
+                if parts and parts != (".",):
+                    return base, list(parts)
+        raise cls.UnsafeDocumentPathError(f"'{uri}' is outside of the project folder.")
+
+    @classmethod
+    def is_link(cls, st: os.stat_result) -> bool:
+        reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & reparse_point)
+
+    @classmethod
+    def check_document_file(cls, st: os.stat_result, uri: str) -> None:
+        if cls.is_link(st) or not stat.S_ISREG(st.st_mode):
+            raise cls.UnsafeDocumentPathError(f"'{uri}' is not a regular file.")
+
+    @classmethod
+    def open_document_dir(cls, base: str, parts: Sequence[str], create: bool) -> int:
+        """Open the folder ``base/parts`` without following symlinks below ``base``."""
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for part in parts:
+                try:
+                    child = os.open(part, flags, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(part, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                    child = os.open(part, flags, dir_fd=fd)
+                os.close(fd)
+                fd = child
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    @classmethod
+    def check_document_dir(cls, base: str, parts: Sequence[str], create: bool) -> str:
+        """Path based fallback of ``open_document_dir`` for platforms without dir_fd support."""
+        path = base
+        for part in parts:
+            path = os.path.join(path, part)
+            try:
+                st = os.lstat(path)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(path)
+                st = os.lstat(path)
+            if cls.is_link(st) or not stat.S_ISDIR(st.st_mode):
+                raise cls.UnsafeDocumentPathError(f"'{path}' is not a folder.")
+        return path
+
+    @classmethod
+    def open_document_fd(cls, uri: str, write: bool, create: bool = False, exclusive: bool = False) -> int:
+        """Open the regular file at ``uri`` inside the document roots, never through a symlink.
+
+        :param create: Create the file and its parent folders if they don't exist.
+        :param exclusive: Only create a new file, never open an existing one.
+        """
+        base, parts = cls.split_document_path(uri)
+        flags = (os.O_RDWR if write else os.O_RDONLY) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        expected = None
+        if cls.HAS_DIR_FD:
+            dir_fd = cls.open_document_dir(base, parts[:-1], create)
+            target = parts[-1]
+        else:
+            dir_fd = None
+            target = os.path.join(cls.check_document_dir(base, parts[:-1], create), parts[-1])
+            try:
+                expected = os.lstat(target)
+                cls.check_document_file(expected, uri)
+            except FileNotFoundError:
+                pass
+        try:
+            fd = None
+            if not exclusive:
+                try:
+                    fd = os.open(target, flags, dir_fd=dir_fd)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+            if fd is None:
+                fd = os.open(target, flags | os.O_CREAT | os.O_EXCL, 0o666, dir_fd=dir_fd)
+        finally:
+            if dir_fd is not None:
+                os.close(dir_fd)
+        try:
+            st = os.fstat(fd)
+            cls.check_document_file(st, uri)
+            if write and st.st_nlink > 1:
+                raise cls.UnsafeDocumentPathError(f"'{uri}' has other hard links.")
+            if expected is not None and (st.st_dev, st.st_ino) != (expected.st_dev, expected.st_ino):
+                raise cls.UnsafeDocumentPathError(f"'{uri}' was replaced while opening it.")
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    @classmethod
+    def open_document_file(cls, uri: str, create: bool = False) -> Union[BinaryIO, None]:
+        """Open the file at a document location to read and rewrite it in place.
+
+        Returns ``None`` and prints why if it's outside the project folder, reached through a symlink
+        or not a regular file.
+        """
+        try:
+            return os.fdopen(cls.open_document_fd(uri, write=True, create=create), "r+b")
+        except OSError as e:
+            print(f"WARNING. Refusing to write '{uri}': {e}")
+
+    @classmethod
+    def copy_to_document_file(cls, src: Union[str, Path], dest: str, overwrite: bool = True) -> bool:
+        """Copy ``src`` to the document location ``dest``, see ``open_document_file``."""
+        try:
+            with open(src, "rb") as src_file:
+                fd = cls.open_document_fd(dest, write=True, create=True, exclusive=not overwrite)
+                with os.fdopen(fd, "r+b") as dest_file:
+                    if os.path.samestat(os.fstat(src_file.fileno()), os.fstat(fd)):
+                        return True
+                    dest_file.truncate()
+                    shutil.copyfileobj(src_file, dest_file)
+        except FileExistsError:
+            if overwrite:
+                print(f"WARNING. Refusing to write '{dest}': it was created while copying.")
+            return False
+        except OSError as e:
+            print(f"WARNING. Refusing to write '{dest}': {e}")
+            return False
+        return True
+
     @classmethod
     def delete_file(cls, uri: str) -> None:
-        os.remove(uri)
+        try:
+            base, parts = cls.split_document_path(uri)
+            if cls.HAS_DIR_FD:
+                dir_fd = cls.open_document_dir(base, parts[:-1], create=False)
+                try:
+                    cls.check_document_file(os.stat(parts[-1], dir_fd=dir_fd, follow_symlinks=False), uri)
+                    os.unlink(parts[-1], dir_fd=dir_fd)
+                finally:
+                    os.close(dir_fd)
+            else:
+                path = os.path.join(cls.check_document_dir(base, parts[:-1], create=False), parts[-1])
+                cls.check_document_file(os.lstat(path), uri)
+                os.remove(path)
+        except OSError as e:
+            print(f"WARNING. Refusing to delete '{uri}': {e}")
 
     @classmethod
     def move_file(cls, src: str, dest: str) -> None:
         try:
-            shutil.move(src, dest)
-        except:
+            src_base, src_parts = cls.split_document_path(src)
+            dest_base, dest_parts = cls.split_document_path(dest)
+            if cls.HAS_DIR_FD:
+                src_dir = cls.open_document_dir(src_base, src_parts[:-1], create=False)
+                try:
+                    dest_dir = cls.open_document_dir(dest_base, dest_parts[:-1], create=True)
+                    try:
+                        cls.check_document_file(os.stat(src_parts[-1], dir_fd=src_dir, follow_symlinks=False), src)
+                        os.rename(src_parts[-1], dest_parts[-1], src_dir_fd=src_dir, dst_dir_fd=dest_dir)
+                    finally:
+                        os.close(dest_dir)
+                finally:
+                    os.close(src_dir)
+            else:
+                src_path = os.path.join(cls.check_document_dir(src_base, src_parts[:-1], False), src_parts[-1])
+                dest_path = os.path.join(cls.check_document_dir(dest_base, dest_parts[:-1], True), dest_parts[-1])
+                cls.check_document_file(os.lstat(src_path), src)
+                if os.path.lexists(dest_path):
+                    cls.check_document_file(os.lstat(dest_path), dest)
+                os.replace(src_path, dest_path)
+        except cls.UnsafeDocumentPathError as e:
+            print(f"WARNING. Refusing to move '{src}' to '{dest}': {e}")
+        except OSError:
             # Perhaps the file is locked in Windows?
-            shutil.copy(src, dest)
+            try:
+                with os.fdopen(cls.open_document_fd(src, write=False), "rb") as src_file:
+                    with os.fdopen(cls.open_document_fd(dest, write=True, create=True), "r+b") as dest_file:
+                        dest_file.truncate()
+                        shutil.copyfileobj(src_file, dest_file)
+            except OSError as e:
+                print(f"WARNING. Refusing to copy '{src}' to '{dest}': {e}")
+
+    @classmethod
+    def open_layout_file(cls, uri: str, create: bool = False) -> Union[tuple[BinaryIO, bytes], None]:
+        """Open a sheet layout or built sheet SVG to rewrite it, returning the file and its content.
+
+        Besides the checks of ``open_document_file``, refuses anything that's not an .svg and existing
+        files that aren't sheets created by Bonsai.
+        """
+        if os.path.splitext(uri)[1].lower() != ".svg":
+            print(f"WARNING. Refusing to write '{uri}': sheet layouts must be .svg files.")
+            return None
+        if (f := cls.open_document_file(uri, create=create)) is None:
+            return None
+        content = f.read()
+        if content and not cls.is_sheet_svg(content):
+            f.close()
+            print(f"WARNING. Refusing to write '{uri}': it is not a sheet created by Bonsai.")
+            return None
+        return f, content
+
+    @classmethod
+    def is_sheet_svg(cls, content: bytes) -> bool:
+        try:
+            root = etree.fromstring(content, etree.XMLParser(resolve_entities=False, no_network=True))
+        except etree.XMLSyntaxError:
+            return False
+        svg = "{http://www.w3.org/2000/svg}"
+        return root.tag == f"{svg}svg" and root.find(f'{svg}g[@data-type="titleblock"]') is not None
 
     @classmethod
     def generate_drawing_name(
@@ -2265,18 +2503,24 @@ class Drawing(bonsai.core.tool.Drawing):
 
     @classmethod
     def update_embedded_svg_location(cls, uri: str, reference: ifcopenshell.entity_instance, new_location: str) -> None:
-        tree = etree.parse(uri)
-        root = tree.getroot()
-        rel_location = os.path.relpath(new_location, os.path.dirname(uri))
+        if (layout := cls.open_layout_file(uri)) is None:
+            return
+        layout_file, content = layout
+        with layout_file:
+            root = etree.fromstring(content)
+            tree = root.getroottree()
+            rel_location = os.path.relpath(new_location, os.path.dirname(uri))
 
-        for g in root.findall(
-            './/{http://www.w3.org/2000/svg}g[@data-type="drawing"][@data-id="' + str(reference.id()) + '"]'
-        ):
-            for foreground in g.findall('.//{http://www.w3.org/2000/svg}image[@data-type="foreground"]'):
-                foreground.attrib["{http://www.w3.org/1999/xlink}href"] = rel_location
-            for background in g.findall('.//{http://www.w3.org/2000/svg}image[@data-type="background"]'):
-                background.attrib["{http://www.w3.org/1999/xlink}href"] = rel_location[0:-4] + "-underlay.png"
-        tree.write(uri, pretty_print=True, xml_declaration=True, encoding="utf-8")
+            for g in root.findall(
+                './/{http://www.w3.org/2000/svg}g[@data-type="drawing"][@data-id="' + str(reference.id()) + '"]'
+            ):
+                for foreground in g.findall('.//{http://www.w3.org/2000/svg}image[@data-type="foreground"]'):
+                    foreground.attrib["{http://www.w3.org/1999/xlink}href"] = rel_location
+                for background in g.findall('.//{http://www.w3.org/2000/svg}image[@data-type="background"]'):
+                    background.attrib["{http://www.w3.org/1999/xlink}href"] = rel_location[0:-4] + "-underlay.png"
+            layout_file.seek(0)
+            layout_file.truncate()
+            tree.write(layout_file, pretty_print=True, xml_declaration=True, encoding="utf-8")
 
     @classmethod
     def get_reference_description(cls, reference: ifcopenshell.entity_instance) -> Union[str, None]:
