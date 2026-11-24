@@ -815,9 +815,14 @@ def get_named_unit_scale(unit: ifcopenshell.entity_instance) -> float:
 
     :param unit: The IfcNamedUnit.
     :returns: The scale factor.
+    :raises ValueError: If the chain of conversion-based units is cyclic.
     """
     scale = 1.0
+    visited = set()
     while unit.is_a("IfcConversionBasedUnit"):
+        if unit.id() in visited:
+            raise ValueError(f"Cyclic conversion-based unit chain at {unit}")
+        visited.add(unit.id())
         conversion_factor = unit.ConversionFactor
         scale *= conversion_factor.ValueComponent.wrappedValue
         unit = conversion_factor.UnitComponent
