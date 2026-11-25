@@ -291,9 +291,16 @@ def get_parent_task(task: ifcopenshell.entity_instance) -> Union[ifcopenshell.en
 
 
 def get_all_nested_tasks(task: ifcopenshell.entity_instance) -> Generator[ifcopenshell.entity_instance]:
-    for nested_task in get_nested_tasks(task):
-        yield nested_task
-        yield from get_all_nested_tasks(nested_task)
+    seen = {task}
+    stack = [iter(get_nested_tasks(task))]
+    while stack:
+        nested_task = next(stack[-1], None)
+        if nested_task is None:
+            stack.pop()
+        elif nested_task not in seen:
+            seen.add(nested_task)
+            yield nested_task
+            stack.append(iter(get_nested_tasks(nested_task)))
 
 
 def get_work_schedule_tasks(work_schedule: ifcopenshell.entity_instance) -> Generator[ifcopenshell.entity_instance]:

@@ -1160,34 +1160,30 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    seen = {element}
     while queue:
         element = queue.pop()
+        related = []
         for rel in getattr(element, "ContainsElements", []):
-            related = rel.RelatedElements
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedElements)
         for rel in getattr(element, "IsDecomposedBy", []):
-            related = rel.RelatedObjects
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedObjects)
         for rel in getattr(element, "HasOpenings", []):
-            related = rel.RelatedOpeningElement
-            queue.append(related)
-            results.add(related)
+            related.append(rel.RelatedOpeningElement)
         for rel in getattr(element, "HasFillings", []):
-            related = rel.RelatedBuildingElement
-            queue.append(related)
-            results.add(related)
+            related.append(rel.RelatedBuildingElement)
         for rel in getattr(element, "IsNestedBy", []):
-            related = rel.RelatedObjects
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedObjects)
         for rel in getattr(element, "HasSurfaceFeatures", []):
-            related = rel.RelatedSurfaceFeatures
-            queue.extend(related)
-            results.update(related)
+            related.extend(rel.RelatedSurfaceFeatures)
         if not is_recursive:
+            results.update(related)
             break
+        for subelement in related:
+            if subelement not in seen:
+                seen.add(subelement)
+                queue.append(subelement)
+                results.add(subelement)
     return results
 
 

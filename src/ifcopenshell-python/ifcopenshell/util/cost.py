@@ -219,9 +219,16 @@ def get_root_cost_items(cost_schedule: ifcopenshell.entity_instance) -> list[ifc
 def get_all_nested_cost_items(
     cost_item: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
-    for cost_item in get_nested_cost_items(cost_item):
-        yield cost_item
-        yield from get_all_nested_cost_items(cost_item)
+    seen = {cost_item}
+    stack = [iter(get_nested_cost_items(cost_item))]
+    while stack:
+        nested_cost_item = next(stack[-1], None)
+        if nested_cost_item is None:
+            stack.pop()
+        elif nested_cost_item not in seen:
+            seen.add(nested_cost_item)
+            yield nested_cost_item
+            stack.append(iter(get_nested_cost_items(nested_cost_item)))
 
 
 def get_nested_cost_items(cost_item: ifcopenshell.entity_instance, is_deep=False) -> list[ifcopenshell.entity_instance]:
