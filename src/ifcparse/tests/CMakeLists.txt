@@ -2,6 +2,7 @@
 
 add_executable(test_ifcopenshell_parse
     test_ifcopenshell_parse.cpp
+    test_streaming_header_typed_value.cpp
 )
 target_compile_definitions(test_ifcopenshell_parse PRIVATE
     IFCOPENSHELL_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/../../ifcopenshell-python/test/fixtures"
