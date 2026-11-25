@@ -29,8 +29,11 @@
 #include "../../ifcparse/si_prefix.h"
 #include "../../ifcparse/utils.h"
 #include "../../ifcparse/logger.h"
+#include "../walk_guard.h"
 
 using boost::property_tree::ptree;
+using ifcopenshell::serializers::walk_guard;
+using ifcopenshell::serializers::walk_path;
 
 namespace {
 
@@ -188,9 +191,9 @@ std::string qualify_unrooted_instance(const express::base& inst) {
 // A function to be called recursively. Template specialization is used
 // to descend into decomposition, containment and property relationships.
 template <typename A>
-ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, A instance, ptree& tree, express::base parent = express::base()) {
+ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, A instance, ptree& tree, express::base parent = express::base(), walk_path* path = nullptr) {
 	if (instance.declaration().is(IfcSchema::IfcObjectDefinition::Class())) {
-		return descend(log, mapping, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent);
+		return descend(log, mapping, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent, path);
 	} else {
 		return format_entity_instance(log, mapping, instance, tree);
 	}
@@ -230,13 +233,18 @@ auto get_related(ifcopenshell::logger& log, T t, F f, G g) {
 // Descends into the tree by recursing into IfcRelContainedInSpatialStructure,
 // IfcRelDecomposes, IfcRelDefinesByType, IfcRelDefinesByProperties relations.
 template <>
-ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcObjectDefinition product, ptree& tree, express::base parent) {
+ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcObjectDefinition product, ptree& tree, express::base parent, walk_path* path) {
 	if (product.declaration().is(IfcSchema::IfcElement::Class())) {
 		auto voids = product.as<IfcSchema::IfcElement>().FillsVoids();
 		if (voids.size() == 1 && voids.front().RelatingOpeningElement() != parent) {
 			// Fills are placed under their corresponding opening, return early to avoid duplication.
 			return nullptr;
 		}
+	}
+
+	walk_guard guard(log, path, product);
+	if (!guard) {
+		return nullptr;
 	}
 
 	ptree& child = *format_entity_instance(log, mapping, product, tree);
@@ -246,7 +254,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 			log, opening, &IfcSchema::IfcOpeningElement::HasFillings, &IfcSchema::IfcRelFillsElement::RelatedBuildingElement);
 
 		for (auto& f : fills) {
-			descend(log, mapping, f, child, product);
+			descend(log, mapping, f, child, product, guard.path());
 		}
 	}
 
@@ -256,7 +264,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 			(log, structure, &IfcSchema::IfcSpatialStructureElement::ContainsElements, &IfcSchema::IfcRelContainedInSpatialStructure::RelatedElements);
 
 		for (auto& el : elements) {
-			descend(log, mapping, el, child, product);
+			descend(log, mapping, el, child, product, guard.path());
 		}
 	}
 
@@ -265,7 +273,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
             log, element, &IfcSchema::IfcElement::HasOpenings, &IfcSchema::IfcRelVoidsElement::RelatedOpeningElement);
 
         for (auto& op : openings) {
-            descend(log, mapping, op, child, product);
+            descend(log, mapping, op, child, product, guard.path());
         }
     }
 
@@ -286,7 +294,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 #endif
 
 	for (auto& ob : structures) {
-		descend(log, mapping, ob, child, product);
+		descend(log, mapping, ob, child, product, guard.path());
 	}
 
 	if (auto object = product.as<IfcSchema::IfcObject>()) {
@@ -365,59 +373,92 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 }
 
 // Format IfcProperty instances and insert into the DOM. IfcComplexProperties are flattened out.
-void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcProperty>& properties, ptree& node) {
+void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcProperty>& properties, ptree& node, walk_path* path = nullptr) {
     for (auto& p : properties) {
         if (auto complex = p.as<IfcSchema::IfcComplexProperty>()) {
-			format_properties(log, mapping, complex.HasProperties(), node);
+			walk_guard guard(log, path, complex);
+			if (guard) {
+				format_properties(log, mapping, complex.HasProperties(), node, guard.path());
+			}
 		} else {
 			format_entity_instance(log, mapping, p, node);
 		}
 	}
 }
 
-void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcGroup group, ptree& node, std::set<std::string> notRootGroups) {
-	// @todo tfk: instead of a set<string> shouldn't we just have a set<IfcGroup>, the current approach
-	// might not work with non-unique or NIL group names.
+auto groupMembers(const IfcSchema::IfcGroup& group) {
+	std::vector<IfcSchema::IfcObjectDefinition> members;
+	for (auto& rel : group.IsGroupedBy()) {
+		auto objs = rel.RelatedObjects();
+		members.insert(members.end(), objs.begin(), objs.end());
+	}
+	return members;
+}
 
-	// @todo tfk: should the set be a passed as a reference?
-	if (!group.Name()) {
+// Writes a named group and, nested inside it, its members. Member groups are
+// expanded in place. Every group is written at most once, keyed by instance
+// identity in `written`, so cyclic or repeated IfcRelAssignsToGroup terminate.
+// Member groups beyond walk_guard::max_depth are left unwritten for the caller
+// to write at the top level, which keeps the XML tree shallow enough to copy,
+// write and destroy without exhausting the stack.
+void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcGroup group, ptree& node, std::set<uint32_t>& written) {
+	if (!group.Name() || !written.insert(group.identity()).second) {
 		return;
 	}
 
-    if (notRootGroups.find(*group.Name()) != notRootGroups.end()) {
-        return;
-    }
-    // Write one group to root
-    ptree* node2 = descend(log, mapping, group, node);
-    auto father = group.IsGroupedBy();
-    for (auto& ii : father)
-    {
-        auto objs = ii.RelatedObjects();
-        for (auto entity : objs) {
-            if (entity.as<IfcSchema::IfcGroup>() && entity.Name()) {
-                writeGroupToNode(log, mapping, entity.as<IfcSchema::IfcGroup>(), *node2, notRootGroups);
-                notRootGroups.emplace(*entity.Name());
-            }
-            else {
-                // Write child to father group
-                descend(log, mapping, entity, *node2);
-            }
-        }
-    }
+	struct frame {
+		ptree* node;
+		std::vector<IfcSchema::IfcObjectDefinition> members;
+		size_t next;
+	};
+	std::vector<frame> stack;
+	stack.push_back({descend(log, mapping, group, node), groupMembers(group), 0});
+
+	while (!stack.empty()) {
+		frame& top = stack.back();
+		if (top.next == top.members.size()) {
+			stack.pop_back();
+			continue;
+		}
+		auto entity = top.members[top.next++];
+		ptree* parent = top.node;
+		auto child_group = entity.as<IfcSchema::IfcGroup>();
+		if (child_group && child_group.Name()) {
+			if (stack.size() >= walk_guard::max_depth) {
+				if (written.find(child_group.identity()) == written.end()) {
+					log.warning("SER", 39, "Maximum group nesting depth reached, writing group at the top level:", child_group);
+				}
+			} else if (written.insert(child_group.identity()).second) {
+				ptree* child_node = descend(log, mapping, child_group, *parent);
+				stack.push_back({child_node, groupMembers(child_group), 0});
+			}
+		} else {
+			descend(log, mapping, entity, *parent);
+		}
+	}
 }
 
 // Format IfcElementQuantity instances and insert into the DOM.
-void format_quantities(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcPhysicalQuantity>& quantities, ptree& node) {
+void format_quantities(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcPhysicalQuantity>& quantities, ptree& node, walk_path* path = nullptr) {
 	for (auto& p : quantities) {
+		walk_guard guard(log, path, p);
+		if (!guard) {
+			continue;
+		}
 		ptree* node2 = format_entity_instance(log, mapping, p, node);
 		if (node2 && p.declaration().is(IfcSchema::IfcPhysicalComplexQuantity::Class())) {
-            format_quantities(log, mapping, p.as<IfcSchema::IfcPhysicalComplexQuantity>().HasQuantities(), *node2);
+            format_quantities(log, mapping, p.as<IfcSchema::IfcPhysicalComplexQuantity>().HasQuantities(), *node2, guard.path());
 		}
 	}
 }
 
 // Format IfcTask instances and insert into the DOM.
-void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcTask task, ptree& node) {
+void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcTask task, ptree& node, walk_path* path = nullptr) {
+	walk_guard guard(log, path, task);
+	if (!guard) {
+		return;
+	}
+
 	ptree* ntask = format_entity_instance(log, mapping, task, node);
 
 	if (ntask) {
@@ -516,7 +557,7 @@ void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mappin
 			for (auto& object : related_objects)
 			{
                 if (auto task2 = object.as<IfcSchema::IfcTask>()) {
-                    format_tasks(log, mapping, task2, *ntask);
+                    format_tasks(log, mapping, task2, *ntask, guard.path());
                 }
 			}
 		}
@@ -626,16 +667,28 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
 
 	// Write all group sets and values as XML nodes.
 	auto gsets = file->instances_by_type<IfcSchema::IfcGroup>();
-	std::set<std::string> notRootGroups; //selfname, fathername
+	std::set<uint32_t> nestedGroups;
 	for (auto& g : gsets) {
-		writeGroupToNode(log, mapping_, g, groups, notRootGroups);
-	}
-	for (auto it = groups.begin(); it != groups.end();) {
-		if (notRootGroups.find(it->second.get<std::string>("<xmlattr>.Name")) != notRootGroups.end()) {
-			it = groups.erase(it);
-		} else {
-			it++;
+		if (!g.Name()) {
+			continue;
 		}
+		for (auto& member : groupMembers(g)) {
+			auto member_group = member.as<IfcSchema::IfcGroup>();
+			if (member_group && member_group.Name()) {
+				nestedGroups.insert(member_group.identity());
+			}
+		}
+	}
+	std::set<uint32_t> writtenGroups;
+	for (auto& g : gsets) {
+		if (nestedGroups.find(g.identity()) == nestedGroups.end()) {
+			writeGroupToNode(log, mapping_, g, groups, writtenGroups);
+		}
+	}
+	// Groups only reachable through a cycle, or left unwritten at the maximum
+	// nesting depth, have not been written as part of a root group.
+	for (auto& g : gsets) {
+		writeGroupToNode(log, mapping_, g, groups, writtenGroups);
 	}
 
 	// Write all quantities and values as XML nodes.
