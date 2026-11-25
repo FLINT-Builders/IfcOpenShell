@@ -196,6 +196,8 @@ class Ifc2Msp:
             self.create_task(task)
 
     def create_task(self, task, level=0):
+        if task in self.id_map:
+            return
         el = ET.SubElement(self.tasks, "Task")
         self.link_element(task, el)
         ET.SubElement(el, "Name").text = task.Name or "Unnamed"

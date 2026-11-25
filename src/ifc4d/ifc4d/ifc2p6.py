@@ -180,6 +180,7 @@ class Ifc2P6:
         self.create_calendars(work_schedule)
         self.project_tasks = []
         self.activities = []
+        self.visited_tasks = set()
         self.create_wbs(self.get_subtasks(work_schedule), work_schedule)
         self.create_activities()
         self.create_relationships(self.project_tasks, work_schedule)
@@ -190,6 +191,8 @@ class Ifc2P6:
         planned_start_date.text = start_date
 
     def create_wbs(self, tasks, work_schedule, parent=None):
+        tasks = [task for task in tasks if task.id() not in self.visited_tasks]
+        self.visited_tasks.update(task.id() for task in tasks)
         self.project_tasks.extend(tasks)
         for task in tasks:
             subtasks = self.get_subtasks(task)
