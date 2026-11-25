@@ -921,7 +921,8 @@ def format_length(
     :param precision: How precise the format should be. I.e. round to nearest.
         For imperial, it is 1/Nth. E.g. 12 means to the nearest 1/12th of an
         inch.
-    :param decimal_places: How many decimal places to display. Defaults to 2.
+    :param decimal_places: How many decimal places to display, clamped to
+        between 0 and 10. Defaults to 2.
     :param suppress_zero_inches: If imperial, whether or not to supress the
         inches if the inches is zero.
     :param unit_system: Choose whether your value is "metric" or "imperial"
@@ -967,6 +968,7 @@ def format_length(
         return f'{feet * 12} {frac.numerator}/{frac.denominator}"'
     elif unit_system == "metric":
         rounded_val = round(value / precision) * precision
+        decimal_places = max(0, min(int(decimal_places), 10))
         return f"{rounded_val:.{decimal_places}f}"
 
 
