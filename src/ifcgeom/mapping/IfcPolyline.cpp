@@ -33,6 +33,11 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcPolyline& inst) {
 		return taxonomy::cast<taxonomy::point3>(map(p));
 	});
 
+	if (polygon.size() < 2) {
+		logger_.warning("GEO", 277, "Invalid polyline with " + std::to_string(polygon.size()) + " points:", inst);
+		return nullptr;
+	}
+
 	auto eps = this->settings_.get<settings::Precision>().get();
 
 	const bool closed_by_proximity = polygon.size() >= 3 && (polygon.front()->ccomponents() - polygon.back()->ccomponents()).norm() < eps;

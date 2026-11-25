@@ -56,6 +56,10 @@ taxonomy::loop::ptr ifcopenshell::geom::fillet_loop(taxonomy::loop::ptr loop, do
 }
 
 void ifcopenshell::geom::remove_duplicate_points_from_loop(std::vector<taxonomy::point3::ptr>& polygon, bool closed, double tol) {
+	if (polygon.size() < 2) {
+		return;
+	}
+
 	tol *= tol;
 
 	for (;;) {
@@ -209,6 +213,10 @@ std::pair<std::vector<taxonomy::point3::ptr>, std::vector<std::set<std::string>>
     const bool closed = false;
 
 	auto polygon = polygon_;
+	if (polygon.empty()) {
+		return {};
+	}
+
 	std::vector<std::set<std::string>> point_tags;
 	point_tags.resize(polygon.size());
 	for (size_t i = 0; i < tags.size(); ++i) {
