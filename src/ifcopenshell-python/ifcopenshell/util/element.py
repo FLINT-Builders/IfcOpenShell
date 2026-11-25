@@ -1090,16 +1090,24 @@ def get_container(
                 return container
             if container.is_a(ifc_class):
                 return container
-    elif contained_in_structure := getattr(element, "ContainedInStructure", None):
-        container = contained_in_structure[0].RelatingStructure
-        if not ifc_class:
-            return container
-        while container:
-            if container.is_a(ifc_class):
+        return None
+    # Track visited elements, as files may contain cyclic decompositions.
+    visited_elements = set()
+    while element is not None and element not in visited_elements:
+        visited_elements.add(element)
+        if contained_in_structure := getattr(element, "ContainedInStructure", None):
+            container = contained_in_structure[0].RelatingStructure
+            if not ifc_class:
                 return container
-            container = get_aggregate(container)
-    elif parent := get_parent(element):
-        return get_container(parent, should_get_direct, ifc_class)
+            visited_containers = set()
+            while container and container not in visited_containers:
+                visited_containers.add(container)
+                if container.is_a(ifc_class):
+                    return container
+                container = get_aggregate(container)
+            return None
+        element = get_parent(element)
+    return None
 
 
 def get_referenced_structures(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
@@ -1160,8 +1168,13 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    # Track visited elements, as files may contain cyclic decompositions.
+    visited = set()
     while queue:
         element = queue.pop()
+        if element in visited:
+            continue
+        visited.add(element)
         for rel in getattr(element, "ContainsElements", []):
             related = rel.RelatedElements
             queue.extend(related)

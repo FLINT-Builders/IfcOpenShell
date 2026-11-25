@@ -335,6 +335,8 @@ class Spatial(bonsai.core.tool.Spatial):
             elements = set()
             while queue:
                 item = queue.pop()
+                if item in elements:
+                    continue
                 elements.add(item)
                 queue.extend(ifcopenshell.util.element.get_decomposition(item))
         for element in elements:
@@ -524,6 +526,7 @@ class Spatial(bonsai.core.tool.Spatial):
         previous_container_index = props.active_container_index
         props.containers.clear()
         cls.contracted_containers = json.loads(props.contracted_containers)
+        cls.imported_containers = set()
         cls.import_spatial_element(tool.Ifc.get().by_type("IfcProject")[0], 0)
         props.active_container_index = tool.Blender.get_valid_uilist_index(previous_container_index, props.containers)
 
@@ -531,6 +534,10 @@ class Spatial(bonsai.core.tool.Spatial):
     def import_spatial_element(cls, element: ifcopenshell.entity_instance, level_index: int) -> None:
         if not element.is_a("IfcProject") and not tool.Root.is_spatial_element(element):
             return
+        # Files may contain cyclic decompositions.
+        if element in cls.imported_containers:
+            return
+        cls.imported_containers.add(element)
         props = cls.get_spatial_props()
         new = props.containers.add()
         new.ifc_class = element.is_a()
@@ -1364,6 +1371,8 @@ class Spatial(bonsai.core.tool.Spatial):
                 elements = set()
                 while queue:
                     item = queue.pop()
+                    if item in elements:
+                        continue
                     elements.add(item)
                     queue.extend(ifcopenshell.util.element.get_decomposition(item))
             if not element_filter:

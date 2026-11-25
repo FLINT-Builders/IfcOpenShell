@@ -383,13 +383,17 @@ class IfcImporter:
     def get_spatial_elements_filtered_by_elements(
         self, elements: set[ifcopenshell.entity_instance]
     ) -> set[ifcopenshell.entity_instance]:
-        leaf_spatial_elements = set([ifcopenshell.util.element.get_container(e) for e in elements])
+        leaf_spatial_elements = {c for e in elements if (c := ifcopenshell.util.element.get_container(e))}
         results = set()
         for spatial_element in leaf_spatial_elements:
             while True:
                 results.add(spatial_element)
                 spatial_element = ifcopenshell.util.element.get_aggregate(spatial_element)
-                if not spatial_element or spatial_element.is_a() in ("IfcProject", "IfcProjectLibrary"):
+                if (
+                    not spatial_element
+                    or spatial_element in results
+                    or spatial_element.is_a() in ("IfcProject", "IfcProjectLibrary")
+                ):
                     break
         return results
 

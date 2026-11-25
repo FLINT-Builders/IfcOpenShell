@@ -122,12 +122,18 @@ class Collector(bonsai.core.tool.Collector):
         elif element.is_a("IfcAnnotation") and (drawing_obj := cls.get_annotation_drawing_obj(element)):
             cls.link_collection_object_safe(tool.Blender.get_object_bim_props(drawing_obj).collection, obj)
         elif container := ifcopenshell.util.element.get_container(element):
-            while container.is_a("IfcSpace"):
+            spaces = set()
+            while container.is_a("IfcSpace") and container not in spaces:
+                spaces.add(container)
                 container = ifcopenshell.util.element.get_aggregate(container)
-            container_obj = tool.Ifc.get_object(container)
-            if not (collection := tool.Blender.get_object_bim_props(container_obj).collection):
-                cls.assign(container_obj)
-                collection = tool.Blender.get_object_bim_props(container_obj).collection
+            if container.is_a("IfcSpace"):
+                # Cyclic space decomposition, so there is no container collection.
+                collection = cls._create_project_child_collection("Unsorted")
+            else:
+                container_obj = tool.Ifc.get_object(container)
+                if not (collection := tool.Blender.get_object_bim_props(container_obj).collection):
+                    cls.assign(container_obj)
+                    collection = tool.Blender.get_object_bim_props(container_obj).collection
             cls.link_collection_object_safe(collection, obj)
         else:
             collection = cls._create_project_child_collection("Unsorted")
