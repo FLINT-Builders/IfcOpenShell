@@ -546,34 +546,43 @@ void gltf_serializer::setFile(ifcopenshell::file& f) {
 		// Ignored. Schema likely doesn't support IfcCoordinateOperation.
 	}
 	for (auto& coordop : coordops) {
-		express::base source_crs = coordop.as<express::entity>().get("SourceCRS");
-		if (source_crs.declaration().is("IfcGeometricRepresentationContext")) {
-            express::base target_crs = coordop.as<express::entity>().get("TargetCRS");
-			auto name_attr = target_crs.as<express::entity>().get("Name");
-			if (coordop.declaration().is("IfcMapConversion")) {
+		try {
+			express::base source_crs = coordop.as<express::entity>().get("SourceCRS");
+			if (source_crs.declaration().is("IfcGeometricRepresentationContext")) {
+				express::base target_crs = coordop.as<express::entity>().get("TargetCRS");
+				auto name_attr = target_crs.as<express::entity>().get("Name");
+				if (coordop.declaration().is("IfcMapConversion")) {
 
-				if (!name_attr.isNull()) {
-					std::string epsg_code = name_attr;
-					crs_epsg = epsg_code;
+					if (!name_attr.isNull()) {
+						std::string epsg_code = name_attr;
 
-					// @todo in which unit are these?
-					double eastings = coordop.as<express::entity>().get("Eastings");
-					double northings = coordop.as<express::entity>().get("Northings");
-					double height = coordop.as<express::entity>().get("OrthogonalHeight");
-					height = 0.;
+						// @todo in which unit are these?
+						double eastings = coordop.as<express::entity>().get("Eastings");
+						double northings = coordop.as<express::entity>().get("Northings");
+						double height = coordop.as<express::entity>().get("OrthogonalHeight");
+						height = 0.;
 
-					eastings_northings_elevation = { { eastings, northings, height} };
+						std::optional<std::array<double, 3>> x_axis;
+						auto xaxis_attr = coordop.as<express::entity>().get("XAxisAbscissa");
+						auto yaxis_attr = coordop.as<express::entity>().get("XAxisOrdinate");
+						if (!xaxis_attr.isNull() && !yaxis_attr.isNull()) {
+							double xaxis = xaxis_attr;
+							double yaxis = yaxis_attr;
 
-					auto xaxis_attr = coordop.as<express::entity>().get("XAxisAbscissa");
-					auto yaxis_attr = coordop.as<express::entity>().get("XAxisOrdinate");
-					if (!xaxis_attr.isNull() && !yaxis_attr.isNull()) {
-						double xaxis = xaxis_attr;
-						double yaxis = yaxis_attr;
+							x_axis = { { xaxis, yaxis, 0. } };
+						}
 
-						crs_x_axis = { { xaxis, yaxis, 0. } };
+						// setup_georeferencing() requires eastings_northings_elevation whenever crs_epsg is set
+						crs_epsg = epsg_code;
+						eastings_northings_elevation = { { eastings, northings, height} };
+						if (x_axis) {
+							crs_x_axis = x_axis;
+						}
 					}
 				}
 			}
+		} catch (const ifcopenshell::exception& e) {
+			logger().warning("SER", 40, e);
 		}
 	}
 
@@ -581,43 +590,47 @@ void gltf_serializer::setFile(ifcopenshell::file& f) {
 		auto sites = f.instances_by_type("IfcSite");
 
 		if (sites.size() == 1) {
-			auto lat_attr = sites.front().as<express::entity>().get("RefLatitude");
-			auto lon_attr = sites.front().as<express::entity>().get("RefLongitude");
+			try {
+				auto lat_attr = sites.front().as<express::entity>().get("RefLatitude");
+				auto lon_attr = sites.front().as<express::entity>().get("RefLongitude");
 
-			if (!lat_attr.isNull() && !lon_attr.isNull()) {
-				std::vector<int64_t> lat_dms = lat_attr;
-				std::vector<int64_t> lon_dms = lon_attr;
+				if (!lat_attr.isNull() && !lon_attr.isNull()) {
+					std::vector<int64_t> lat_dms = lat_attr;
+					std::vector<int64_t> lon_dms = lon_attr;
 
-				// IfcCompoundPlaneAngleMeasure is LIST [3:4], but the parser does not enforce aggregate bounds
-				auto is_compound_angle = [](const std::vector<int64_t>& dms) {
-					return dms.size() == 3 || dms.size() == 4;
-				};
-
-				if (is_compound_angle(lat_dms) && is_compound_angle(lon_dms)) {
-					auto to_decimal = [](const std::vector<int64_t>& dms) {
-						double val = dms[0] + dms[1] / 60. + dms[2] / 3600.;
-						if (dms.size() == 4) {
-							val += dms[3] / 3600.e6;
-						}
-						return val;
+					// IfcCompoundPlaneAngleMeasure is LIST [3:4], but the parser does not enforce aggregate bounds
+					auto is_compound_angle = [](const std::vector<int64_t>& dms) {
+						return dms.size() == 3 || dms.size() == 4;
 					};
 
-					auto lat = to_decimal(lat_dms);
-					auto lon = to_decimal(lon_dms);
-					double elev = 0.;
+					if (is_compound_angle(lat_dms) && is_compound_angle(lon_dms)) {
+						auto to_decimal = [](const std::vector<int64_t>& dms) {
+							double val = dms[0] + dms[1] / 60. + dms[2] / 3600.;
+							if (dms.size() == 4) {
+								val += dms[3] / 3600.e6;
+							}
+							return val;
+						};
 
-					/*
-					auto elev_attr = (*sites->begin()).as<express::entity>().get("RefElevation");
-					if (!elev_attr->isNull()) {
-						elev = *elev_attr;
+						auto lat = to_decimal(lat_dms);
+						auto lon = to_decimal(lon_dms);
+						double elev = 0.;
+
+						/*
+						auto elev_attr = (*sites->begin()).as<express::entity>().get("RefElevation");
+						if (!elev_attr->isNull()) {
+							elev = *elev_attr;
+						}
+						*/
+
+						crs_epsg.emplace("EPSG:4326");
+						eastings_northings_elevation = { { lat, lon, elev } };
+					} else {
+						logger().warning("SER", 38, "IfcSite RefLatitude and RefLongitude must have 3 or 4 components, skipping georeferencing");
 					}
-					*/
-
-					crs_epsg.emplace("EPSG:4326");
-					eastings_northings_elevation = { { lat, lon, elev } };
-				} else {
-					logger().warning("SER", 38, "IfcSite RefLatitude and RefLongitude must have 3 or 4 components, skipping georeferencing");
 				}
+			} catch (const ifcopenshell::exception& e) {
+				logger().warning("SER", 41, e);
 			}
 		}
 	}
@@ -625,18 +638,22 @@ void gltf_serializer::setFile(ifcopenshell::file& f) {
 	auto contexts = f.instances_by_type_excl_subtypes("IfcGeometricRepresentationContext");
 
 	if (!contexts.empty()) {
-        auto context = contexts.front().as<express::entity>();
-		auto north_attr = context.get("TrueNorth");
-		if (!north_attr.isNull()) {
-			express::base north = north_attr;
-			if (north.declaration().is("IfcDirection")) {
-				std::vector<double> ratios = north.as<express::entity>().get("DirectionRatios");
-				if (ratios.size() >= 2) {
-					crs_x_axis = { { ratios[1], -ratios[0], 0. } };
-				} else {
-					logger().warning("SER", 39, "TrueNorth must have at least 2 direction ratios, ignoring it");
+		try {
+			auto context = contexts.front().as<express::entity>();
+			auto north_attr = context.get("TrueNorth");
+			if (!north_attr.isNull()) {
+				express::base north = north_attr;
+				if (north.declaration().is("IfcDirection")) {
+					std::vector<double> ratios = north.as<express::entity>().get("DirectionRatios");
+					if (ratios.size() >= 2) {
+						crs_x_axis = { { ratios[1], -ratios[0], 0. } };
+					} else {
+						logger().warning("SER", 39, "TrueNorth must have at least 2 direction ratios, ignoring it");
+					}
 				}
 			}
+		} catch (const ifcopenshell::exception& e) {
+			logger().warning("SER", 42, e);
 		}
 	}
 
