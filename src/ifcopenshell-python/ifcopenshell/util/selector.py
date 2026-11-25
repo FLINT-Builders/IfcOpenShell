@@ -40,6 +40,8 @@ import ifcopenshell.util.shape_builder
 import ifcopenshell.util.system
 import ifcopenshell.util.unit
 
+MAX_ROUND_ADJUSTED_EXPONENT = 30
+
 filter_elements_grammar = lark.Lark("""start: filter_group
     filter_group: facet_list ("+" facet_list)* "+"?
     facet_list: facet ("," facet)*
@@ -327,6 +329,11 @@ class FormatTransformer(lark.Transformer):
             # return it unchanged instead of crashing the whole expression.
             return args[0]
         nearest = Decimal(args[1])
+        # Converting a huge Decimal to int is quadratic in its digit count, so
+        # values outside a sane drawing range are left unrounded.
+        for bounded in (value, nearest):
+            if not bounded.is_finite() or abs(bounded.adjusted()) > MAX_ROUND_ADJUSTED_EXPONENT:
+                return args[0]
         result = round(value / nearest) * nearest
         if nearest % 1 == 0:
             return str(int(result))
