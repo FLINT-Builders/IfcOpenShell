@@ -589,9 +589,11 @@ class Client:
                 self.set_tokens_from_response(
                     requests.post(
                         "https://buildingsmartservices.b2clogin.com/tfp/buildingsmartservices.onmicrosoft.com/b2c_1_signupsignin/oauth2/v2.0/token",
-                        params={
+                        data={
                             "grant_type": "authorization_code",
                             "code": server.auth_code,
+                            "redirect_uri": f"http://localhost:{server.server_address[1]}",
+                            "client_id": self.client_id,
                         },
                     ).json()
                 )
@@ -600,9 +602,10 @@ class Client:
         self.set_tokens_from_response(
             requests.post(
                 self.token_endpoint,
-                params={
+                data={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,
+                    "client_id": self.client_id,
                 },
             ).json()
         )
