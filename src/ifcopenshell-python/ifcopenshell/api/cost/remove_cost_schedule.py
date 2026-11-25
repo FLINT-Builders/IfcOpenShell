@@ -18,6 +18,7 @@
 
 import ifcopenshell
 import ifcopenshell.api.cost
+import ifcopenshell.util.cost
 import ifcopenshell.util.element
 
 
@@ -39,13 +40,21 @@ def remove_cost_schedule(file: ifcopenshell.file, cost_schedule: ifcopenshell.en
         ifcopenshell.api.cost.remove_cost_schedule(model, cost_schedule=schedule)
     """
     # TODO: do a deep purge
-    for inverse in file.get_inverse(cost_schedule):
-        if inverse.is_a("IfcRelAssignsToControl"):
-            [
-                ifcopenshell.api.cost.remove_cost_item(file, cost_item=related_object)
-                for related_object in inverse.RelatedObjects
-                if related_object.is_a("IfcCostItem")
-            ]
+    cost_items = [
+        (related_object.id(), related_object)
+        for inverse in file.get_inverse(cost_schedule)
+        if inverse.is_a("IfcRelAssignsToControl")
+        for related_object in inverse.RelatedObjects
+        if related_object.is_a("IfcCostItem")
+    ]
+    # A root cost item may also be nested under another root, and is then already removed with it.
+    removed = set()
+    for cost_item_id, cost_item in cost_items:
+        if cost_item_id in removed:
+            continue
+        removed.add(cost_item_id)
+        removed.update(e.id() for e in ifcopenshell.util.cost.get_all_nested_cost_items(cost_item))
+        ifcopenshell.api.cost.remove_cost_item(file, cost_item=cost_item)
     history = cost_schedule.OwnerHistory
     file.remove(cost_schedule)
     if history:

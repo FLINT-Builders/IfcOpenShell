@@ -56,31 +56,43 @@ def copy_cost_item(
 class Usecase:
     file: ifcopenshell.file
     new_cost_items: list[ifcopenshell.entity_instance]
+    copied: set[int]
 
     def execute(
         self, cost_item: ifcopenshell.entity_instance
     ) -> Union[ifcopenshell.entity_instance, list[ifcopenshell.entity_instance]]:
         self.new_cost_items = []
+        self.copied = set()
         self.duplicate_cost_item(cost_item)
         return self.new_cost_items[0] if len(self.new_cost_items) == 1 else self.new_cost_items
 
     def duplicate_cost_item(self, cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
         new_cost_item = ifcopenshell.util.element.copy_deep(self.file, cost_item)
         self.new_cost_items.append(new_cost_item)
+        self.copied.update((cost_item.id(), new_cost_item.id()))
         self.copy_indirect_attributes(cost_item, new_cost_item)
         return new_cost_item
 
     def copy_indirect_attributes(
         self, from_element: ifcopenshell.entity_instance, to_element: ifcopenshell.entity_instance
     ) -> None:
+        is_placed_in_parent_nest = False
         for inverse in self.file.get_inverse(from_element):
+            if inverse.is_a("IfcRelNests") and inverse.RelatingObject != from_element:
+                # A supplied file may nest an item under several parents. Like unassign_object, use only one.
+                if is_placed_in_parent_nest:
+                    continue
+                is_placed_in_parent_nest = True
             if inverse.is_a("IfcRelDefinesByProperties"):
                 inverse = ifcopenshell.util.element.copy(self.file, inverse)
                 inverse.RelatedObjects = [to_element]
                 pset = ifcopenshell.util.element.copy_deep(self.file, inverse.RelatingPropertyDefinition)
                 inverse.RelatingPropertyDefinition = pset
             elif inverse.is_a("IfcRelNests") and inverse.RelatingObject == from_element:
-                nested_cost_items = [e for e in inverse.RelatedObjects]
+                # Nesting in a supplied file may be cyclic or shared between parents, so copy each item only once
+                # and never copy an item created by this copy.
+                nested_cost_items = [e for e in inverse.RelatedObjects if e.id() not in self.copied]
+                self.copied.update(e.id() for e in nested_cost_items)
                 if nested_cost_items:
                     new_cost_items = []
                     for cost_item in nested_cost_items:

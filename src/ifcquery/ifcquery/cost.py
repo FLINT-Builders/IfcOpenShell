@@ -7,15 +7,21 @@ import ifcopenshell
 import ifcopenshell.util.cost as cost_util
 
 
-def _cost_item_to_dict(item: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
+def _cost_item_to_dict(
+    item: ifcopenshell.entity_instance, max_depth: int | None, depth: int, visited: set[int] | None = None
+) -> dict[str, Any]:
     raw_values = cost_util.get_cost_values(item)
     values = [{"formula": v.get("label", ""), "category": v.get("category")} for v in raw_values]
 
+    # Nesting in a supplied file may be cyclic or shared between parents, so list each item only once.
+    visited = {item.id()} if visited is None else visited
+    children = [sub for sub in cost_util.get_nested_cost_items(item) if sub.id() not in visited]
     if max_depth is not None and depth >= max_depth:
-        child_count = len(cost_util.get_nested_cost_items(item))
+        child_count = len(children)
         subitems = {"truncated": True, "count": child_count} if child_count else []
     else:
-        subitems = [_cost_item_to_dict(sub, max_depth, depth + 1) for sub in cost_util.get_nested_cost_items(item)]
+        visited.update(sub.id() for sub in children)
+        subitems = [_cost_item_to_dict(sub, max_depth, depth + 1, visited) for sub in children]
 
     return {
         "id": item.id(),

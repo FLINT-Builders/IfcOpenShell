@@ -65,10 +65,19 @@ def calculate_applied_value(
     cost_value: ifcopenshell.entity_instance,
     category_filter: Optional[str] = None,
 ) -> float:
+    return _calculate_applied_value(root_element, cost_value, category_filter, {})
+
+
+def _calculate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    sums: dict[tuple[int, Optional[str]], float],
+) -> float:
     if cost_value.ArithmeticOperator and cost_value.Components:
         component_values = []
         for component in cost_value.Components:
-            component_values.append(calculate_applied_value(root_element, component, category_filter))
+            component_values.append(_calculate_applied_value(root_element, component, category_filter, sums))
         if cost_value.ArithmeticOperator == "ADD":
             return sum(component_values)
         result = component_values.pop(0)
@@ -89,18 +98,32 @@ def calculate_applied_value(
         return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category == "*":
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element)
+            return _sum_child_root_elements(root_element, None, sums)
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category:
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element, category_filter=cost_value.Category)
+            return _sum_child_root_elements(root_element, cost_value.Category, sums)
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     return 0.0
 
 
 def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category_filter: Optional[str] = None) -> float:
+    return _sum_child_root_elements(root_element, category_filter, {})
+
+
+def _sum_child_root_elements(
+    root_element: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    sums: dict[tuple[int, Optional[str]], float],
+) -> float:
+    # Nesting in a supplied file may be cyclic or shared between parents. Compute each sum once, and let a sum
+    # that is still being computed further up the nesting contribute nothing.
+    key = (root_element.id(), category_filter)
+    if key in sums:
+        return sums[key]
+    sums[key] = 0.0
     result = 0.0
     for rel in root_element.IsNestedBy:
         for child_root_element in rel.RelatedObjects:
@@ -117,7 +140,7 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
             for child_cost_value in values or []:
                 if category_filter and child_cost_value.Category != category_filter:
                     continue
-                child_applied_value = calculate_applied_value(new_child_root_element, child_cost_value)
+                child_applied_value = _calculate_applied_value(new_child_root_element, child_cost_value, None, sums)
                 child_quantity = get_total_quantity(child_root_element)
                 child_quantity = 1.0 if child_quantity is None else child_quantity
                 if child_cost_value.UnitBasis:
@@ -125,6 +148,7 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
                     result += child_quantity / value_component * child_applied_value
                 else:
                     result += child_quantity * child_applied_value
+    sums[key] = result
     return result
 
 
@@ -219,9 +243,24 @@ def get_root_cost_items(cost_schedule: ifcopenshell.entity_instance) -> list[ifc
 def get_all_nested_cost_items(
     cost_item: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
-    for cost_item in get_nested_cost_items(cost_item):
-        yield cost_item
-        yield from get_all_nested_cost_items(cost_item)
+    yield from _get_all_nested_cost_items(cost_item, {cost_item.id()}, set())
+
+
+def _get_all_nested_cost_items(
+    cost_item: ifcopenshell.entity_instance, path: set[int], expanded: set[int]
+) -> Generator[ifcopenshell.entity_instance]:
+    # Nesting in a supplied file may be cyclic or shared between parents. Never return to an ancestor, and
+    # list the children of each item only once, so the walk stays proportional to the number of nests.
+    expanded.add(cost_item.id())
+    for nested_cost_item in get_nested_cost_items(cost_item):
+        nested_id = nested_cost_item.id()
+        if nested_id in path:
+            continue
+        yield nested_cost_item
+        if nested_id not in expanded:
+            path.add(nested_id)
+            yield from _get_all_nested_cost_items(nested_cost_item, path, expanded)
+            path.discard(nested_id)
 
 
 def get_nested_cost_items(cost_item: ifcopenshell.entity_instance, is_deep=False) -> list[ifcopenshell.entity_instance]:
@@ -332,11 +371,13 @@ def get_product_quantity_names(elements: list[ifcopenshell.entity_instance]) -> 
 
 def get_cost_schedule(cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
     """Returns the cost schedule of a cost item."""
-    for rel in cost_item.HasAssignments or []:
-        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
-            return rel.RelatingControl
-    for rel in cost_item.Nests or []:
-        return get_cost_schedule(rel.RelatingObject)
+    visited = set()
+    while cost_item is not None and cost_item.id() not in visited:
+        visited.add(cost_item.id())
+        for rel in cost_item.HasAssignments or []:
+            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+                return rel.RelatingControl
+        cost_item = next((rel.RelatingObject for rel in cost_item.Nests or []), None)
 
 
 def get_cost_rate(

@@ -656,9 +656,14 @@ class Cost(bonsai.core.tool.Cost):
     @classmethod
     def delete_all_cost_items(cls):
         cost_schedule = tool.Cost.get_active_cost_schedule()
-        items = ifcopenshell.util.cost.get_root_cost_items(cost_schedule)
-        for item in items:
-            cost_item_id = item.id()
+        items = [(item.id(), item) for item in ifcopenshell.util.cost.get_root_cost_items(cost_schedule)]
+        # A root cost item may also be nested under another root, and is then already removed with it.
+        removed = set()
+        for cost_item_id, item in items:
+            if cost_item_id in removed:
+                continue
+            removed.add(cost_item_id)
+            removed.update(e.id() for e in ifcopenshell.util.cost.get_all_nested_cost_items(item))
             ifcopenshell.api.cost.remove_cost_item(tool.Ifc.get(), cost_item=item)
             tool.Cost.clean_up_cost_item_tree(cost_item_id)
 
@@ -762,7 +767,9 @@ class Cost(bonsai.core.tool.Cost):
         cost_item: ifcopenshell.entity_instance,
         level_index: int,
         type: Literal["cost", "cost_rate"] = "cost_rate",
+        visited: Optional[set[int]] = None,
     ) -> None:
+        visited = {cost_item.id()} if visited is None else visited
         new = props_collection.add()
         new.ifc_definition_id = cost_item.id()
         new.name = cost_item.Name or "Unnamed"
@@ -776,11 +783,16 @@ class Cost(bonsai.core.tool.Cost):
         if cost_item.IsNestedBy:
             new.has_children = True
             if new.is_expanded:
-                [
-                    cls.create_new_cost_item_li(props_collection, sub_cost_item, level_index + 1, type)
+                # Nesting in a supplied file may be cyclic or shared between parents, so list each item only once.
+                sub_cost_items = [
+                    sub_cost_item
                     for rel in cost_item.IsNestedBy
                     for sub_cost_item in rel.RelatedObjects
+                    if sub_cost_item.id() not in visited
                 ]
+                visited.update(sub_cost_item.id() for sub_cost_item in sub_cost_items)
+                for sub_cost_item in sub_cost_items:
+                    cls.create_new_cost_item_li(props_collection, sub_cost_item, level_index + 1, type, visited)
 
     @classmethod
     def load_schedule_of_rates_tree(cls, schedule_of_rates: ifcopenshell.entity_instance) -> None:
@@ -900,17 +912,18 @@ class Cost(bonsai.core.tool.Cost):
 
     @classmethod
     def highlight_cost_item(cls, cost_item: ifcopenshell.entity_instance) -> None:
-        def expand_ancestors(cost_item: ifcopenshell.entity_instance) -> None:
+        def expand_ancestors(cost_item: ifcopenshell.entity_instance, visited: set[int]) -> None:
+            visited.add(cost_item.id())
             cls.expand_cost_item(cost_item.id())
             for rel in cost_item.Nests or []:
                 parent_cost = rel.RelatingObject if rel.RelatingObject.is_a("IfcCostItem") else None
-                if parent_cost:
-                    expand_ancestors(parent_cost)
+                if parent_cost and parent_cost.id() not in visited:
+                    expand_ancestors(parent_cost, visited)
             cls.load_cost_schedule_tree()
 
         cost_props = cls.get_cost_props()
         if not cost_item.id() in [item.ifc_definition_id for item in cost_props.cost_items]:
-            expand_ancestors(cost_item)
+            expand_ancestors(cost_item, set())
         cost_item_index = [item.ifc_definition_id for item in cost_props.cost_items].index(cost_item.id()) or 0
         cost_props.active_cost_item_index = cost_item_index
 
@@ -1050,7 +1063,10 @@ class Cost(bonsai.core.tool.Cost):
         return data
 
     @classmethod
-    def create_cost_item_json(cls, cost_item: ifcopenshell.entity_instance, cost_items: dict, data: list):
+    def create_cost_item_json(
+        cls, cost_item: ifcopenshell.entity_instance, cost_items: dict, data: list, visited: Optional[set[int]] = None
+    ):
+        visited = {cost_item.id()} if visited is None else visited
         if cost_item.id() in cost_items.keys():
             cost_item_data = cost_items[cost_item.id()]
             cost_item_data["id"] = cost_item.id()
@@ -1062,7 +1078,11 @@ class Cost(bonsai.core.tool.Cost):
             return None
         for rel in cost_item.IsNestedBy or []:
             for sub_cost_item in rel.RelatedObjects or []:
-                cls.create_cost_item_json(sub_cost_item, cost_items, cost_item_data["is_nested_by"])
+                # Nesting in a supplied file may be cyclic or shared between parents, so list each item only once.
+                if sub_cost_item.id() in visited:
+                    continue
+                visited.add(sub_cost_item.id())
+                cls.create_cost_item_json(sub_cost_item, cost_items, cost_item_data["is_nested_by"], visited)
 
     @classmethod
     def is_cost_item_sum(cls, cost_item: ifcopenshell.entity_instance) -> bool:
