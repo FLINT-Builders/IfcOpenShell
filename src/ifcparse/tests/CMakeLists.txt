@@ -7,6 +7,13 @@ target_compile_definitions(test_ifcopenshell_parse PRIVATE
     IFCOPENSHELL_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/../../ifcopenshell-python/test/fixtures"
 )
 target_link_libraries(test_ifcopenshell_parse PRIVATE Catch2::Catch2WithMain IfcParse)
+if(WITH_ROCKSDB)
+    target_sources(test_ifcopenshell_parse PRIVATE test_rocksdb_inverse_overflow.cpp)
+    target_link_libraries(test_ifcopenshell_parse PRIVATE IFCOPENSHELL_RocksDB ${CMAKE_DL_LIBS})
+    # The overflow checks replace operator new. IfcParse is a shared library, so the
+    # replacement has to be visible for dynamic lookup.
+    target_link_options(test_ifcopenshell_parse PRIVATE "LINKER:--export-dynamic")
+endif()
 add_dependencies(test_ifcopenshell_parse parse_schema_ifc4)
 catch_discover_tests(test_ifcopenshell_parse
     DL_PATHS
