@@ -1168,8 +1168,13 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    # Track visited elements, as files may contain cyclic decompositions.
+    visited = set()
     while queue:
         element = queue.pop()
+        if element in visited:
+            continue
+        visited.add(element)
         for rel in getattr(element, "ContainsElements", []):
             related = rel.RelatedElements
             queue.extend(related)
