@@ -124,23 +124,37 @@ function git_clone_and_checkout_revision {
         [string]$git_url,
         [Parameter(Mandatory = $true)]
         [string]$dest_dir,
-        [Parameter(Mandatory = $false)]
+        [Parameter(Mandatory = $true)]
         [string]$revision
     )
     if (Test-Path -Path "$dest_dir") {
         . $cecho 0 13 "Cloning $dependency_name is already cloned."
-        return
     }
-    . $cecho 0 13 "Cloning $dependency_name into '$dest_dir'."
-    pushd "$env:DEPS_DIR"
-    git clone $git_url $dest_dir
-    popd
+    else {
+        . $cecho 0 13 "Cloning $dependency_name into '$dest_dir'."
+        pushd "$env:DEPS_DIR"
+        git clone $git_url $dest_dir
+        popd
+
+        pushd "$dest_dir"
+        git fetch
+        git reset --hard
+        popd
+    }
 
     pushd "$dest_dir"
-    git fetch
     . $cecho 0 13 "Checking out $dependency_name revision $revision."
-    git reset --hard
-    git checkout $revision
+    git checkout --detach $revision
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to check out '$revision' for '$dependency_name' with git exit code $LASTEXITCODE."
+    }
+    # If the commit is missing, git resolves a 40-hex argument to a ref of that name instead.
+    if ($revision -cmatch '^[0-9a-f]{40}$') {
+        $head = git rev-parse HEAD
+        if ($head -ne $revision) {
+            throw "'$dependency_name' checkout is at '$head', expected commit '$revision'."
+        }
+    }
     popd
 }
 

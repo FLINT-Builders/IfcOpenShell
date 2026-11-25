@@ -42,6 +42,7 @@ jobs:
           ref: ${{ matrix.build_branch }}
           lfs: true
           token: ${{ secrets.BUILD_REPO_TOKEN }}
+          persist-credentials: false
 
       - name: Install Dependencies
         run: |
@@ -96,6 +97,8 @@ jobs:
           }
 
       - name: Commit and Push Changes to Build Repository
+        env:
+          BUILD_REPO_TOKEN: ${{ secrets['BUILD_REPO_TOKEN'] }}
         run: |
           cd ${{ matrix.deps_dir }}
           git config user.name "IfcOpenBot"
@@ -103,6 +106,12 @@ jobs:
           git checkout -B ${{ matrix.build_branch }}
           git add *.zip
           git commit -m "Update build artifacts [skip ci]" || echo "No changes to commit"
+          # Passed via environment so the credential never lands in .git/config.
+          $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("x-access-token:$env:BUILD_REPO_TOKEN"))
+          echo "::add-mask::$basic"
+          $env:GIT_CONFIG_COUNT = "1"
+          $env:GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader"
+          $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
           git push --set-upstream origin ${{ matrix.build_branch }} || echo "Push failed"
 
       - name: Test packaged Python wrapper

@@ -103,20 +103,25 @@ def git_clone_and_checkout_revision(
     log_dependency_name: str,
     git_url: str,
     dest_dir: Path,
-    revision: str | None = None,
+    revision: str,
 ) -> None:
     if dest_dir.exists():
         logger.info(f"Cloning {log_dependency_name} is already cloned.")
-        return
-
-    logger.info(f"Cloning {log_dependency_name} into '{dest_dir}'.")
-    run_streamed("git", "clone", git_url, str(dest_dir))
-
-    if revision:
+    else:
+        logger.info(f"Cloning {log_dependency_name} into '{dest_dir}'.")
+        run_streamed("git", "clone", git_url, str(dest_dir))
         run_streamed("git", "fetch", cwd=dest_dir)
-        logger.info(f"Checking out {log_dependency_name} revision {revision}.")
         run_streamed("git", "reset", "--hard", cwd=dest_dir)
-        run_streamed("git", "checkout", revision, cwd=dest_dir)
+
+    logger.info(f"Checking out {log_dependency_name} revision {revision}.")
+    run_streamed("git", "checkout", "--detach", revision, cwd=dest_dir)
+
+    # If the commit is missing, git resolves a 40-hex argument to a ref of that name instead.
+    if re.fullmatch(r"[0-9a-f]{40}", revision):
+        head = run("git", "rev-parse", "HEAD", cwd=dest_dir).strip()
+        if head != revision:
+            logger.error(f"{log_dependency_name} checkout is at '{head}', expected commit '{revision}'.")
+            sys.exit(1)
 
 
 class CMakeGenCfg(NamedTuple):
@@ -660,7 +665,12 @@ def install_mpir(vs_cfg_vars: VsCfgResult, deps_dir: Path, install_dir: Path, bu
     if is_already_installed(install_dir / "mpir"):
         return
 
-    git_clone_and_checkout_revision(DEPENDENCY_NAME, "https://github.com/Andrej730/mpir-vs2026.git", dependency_dir)
+    git_clone_and_checkout_revision(
+        DEPENDENCY_NAME,
+        "https://github.com/Andrej730/mpir-vs2026.git",
+        dependency_dir,
+        "365957bc3f3c49908d07ec942a7019844a16daea",
+    )
     run_streamed("git", "reset", "--hard", cwd=dependency_dir)
     run_streamed("git", "clean", "-fdx", cwd=dependency_dir)
 
