@@ -16,6 +16,7 @@ from bcf.geometry import (
 )
 from bcf.inmemory_zipfile import ZipFileInterface
 from bcf.xml_parser import AbstractXmlParserSerializer, XmlParserSerializer
+from bcf.zip_limits import read_path
 
 
 class VisualizationInfoHandler:
@@ -89,7 +90,7 @@ class VisualizationInfoHandler:
         vp_path = topic_dir.joinpath(vp_name)
         if vp_path.exists():
             xml_handler = xml_handler or XmlParserSerializer()
-            return xml_handler.parse(vp_path.read_bytes(), mdl.VisualizationInfo)
+            return xml_handler.parse(read_path(vp_path), mdl.VisualizationInfo)
         return None
 
     @staticmethod
@@ -97,7 +98,7 @@ class VisualizationInfoHandler:
         if vp_snapshot:
             snapshot_path = topic_dir.joinpath(vp_snapshot)
             if snapshot_path.exists():
-                return snapshot_path.read_bytes()
+                return read_path(snapshot_path)
         return None
 
     @staticmethod
@@ -110,7 +111,7 @@ class VisualizationInfoHandler:
                 continue
             bitmap_path = topic_dir.joinpath(bitmap.reference)
             if bitmap_path.exists():
-                bitmaps_dict[bitmap.reference] = bitmap_path.read_bytes()
+                bitmaps_dict[bitmap.reference] = read_path(bitmap_path)
         return bitmaps_dict
 
     def save(
