@@ -102,14 +102,24 @@ class MSPIfcGenerator(ScheduleIfcGenerator):
         self.default_hours_per_day = settings["hours_per_day"]
 
     def create_tasks(self, work_schedule):
-        for uid in self.roots:
-            self.create_node(uid, None, work_schedule)
+        # Walked with an explicit stack, not recursion, so that neither a deep
+        # outline nor a UID listed under itself can exhaust the call stack.
+        emitted = set()
+        stack = [(uid, None) for uid in reversed(self.roots)]
+        while stack:
+            uid, parent = stack.pop()
+            if uid in emitted:
+                raise ValueError(f"Outline cycle: task UID {uid} is listed more than once in the outline")
+            emitted.add(uid)
+            wbs = self.create_node(uid, parent, work_schedule)
+            if wbs is not None:
+                stack.extend((child, wbs) for child in reversed(self.children.get(uid, [])))
 
     def create_node(self, uid, parent, work_schedule):
-        """One outline row, and everything indented under it."""
+        """One outline row. Returns the summary it became, or None for a leaf."""
         if uid not in self.wbs:
             self.create_task_from_activity(self.activities[uid], parent, work_schedule)
-            return
+            return None
 
         wbs = self.wbs[uid]
         wbs["ifc"] = ifcopenshell.api.sequence.add_task(
@@ -128,8 +138,7 @@ class MSPIfcGenerator(ScheduleIfcGenerator):
         # fields are not — a planner fills those in on a summary row as readily
         # as on a leaf, and nothing else in the file carries them.
         self.create_udf_pset(wbs)
-        for child in self.children.get(uid, []):
-            self.create_node(child, wbs, None)
+        return wbs
 
     def create_task_from_activity(self, activity, wbs, work_schedule):
         super().create_task_from_activity(activity, wbs, work_schedule)
@@ -491,6 +500,13 @@ class MSP2Ifc:
             level = int(self.text(task, "OutlineLevel") or 0)
             while ancestors and ancestors[-1][1] >= level:
                 ancestors.pop()
+            # A UID is the row's identity. Listed twice, it would become a
+            # child of whatever row it is filed under the second time, which
+            # under one of its own descendants closes a cycle.
+            if uid in parents:
+                if any(ancestor == uid for ancestor, _ in ancestors):
+                    raise ValueError(f"Outline cycle: task UID {uid} is listed under itself")
+                raise ValueError(f"Duplicate task UID {uid} in the outline")
             parent = ancestors[-1][0] if ancestors else None
             parents[uid] = parent
             self.children.setdefault(parent, []).append(uid)
