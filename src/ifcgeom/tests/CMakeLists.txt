@@ -35,3 +35,32 @@ catch_discover_tests(test_ifcopenshell_geometry
         # Catch2 discovery uses DL_PATHS in order; CTest PATH prepends reverse it.
         $<TARGET_FILE_DIR:IfcGeom>
 )
+
+# These cases abort with SIGFPE while an empty IfcPolyline still reaches
+# remove_duplicate_points_from_loop. They are a separate binary so the
+# existing geometry tests are not part of that run.
+add_executable(test_empty_polyline
+    test_empty_polyline.cpp
+)
+target_include_directories(test_empty_polyline PRIVATE "${CMAKE_SOURCE_DIR}/../src")
+target_compile_definitions(test_empty_polyline PRIVATE
+    IfcSchema=Ifc${IFCGEOM_TEST_SCHEMA_VERSION}
+    "IFCGEOM_TEST_SCHEMA_HEADER=\"ifcparse/schemas/Ifc${IFCGEOM_TEST_SCHEMA_VERSION}.h\""
+)
+target_link_libraries(test_empty_polyline PRIVATE
+    Catch2::Catch2WithMain
+    IfcGeom
+    IfcParse
+    ${IFCGEOM_TEST_SCHEMA_TARGET}
+)
+add_dependencies(test_empty_polyline ${IFCGEOM_TEST_MAPPING_TARGET} geometry_kernel_passthrough)
+catch_discover_tests(test_empty_polyline
+    DL_PATHS
+        $<TARGET_FILE_DIR:Catch2::Catch2>
+        $<TARGET_FILE_DIR:Catch2::Catch2WithMain>
+        $<TARGET_FILE_DIR:IfcGeom>
+        $<TARGET_FILE_DIR:IfcParse>
+        $<TARGET_FILE_DIR:${IFCGEOM_TEST_SCHEMA_TARGET}>
+        $<TARGET_FILE_DIR:plugin>
+        $<TARGET_FILE_DIR:IfcGeom>
+)
