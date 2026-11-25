@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import ifcopenshell
 import ifcopenshell.util.cost
@@ -50,7 +50,10 @@ class ifc5D2json:
                 self.extract_cost_item_data(cost_item, schedule_data)
         return schedule_data
 
-    def extract_cost_item_data(self, cost_item: ifcopenshell.entity_instance, json_data):
+    def extract_cost_item_data(
+        self, cost_item: ifcopenshell.entity_instance, json_data, _visited: Optional[set[int]] = None
+    ):
+        visited = {cost_item.id()} if _visited is None else _visited
         data = {}
         self.extract_cost_item_quantities(cost_item, data)
         self.populate_cost_values(cost_item, data)
@@ -69,7 +72,11 @@ class ifc5D2json:
         json_data.append(data)
         for rel in cost_item.IsNestedBy or []:
             for sub_cost in rel.RelatedObjects:
-                self.extract_cost_item_data(sub_cost, data["IsNestedBy"])
+                # Nesting in a supplied file may be cyclic or shared between parents, so list each item only once.
+                if sub_cost.id() in visited:
+                    continue
+                visited.add(sub_cost.id())
+                self.extract_cost_item_data(sub_cost, data["IsNestedBy"], visited)
 
     def get_cost_classifications(self, cost_item: ifcopenshell.entity_instance) -> list:
         results = []
