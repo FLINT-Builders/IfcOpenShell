@@ -7,7 +7,10 @@ import ifcopenshell
 import ifcopenshell.util.sequence as seq
 
 
-def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
+def _task_to_dict(
+    task: ifcopenshell.entity_instance, max_depth: int | None, depth: int, visited: set[ifcopenshell.entity_instance]
+) -> dict[str, Any]:
+    visited.add(task)
     task_time = task.TaskTime
     start = None
     finish = None
@@ -23,7 +26,11 @@ def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, dep
         child_count = len(seq.get_nested_tasks(task))
         subtasks = {"truncated": True, "count": child_count} if child_count else []
     else:
-        subtasks = [_task_to_dict(sub, max_depth, depth + 1) for sub in seq.get_nested_tasks(task)]
+        subtasks = [
+            _task_to_dict(sub, max_depth, depth + 1, visited)
+            for sub in seq.get_nested_tasks(task)
+            if sub not in visited
+        ]
 
     return {
         "id": task.id(),
@@ -54,7 +61,8 @@ def schedule(model: ifcopenshell.file, max_depth: int | None = None) -> list[dic
     """
     result = []
     for work_schedule in model.by_type("IfcWorkSchedule"):
-        tasks = [_task_to_dict(t, max_depth, depth=1) for t in seq.get_root_tasks(work_schedule)]
+        visited = set()
+        tasks = [_task_to_dict(t, max_depth, 1, visited) for t in seq.get_root_tasks(work_schedule) if t not in visited]
         result.append(
             {
                 "id": work_schedule.id(),
