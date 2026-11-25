@@ -60,6 +60,12 @@ def _escape_css_attr(name: str) -> str:
     return name.replace(":", "\\:")
 
 
+def _escape_css_string(value: str) -> str:
+    # GlobalId comes from the model file, so anything outside a conservative
+    # set is hex-escaped to keep it inside the quoted selector string.
+    return "".join(c if c.isascii() and (c.isalnum() or c in "_$-") else f"\\{ord(c):x} " for c in value)
+
+
 def _highlight_css_from_ids(model: ifcopenshell.file, element_ids: list[int]) -> str:
     guids: list[str] = []
     for sid in element_ids:
@@ -83,7 +89,7 @@ def _highlight_css_from_ids(model: ifcopenshell.file, element_ids: list[int]) ->
         f"[{attr}] path {{ opacity: 0.10; }}",
         f"[{attr}] text {{ opacity: 0.25; }}",
     ]
-    for gid in guids:
+    for gid in map(_escape_css_string, guids):
         css.append(f'[{attr}="{gid}"] path {{ opacity: 1.0; stroke: #d00; stroke-width: 0.25; }}')
         css.append(f'[{attr}="{gid}"] text {{ opacity: 1.0; fill: #d00; }}')
     return "\n".join(css) + "\n"
