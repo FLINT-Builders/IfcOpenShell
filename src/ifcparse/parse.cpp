@@ -1197,10 +1197,13 @@ void ifcopenshell::impl::rocks_db_file_storage::remove_type_ref(const express::b
         auto key = rocksdb_key::type_list(new_entity.declaration().index_in_schema());
         if (db->Get(rocksdb::ReadOptions{}, key, &s).ok()) {
             auto vals = decode_id_list<size_t>(s.data(), s.size());
-            vals.erase(std::find(vals.begin(), vals.end(), (size_t)new_entity.id()));
-            s.resize(vals.size() * sizeof(size_t));
-            memcpy(s.data(), vals.data(), s.size());
-            db->Put(wopts, key, s);
+            auto it = std::find(vals.begin(), vals.end(), (size_t)new_entity.id());
+            if (it != vals.end()) {
+                vals.erase(it);
+                s.resize(vals.size() * sizeof(size_t));
+                memcpy(s.data(), vals.data(), s.size());
+                db->Put(wopts, key, s);
+            }
         }
     }
 
