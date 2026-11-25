@@ -112,6 +112,7 @@ class Usecase:
 
     def execute(self, task: ifcopenshell.entity_instance):
         self.calendar_cache = {}
+        self.nesting_parents = {}
         self.cascade_task(task, is_first_task=True)
 
     def cascade_task(
@@ -318,10 +319,13 @@ class Usecase:
             self.cascade_task(rel.RelatedProcess, task_sequence=task_sequence + [task])
 
         for rel in task.IsNestedBy:
-            [
+            for nested_task in rel.RelatedObjects or []:
+                if nested_task == task or nested_task in task_sequence:
+                    continue
+                # A file may nest a task under several parents, so only descend from the first one.
+                if self.nesting_parents.setdefault(nested_task, task) != task:
+                    continue
                 self.cascade_task(nested_task, task_sequence=task_sequence + [task])
-                for nested_task in rel.RelatedObjects or []
-            ]
 
     def get_lag_time_days(self, lag_time: ifcopenshell.entity_instance) -> int:
         return ifcopenshell.util.date.ifc2datetime(lag_time.LagValue.wrappedValue).days

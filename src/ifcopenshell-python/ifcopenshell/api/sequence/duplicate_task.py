@@ -76,6 +76,8 @@ class Usecase:
         return self.current, self.duplicate
 
     def duplicate_task(self, task: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
+        if task in self.current:
+            return self.duplicate[self.current.index(task)]
         new_task = ifcopenshell.util.element.copy_deep(self.file, task)
         self.current.append(task)
         self.duplicate.append(new_task)

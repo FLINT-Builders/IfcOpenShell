@@ -115,19 +115,15 @@ class Usecase:
         self.edges = []
         self.g.add_node("start", duration=0, duration_type="ELAPSEDTIME", calendar=None)
         self.g.add_node("finish", duration=0, duration_type="ELAPSEDTIME", calendar=None)
-        for rel in self.work_schedule.Controls:
-            for related_object in rel.RelatedObjects:
-                if not related_object.is_a("IfcTask"):
-                    continue
-                self.add_node(related_object)
+        visited = set()
+        for task in ifcopenshell.util.sequence.get_work_schedule_tasks(self.work_schedule):
+            if task in visited or task.IsNestedBy:
+                continue
+            visited.add(task)
+            self.add_node(task)
         self.g.add_edges_from(self.edges)
 
     def add_node(self, task: ifcopenshell.entity_instance) -> None:
-        if task.IsNestedBy:
-            for rel in task.IsNestedBy:
-                [self.add_node(o) for o in rel.RelatedObjects]
-            return
-
         if task.TaskTime and task.TaskTime.ScheduleDuration:
             duration = ifcopenshell.util.date.ifc2datetime(task.TaskTime.ScheduleDuration).days
             duration_type = task.TaskTime.DurationType
