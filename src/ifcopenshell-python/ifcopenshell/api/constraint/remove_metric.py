@@ -63,6 +63,12 @@ class Usecase:
                 self.file.remove(resource_rel)
 
     def delete_reference(self, reference: ifcopenshell.entity_instance) -> None:
-        if reference.InnerReference:
-            self.delete_reference(reference.InnerReference)
-        self.file.remove(reference)
+        # InnerReference chains may be cyclic in untrusted files.
+        references = []
+        visited = set()
+        while reference and reference.id() not in visited:
+            visited.add(reference.id())
+            references.append(reference)
+            reference = reference.InnerReference
+        for reference in reversed(references):
+            self.file.remove(reference)
