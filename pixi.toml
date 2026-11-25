@@ -14,6 +14,7 @@ tests = { features = ["tests", "common"], no-default-feature = true }
 
 [feature.lint.dependencies]
 ruff = "*"
+libexpat = ">=2.8.1"
 
 [feature.common.dependencies]
 # Build deps
@@ -35,6 +36,7 @@ mpfr = "*"
 gmp = "*"
 nlohmann_json = "*"
 zlib = "*"
+libexpat = ">=2.8.1"
 # Not strictly necessary
 pythonocc-core = "*"
 
