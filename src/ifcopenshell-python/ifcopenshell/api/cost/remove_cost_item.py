@@ -17,7 +17,7 @@
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
 import ifcopenshell
-import ifcopenshell.api.cost
+import ifcopenshell.util.cost
 import ifcopenshell.util.element
 
 
@@ -40,12 +40,19 @@ def remove_cost_item(file: ifcopenshell.file, cost_item: ifcopenshell.entity_ins
         ifcopenshell.api.cost.remove_cost_item(model, cost_item=item)
     """
     # TODO: do a deep purge
+    # Nesting in a supplied file may be cyclic, so collect each nested item once and remove children before parents.
+    cost_items = {cost_item.id(): cost_item}
+    for nested_cost_item in ifcopenshell.util.cost.get_all_nested_cost_items(cost_item):
+        cost_items.setdefault(nested_cost_item.id(), nested_cost_item)
+    for item in reversed(cost_items.values()):
+        _remove_single_cost_item(file, item)
+
+
+def _remove_single_cost_item(file: ifcopenshell.file, cost_item: ifcopenshell.entity_instance) -> None:
     for inverse in file.get_inverse(cost_item):
         if inverse.is_a("IfcRelNests"):
-            if inverse.RelatingObject == cost_item:
-                for related_object in inverse.RelatedObjects:
-                    ifcopenshell.api.cost.remove_cost_item(file, cost_item=related_object)
-            elif inverse.RelatedObjects == (cost_item,):
+            # Every nested item is removed too, so a nest relating this item is no longer needed.
+            if inverse.RelatingObject == cost_item or inverse.RelatedObjects == (cost_item,):
                 history = inverse.OwnerHistory
                 file.remove(inverse)
                 if history:
