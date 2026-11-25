@@ -5,6 +5,8 @@ import base64
 import inspect
 from typing import Any
 
+from ifcquery import cost as cost_mod
+
 from ifcmcp.core import IfcSession
 
 try:
@@ -121,7 +123,7 @@ def build_server() -> Any:
         return session.ifc_schedule(max_depth=max_depth)
 
     @_tool
-    def ifc_cost(max_depth: int | None = None) -> list[dict[str, Any]]:
+    def ifc_cost(max_depth: int | None = cost_mod.DEFAULT_MAX_DEPTH) -> list[dict[str, Any]]:
         return session.ifc_cost(max_depth=max_depth)
 
     @_tool

@@ -442,7 +442,7 @@ class IfcSession:
         return schedule.schedule(self._require_model(), max_depth=max_depth)
 
     @_use_doc(cost_mod.cost)
-    def ifc_cost(self, max_depth: int | None = None) -> list[dict[str, Any]]:
+    def ifc_cost(self, max_depth: int | None = cost_mod.DEFAULT_MAX_DEPTH) -> list[dict[str, Any]]:
         return cost_mod.cost(self._require_model(), max_depth=max_depth)
 
     @_use_doc(schema.schema)
@@ -763,7 +763,7 @@ class IfcSession:
                     "properties": {
                         "max_depth": {
                             "type": "integer",
-                            "description": "Max levels of cost item expansion (omit for unlimited)",
+                            "description": f"Max levels of cost item expansion (default {cost_mod.DEFAULT_MAX_DEPTH})",
                         }
                     },
                     "required": [],

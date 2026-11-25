@@ -289,7 +289,7 @@ ifcquery model.ifc cost --depth 2
 
 Options:
 
-- `--depth N` -- expand at most N levels of subitems (default: unlimited). At the
+- `--depth N` -- expand at most N levels of subitems (default: 64). At the
   cutoff, `subitems` is replaced with `{"truncated": true, "count": N}`.
 
 ```json

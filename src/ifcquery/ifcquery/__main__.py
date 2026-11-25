@@ -155,9 +155,9 @@ def main():
     cost_parser.add_argument(
         "--depth",
         type=int,
-        default=None,
+        default=cost_mod.DEFAULT_MAX_DEPTH,
         metavar="N",
-        help="Limit cost item expansion to N levels (default: unlimited)",
+        help=f"Limit cost item expansion to N levels (default: {cost_mod.DEFAULT_MAX_DEPTH})",
     )
 
     subparsers.add_parser("contexts", help="List geometric representation contexts and subcontexts")
