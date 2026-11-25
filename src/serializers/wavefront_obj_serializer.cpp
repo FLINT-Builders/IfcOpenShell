@@ -27,6 +27,39 @@
 #include <boost/lexical_cast.hpp>
 #include <iomanip>
 
+namespace {
+	// OBJ and MTL statements end at CR or LF. Some readers also join a line ending
+	// in a backslash with the next one or split on Unicode line separators. Text
+	// from the IFC file must not be able to start a new statement.
+	std::string sanitize_obj_token(const std::string& str) {
+		std::string result;
+		result.reserve(str.size());
+		for (std::string::size_type i = 0; i < str.size(); ++i) {
+			const unsigned char c = str[i];
+			const unsigned char c1 = i + 1 < str.size() ? str[i + 1] : 0;
+			const unsigned char c2 = i + 2 < str.size() ? str[i + 2] : 0;
+			if (c < 0x20 || c == 0x7F || c == '\\') {
+				result += '_';
+			} else if (c == 0xC2 && c1 == 0x85) {
+				result += '_';
+				i += 1;
+			} else if (c == 0xE2 && c1 == 0x80 && (c2 == 0xA8 || c2 == 0xA9)) {
+				result += '_';
+				i += 2;
+			} else {
+				result += str[i];
+			}
+		}
+		return result;
+	}
+
+	std::string obj_material_name(const ifcopenshell::geom::taxonomy::style& style) {
+		std::string material_name = style.name;
+		ifcopenshell::sanitate_material_name(material_name);
+		return sanitize_obj_token(material_name);
+	}
+}
+
 wavefront_obj_serializer::wavefront_obj_serializer(const stream_or_filename& obj_filename, const stream_or_filename& mtl_filename, const ifcopenshell::geom::settings& settings, ifcopenshell::logger* logger)
 	: ifcopenshell::geom::write_only_geometry_serializer(settings, logger)
 	, obj_stream(obj_filename)
@@ -63,8 +96,7 @@ void wavefront_obj_serializer::writeHeader() {
 void wavefront_obj_serializer::writeMaterial(const ifcopenshell::geom::taxonomy::style::ptr styleptr)
 {
 	auto& style = *styleptr;
-	std::string material_name = style.name;
-    ifcopenshell::sanitate_material_name(material_name);
+	const std::string material_name = obj_material_name(style);
     mtl_stream.stream << "newmtl " << material_name << "\n";
 
 	{
@@ -88,7 +120,7 @@ void wavefront_obj_serializer::writeMaterial(const ifcopenshell::geom::taxonomy:
 
 void wavefront_obj_serializer::write(const ifcopenshell::geom::triangulation_element* o)
 {
-    obj_stream.stream << "g " << object_id(o) << "\n";
+    obj_stream.stream << "g " << sanitize_obj_token(object_id(o)) << "\n";
 	obj_stream.stream << "s 1" << "\n";
 	const bool isyup = settings().get<ifcopenshell::geom::settings::UseYUp>().get();
 
@@ -132,8 +164,7 @@ void wavefront_obj_serializer::write(const ifcopenshell::geom::triangulation_ele
 		const int material_id = *(material_it++);
 		if (material_id != previous_material_id) {
 			const ifcopenshell::geom::taxonomy::style::ptr material = mesh.materials()[material_id];
-			std::string material_name = material->name;
-            ifcopenshell::sanitate_material_name(material_name);
+			const std::string material_name = obj_material_name(*material);
 			obj_stream.stream << "usemtl " << material_name << "\n";
 			if (materials.find(material_name) == materials.end()) {
 				writeMaterial(material);
@@ -178,8 +209,7 @@ void wavefront_obj_serializer::write(const ifcopenshell::geom::triangulation_ele
 
 		if (material_id != previous_material_id) {
 			const ifcopenshell::geom::taxonomy::style::ptr material = mesh.materials()[material_id];
-			std::string material_name = material->name;
-            ifcopenshell::sanitate_material_name(material_name);
+			const std::string material_name = obj_material_name(*material);
 			obj_stream.stream << "usemtl " << material_name << "\n";
 			if (materials.find(material_name) == materials.end()) {
 				writeMaterial(material);
