@@ -711,11 +711,13 @@ def get_extrusions(element: ifcopenshell.entity_instance) -> Union[list[ifcopens
     representation = ifcopenshell.util.representation.resolve_representation(representation)
     extrusions = []
     for item in representation.Items:
+        visited = set()
         while True:
             if item.is_a("IfcExtrudedAreaSolid"):
                 extrusions.append(item)
                 break
-            elif item.is_a("IfcBooleanResult"):
+            elif item.is_a("IfcBooleanResult") and item.id() not in visited:
+                visited.add(item.id())
                 item = item.FirstOperand
             else:
                 break
@@ -735,7 +737,9 @@ def get_base_extrusions(element: ifcopenshell.entity_instance) -> Union[list[ifc
         return
     extrusions = []
     for item in ifcopenshell.util.representation.resolve_representation(rep).Items:
-        while item.is_a("IfcBooleanResult"):
+        visited = set()
+        while item.is_a("IfcBooleanResult") and item.id() not in visited:
+            visited.add(item.id())
             item = item.FirstOperand
         if item.is_a("IfcExtrudedAreaSolid"):
             extrusions.append(item)

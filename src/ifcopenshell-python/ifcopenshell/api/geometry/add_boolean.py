@@ -64,10 +64,12 @@ def add_boolean(
 
     second_items = [i for i in second_items if i != first_item and is_operand(i)]
 
+    visited = {first_item.id()}
     while True:
         is_part_of_boolean = False
         for inverse in file.get_inverse(first_item):
-            if inverse.is_a("IfcBooleanResult"):
+            if inverse.is_a("IfcBooleanResult") and inverse.id() not in visited:
+                visited.add(inverse.id())
                 is_part_of_boolean = True
                 first_item = inverse
                 if inverse.FirstOperand == original_first_item and inverse.SecondOperand in second_items:
