@@ -42,11 +42,33 @@ class OAuthReceiver(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b"You have now authenticated :) You may now close this browser window.")
 
 
+def _https_origin(netloc: str, default_port: int) -> Optional[tuple[str, int]]:
+    parsed = urllib.parse.urlsplit(f"//{netloc}")
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if not parsed.hostname or "%" in parsed.hostname or parsed.username is not None or parsed.password is not None:
+        return None
+    return parsed.hostname, default_port if port is None else port
+
+
 class FoundationClient:
     def __init__(
-        self, client_id: str, client_secret: str, base_url: Optional[str] = None, redirect_subdir: Optional[str] = None
+        self,
+        client_id: str,
+        client_secret: str,
+        base_url: Optional[str] = None,
+        redirect_subdir: Optional[str] = None,
+        allowed_token_hosts: Optional[list[str]] = None,
     ) -> None:
+        """
+        :param allowed_token_hosts: Extra ``host`` or ``host:port`` entries the
+            OAuth token URL may point to, for servers whose token endpoint is
+            not on the host of ``base_url``. Token URLs must always be https.
+        """
         self.baseurl = base_url
+        self.allowed_token_hosts = list(allowed_token_hosts or [])
         self.access_token = ""
         self.refresh_token = ""
         self.access_token_expires_on = time.time()
@@ -77,8 +99,8 @@ class FoundationClient:
     def login(self) -> None:
         resp = requests.get(f"{self.baseurl}foundation/1.0/auth")
         values = resp.json()
+        self.token_endpoint = self._checked_token_endpoint(values.get("oauth2_token_url"))
         auth_endpoint = values["oauth2_auth_url"]
-        self.token_endpoint = values["oauth2_token_url"]
 
         with http.server.HTTPServer(("", 8080), OAuthReceiver) as server:
             state = str(uuid.uuid4())
@@ -103,12 +125,11 @@ class FoundationClient:
                     "redirect_uri": f"http://localhost:{server.server_address[1]}/{self.redirect_subdir}",
                 }
                 headers = self._get_access_token_headers()
-                self.set_tokens_from_response(requests.post(self.token_endpoint, data=data, headers=headers))
+                self.set_tokens_from_response(self._post_token(data=data, headers=headers))
 
     def get_refresh_token(self) -> None:
         self.set_tokens_from_response(
-            requests.post(
-                self.token_endpoint,
+            self._post_token(
                 params={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,
@@ -119,8 +140,7 @@ class FoundationClient:
     def get_new_access_token(self) -> None:
         headers = self._get_access_token_headers()
         self.set_tokens_from_response(
-            requests.post(
-                self.token_endpoint,
+            self._post_token(
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,
@@ -128,6 +148,40 @@ class FoundationClient:
                 headers=headers,
             ).json()
         )
+
+    def _checked_token_endpoint(self, url: Any) -> str:
+        """Return ``url`` if credentials may be sent to it, otherwise raise ``ValueError``.
+
+        The token URL comes from the server's discovery document, so it must be
+        https and on the configured BCF host (or an explicitly allowed host).
+        """
+        if not isinstance(url, str) or not url:
+            raise ValueError("BCF server did not provide an OAuth token URL")
+        # Refuse anything URL parsers may disagree on, so the host checked is the host requested.
+        if any(c <= " " or c >= "\x7f" or c == "\\" for c in url):
+            raise ValueError("OAuth token URL contains invalid characters")
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme != "https":
+            raise ValueError("OAuth token URL must use https")
+        token_origin = _https_origin(parsed.netloc, 443)
+        if token_origin is None:
+            raise ValueError("OAuth token URL must have a host and no user info")
+
+        allowed = []
+        base = urllib.parse.urlsplit(self.baseurl or "")
+        if base.scheme in ("http", "https"):
+            allowed.append(_https_origin(base.netloc, 443 if base.scheme == "https" else 80))
+        allowed.extend(_https_origin(host, 443) for host in self.allowed_token_hosts)
+        if token_origin not in allowed:
+            raise ValueError("OAuth token URL is not on the configured BCF host or in allowed_token_hosts")
+        return url
+
+    def _post_token(self, **kwargs: Any) -> requests.Response:
+        token_endpoint = self._checked_token_endpoint(self.token_endpoint)
+        response = requests.post(token_endpoint, allow_redirects=False, **kwargs)
+        if 300 <= response.status_code < 400:
+            raise ValueError("OAuth token endpoint responded with a redirect, which is not followed")
+        return response
 
     def _get_access_token_headers(self) -> dict[str, str]:
         auth_string = f"{self.client_id}:{self.client_secret}"
