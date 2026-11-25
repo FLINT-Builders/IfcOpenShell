@@ -97,11 +97,13 @@ class Usecase:
 
     def calculate_seconds_per_workday(self) -> float:
         def get_work_schedule(task):
-            for rel in task.HasAssignments or []:
-                if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
-                    return rel.RelatingControl
-            for rel in task.Nests or []:
-                return get_work_schedule(rel.RelatingObject)
+            visited = set()
+            while task is not None and task not in visited:
+                visited.add(task)
+                for rel in task.HasAssignments or []:
+                    if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
+                        return rel.RelatingControl
+                task = next((rel.RelatingObject for rel in task.Nests or []), None)
 
         default_seconds_per_workday = 8 * 60 * 60
         work_schedule = get_work_schedule(self.task)
