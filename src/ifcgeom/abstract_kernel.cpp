@@ -15,7 +15,63 @@ const char* ifcopenshell::not_supported_error::what() const noexcept {
 	return "Not supported.";
 }
 
+bool ifcopenshell::geom::kernels::abstract_kernel::count_conversion_items(std::size_t n) {
+	if (conversion_limit_exceeded_) {
+		return false;
+	}
+	const int limit = settings_.get<settings::MaxConversionItems>().get();
+	if (limit > 0) {
+		conversion_items_ += n;
+		if (conversion_items_ > static_cast<std::size_t>(limit)) {
+			conversion_limit_exceeded_ = true;
+			return false;
+		}
+	}
+	return true;
+}
+
 bool ifcopenshell::geom::kernels::abstract_kernel::convert(const taxonomy::ptr item, std::vector<ifcopenshell::geom::conversion_result>& results) {
+	const bool is_root = conversion_depth_ == 0;
+	const auto num_results_before = results.size();
+	if (is_root) {
+		conversion_items_ = 0;
+		conversion_limit_exceeded_ = false;
+	}
+	const auto items_before = conversion_items_;
+
+	auto refuse = [&]() {
+		// With cache-shapes a later conversion of the same item can be cheaper, so the bound would not hold.
+		const auto consumed = conversion_items_ - items_before;
+		if (!settings_.get<settings::CacheShapes>().get() && consumed > 0) {
+			auto& lower_bound = conversion_cost_lower_bounds_[item];
+			lower_bound = std::max(lower_bound, consumed);
+		}
+		if (is_root) {
+			if (results.size() > num_results_before) {
+				results.erase(results.begin() + num_results_before, results.end());
+			}
+			logger_.error("GEO", 404, "Conversion exceeds " + std::to_string(settings_.get<settings::MaxConversionItems>().get()) +
+				" items (see the max-conversion-items setting), representation not converted:", item->instance);
+		}
+		return false;
+	};
+
+	if (!count_conversion_items(1)) {
+		return refuse();
+	}
+	const int limit = settings_.get<settings::MaxConversionItems>().get();
+	auto known_cost = conversion_cost_lower_bounds_.find(item);
+	if (known_cost != conversion_cost_lower_bounds_.end() && limit > 0 && items_before + known_cost->second > static_cast<std::size_t>(limit)) {
+		conversion_limit_exceeded_ = true;
+		return refuse();
+	}
+
+	struct depth_guard {
+		std::size_t& depth;
+		explicit depth_guard(std::size_t& d) : depth(d) { ++depth; }
+		~depth_guard() { --depth; }
+	} guard(conversion_depth_);
+
 	if (settings_.get<settings::CacheShapes>().get()) {
 		auto it = cache_.find(item);
 		if (it != cache_.end()) {
@@ -55,6 +111,10 @@ bool ifcopenshell::geom::kernels::abstract_kernel::convert(const taxonomy::ptr i
 		res = with_exception_handling(process_with_upgrade);
 	}
 
+	if (conversion_limit_exceeded_) {
+		return refuse();
+	}
+
 	if (settings_.get<settings::CacheShapes>().get() && res) {
 		cache_.insert({ item, results });
 	}
@@ -70,9 +130,12 @@ const ifcopenshell::geom::settings& ifcopenshell::geom::kernels::abstract_kernel
 bool ifcopenshell::geom::kernels::abstract_kernel::convert_impl(const taxonomy::collection::ptr collection, std::vector<ifcopenshell::geom::conversion_result>& r) {
 	auto s = r.size();
 	for (auto& c : collection->children) {
-		if (!convert(c, r) && !partial_success_is_success) {
+		if (!convert(c, r) && (conversion_limit_exceeded_ || !partial_success_is_success)) {
 			return false;
 		}
+	}
+	if (!count_conversion_items(r.size() > s ? r.size() - s : 0)) {
+		return false;
 	}
 	for (auto i = s; i < r.size(); ++i) {
 		if (collection->matrix) {

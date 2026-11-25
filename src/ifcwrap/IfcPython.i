@@ -198,6 +198,7 @@
 %ignore CgalEmitOriginalEdges;
 %ignore OcctNoCleanTriangulation;
 %ignore CacheShapes;
+%ignore MaxConversionItems;
 %ignore MakeVolume;
 %ignore DeferProcessingFirstElement;
 %ignore MaxOffset;

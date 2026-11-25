@@ -63,6 +63,15 @@ namespace ifcopenshell {
 	class IFC_GEOM_API abstract_kernel {
 	private:
 		std::unordered_map<taxonomy::item::ptr, std::vector<ifcopenshell::geom::conversion_result>, ifcopenshell::geom::taxonomy::hash_functor, ifcopenshell::geom::taxonomy::equal_functor> cache_;
+
+		// Work done by the outermost convert() call in progress, bounded by settings::MaxConversionItems.
+		std::size_t conversion_depth_ = 0;
+		std::size_t conversion_items_ = 0;
+		bool conversion_limit_exceeded_ = false;
+		// Work items consumed before the limit cut them off, so shared items are not expanded again.
+		std::unordered_map<taxonomy::ptr, std::size_t> conversion_cost_lower_bounds_;
+
+		bool count_conversion_items(std::size_t n);
 	protected:
 		std::string geometry_library_;
 		ifcopenshell::geom::settings settings_;

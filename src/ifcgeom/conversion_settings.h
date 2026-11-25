@@ -471,6 +471,12 @@ namespace ifcopenshell {
 				static constexpr bool defaultvalue = false;
 			};
 
+			struct MaxConversionItems : public SettingBase<MaxConversionItems, int> {
+				static constexpr const char* const name = "max-conversion-items";
+				static constexpr const char* const description = "Maximum number of items visited plus results placed while converting a single representation, where items shared through nested mapped items count once for every path that reaches them. Representations exceeding it are not converted. 0 means unlimited.";
+				static constexpr int defaultvalue = 1000000;
+			};
+
 			struct MakeVolume : public SettingBase<MakeVolume, bool> {
                 static constexpr const char* const name = "make-volume";
                 static constexpr const char* const description = "Try to isolate and fix a valid volume from non-manifold elements prior to opening subtraction";
@@ -961,6 +967,7 @@ using geometry_setting_types = std::tuple<
 			settings_detail::CgalEmitOriginalEdges,
 			settings_detail::OcctNoCleanTriangulation,
 			settings_detail::CacheShapes,
+			settings_detail::MaxConversionItems,
 			settings_detail::DeferProcessingFirstElement,
 			settings_detail::MaxOffset,
 			settings_detail::MaxOffsetDeviation,
@@ -1065,6 +1072,7 @@ using geometry_setting_types = std::tuple<
 			using CgalEmitOriginalEdges = settings_detail::CgalEmitOriginalEdges;
 			using OcctNoCleanTriangulation = settings_detail::OcctNoCleanTriangulation;
 			using CacheShapes = settings_detail::CacheShapes;
+			using MaxConversionItems = settings_detail::MaxConversionItems;
 			using DeferProcessingFirstElement = settings_detail::DeferProcessingFirstElement;
 			using MaxOffset = settings_detail::MaxOffset;
 			using MaxOffsetDeviation = settings_detail::MaxOffsetDeviation;
