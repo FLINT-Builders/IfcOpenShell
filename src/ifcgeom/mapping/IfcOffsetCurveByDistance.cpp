@@ -68,7 +68,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
 #if defined SCHEMA_HAS_IfcDistanceExpression
    double first_distance = first_offset_value.DistanceAlong();
 #else
-   double first_distance = first_offset_value.DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
+   double first_distance = curve_measure_value_(first_offset_value.DistanceAlong());
 #endif
    first_distance *= length_unit_;
 
@@ -102,8 +102,8 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
         double dp = (*prev).DistanceAlong();
         double dn = (*next).DistanceAlong();
 #else
-        double dp = prev->DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
-        double dn = next->DistanceAlong().as<IfcSchema::IfcLengthMeasure>();
+        double dp = curve_measure_value_(prev->DistanceAlong());
+        double dn = curve_measure_value_(next->DistanceAlong());
 #endif
         dp *= length_unit_;
         dn *= length_unit_;
@@ -160,7 +160,7 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcOffsetCurveByDistances& inst
     #if defined SCHEMA_HAS_IfcDistanceExpression
     double last_distance = prev->DistanceAlong() * length_unit_;
     #else
-    double last_distance = (double) prev->DistanceAlong().as<IfcSchema::IfcLengthMeasure>() * length_unit_;
+    double last_distance = curve_measure_value_(prev->DistanceAlong()) * length_unit_;
     #endif
 
     if (last_distance < basis_curve_length) {

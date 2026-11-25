@@ -779,6 +779,17 @@ taxonomy::ptr mapping::map(const express::base& inst) {
     return item;
 }
 
+double mapping::curve_measure_value_(const express::base& measure) const {
+    if (auto length = measure.as<IfcSchema::IfcLengthMeasure>()) {
+        return length;
+    }
+    // Curves mapped to taxonomy::function_item are parameterized by length
+    if (auto parameter = measure.as<IfcSchema::IfcParameterValue>()) {
+        return parameter;
+    }
+    throw std::runtime_error("Expected IfcLengthMeasure or IfcParameterValue as curve measure");
+}
+
 namespace {
     express::base get_RelatingObject(IfcSchema::IfcRelDecomposes& decompose) {
 #ifdef SCHEMA_IfcRelDecomposes_HAS_RelatingObject

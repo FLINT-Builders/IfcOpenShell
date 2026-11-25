@@ -66,10 +66,12 @@ double translate_to_length_measure(const IfcSchema::IfcCurve& crv, double param_
 
 double translate_if_param_value(const IfcSchema::IfcCurve& crv, const IfcSchema::IfcCurveMeasureSelect& val) {
     if (auto param = val.as<IfcSchema::IfcParameterValue>()) {
-        // We don't care whether length- or positive length measure.
         return translate_to_length_measure(crv, param);
+    } else if (auto length = val.as<IfcSchema::IfcLengthMeasure>()) {
+        // We don't care whether length- or positive length measure.
+        return length;
     } else {
-        return val.concrete().get_attribute_value(0);
+        throw std::runtime_error("Unsupported curve measure type");
     }
 }
 
