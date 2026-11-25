@@ -12,6 +12,18 @@ function fail(id, error) {
     self.postMessage({ id, ok: false, error: String(error?.message || error) });
 }
 
+async function fetchVerified(url, expectedSha256) {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Failed to fetch ${url}: ${resp.status}`);
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const actual = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+    if (actual !== expectedSha256) {
+        throw new Error(`Checksum mismatch for ${url}: expected ${expectedSha256}, got ${actual}`);
+    }
+    return bytes;
+}
+
 async function ensurePyodide() {
     if (initPromise) return initPromise;
 
@@ -29,9 +41,17 @@ async function ensurePyodide() {
         const micropip = pyodide.pyimport("micropip");
         micropip.install("python-dateutil")
 
-        const wheelUrl = "https://ifcopenshell.github.io/wasm-wheels/ifcopenshell-0.8.5-cp313-cp313-pyodide_2025_0_wasm32.whl";
+        const wheelName = "ifcopenshell-0.8.5-cp313-cp313-pyodide_2025_0_wasm32.whl";
+        const wheelUrl = `https://ifcopenshell.github.io/wasm-wheels/${wheelName}`;
+        // sha256 of the wheel at IfcOpenShell/wasm-wheels tag v0.8.5
+        const wheelSha256 = "fbebb7a7144277be213d156ed9b77de30de1d92b0b2b0c815e4a07555bfb929c";
 
-        await micropip.install(wheelUrl);
+        // micropip does not verify hashes for direct URLs, so the bytes are
+        // checked here and micropip installs exactly those bytes from MEMFS.
+        const wheelBytes = await fetchVerified(wheelUrl, wheelSha256);
+        pyodide.FS.mkdirTree("/wheels");
+        pyodide.FS.writeFile(`/wheels/${wheelName}`, wheelBytes);
+        await micropip.install(`emfs:/wheels/${wheelName}`);
 
         await micropip.install([
             "./dist/ifcquery-0.8.5-py3-none-any.whl",
