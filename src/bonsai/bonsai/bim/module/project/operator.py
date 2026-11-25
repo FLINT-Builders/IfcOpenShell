@@ -1311,10 +1311,12 @@ class LoadProjectElements(bpy.types.Operator):
             if not filter_category.is_selected:
                 continue
             container = self.file.by_id(filter_category.ifc_definition_id)
-            while container:
+            while container and container not in containers:
                 containers.add(container)
                 container = ifcopenshell.util.element.get_aggregate(container)
-                if self.file.schema == "IFC2X3" and container.is_a("IfcProject"):
+                if not container:
+                    break
+                elif self.file.schema == "IFC2X3" and container.is_a("IfcProject"):
                     container = None
                 elif self.file.schema != "IFC2X3" and container.is_a("IfcContext"):
                     container = None
@@ -1326,19 +1328,20 @@ class LoadProjectElements(bpy.types.Operator):
         return elements
 
     def append_decomposed_elements(self, elements: set[ifcopenshell.entity_instance]) -> None:
-        decomposed_elements: set[ifcopenshell.entity_instance] = set()
-        for element in elements:
+        queue = list(elements)
+        while queue:
+            element = queue.pop()
+            decomposed_elements: set[ifcopenshell.entity_instance] = set()
             if element.IsDecomposedBy:
-                for subelement in element.IsDecomposedBy[0].RelatedObjects:
-                    decomposed_elements.add(subelement)
+                decomposed_elements.update(element.IsDecomposedBy[0].RelatedObjects)
             # IfcSurfaceFeature (e.g. road markings) adhere to a host element
             # via IfcRelAdheresToElement, a [1:1] hierarchical relationship in
             # the same family as aggregation, containment and nesting (IFC4.3).
             for rel in getattr(element, "HasSurfaceFeatures", ()):
                 decomposed_elements.update(rel.RelatedSurfaceFeatures)
-        if decomposed_elements:
-            self.append_decomposed_elements(decomposed_elements)
-        elements.update(decomposed_elements)
+            decomposed_elements -= elements
+            elements.update(decomposed_elements)
+            queue.extend(decomposed_elements)
 
     def get_ifc_class_elements(self) -> set[ifcopenshell.entity_instance]:
         elements: set[ifcopenshell.entity_instance] = set()

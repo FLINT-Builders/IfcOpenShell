@@ -121,9 +121,7 @@ class Collector(bonsai.core.tool.Collector):
                 cls.link_collection_child_safe(tool.Blender.get_object_bim_props(project_obj).collection, collection)
         elif element.is_a("IfcAnnotation") and (drawing_obj := cls.get_annotation_drawing_obj(element)):
             cls.link_collection_object_safe(tool.Blender.get_object_bim_props(drawing_obj).collection, obj)
-        elif container := ifcopenshell.util.element.get_container(element):
-            while container.is_a("IfcSpace"):
-                container = ifcopenshell.util.element.get_aggregate(container)
+        elif container := cls.get_non_space_container(element):
             container_obj = tool.Ifc.get_object(container)
             if not (collection := tool.Blender.get_object_bim_props(container_obj).collection):
                 cls.assign(container_obj)
@@ -136,6 +134,17 @@ class Collector(bonsai.core.tool.Collector):
         if element.is_a("IfcFeatureElementSubtraction"):
             obj.display_type = "WIRE"
             obj.display.show_shadows = False
+
+    @classmethod
+    def get_non_space_container(cls, element: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance | None:
+        container = ifcopenshell.util.element.get_container(element)
+        visited = set()
+        while container and container.is_a("IfcSpace"):
+            if container in visited:
+                return None
+            visited.add(container)
+            container = ifcopenshell.util.element.get_aggregate(container)
+        return container
 
     @classmethod
     def _create_project_child_collection(cls, name: str) -> bpy.types.Collection:

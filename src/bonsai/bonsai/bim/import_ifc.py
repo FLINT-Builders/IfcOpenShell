@@ -386,10 +386,10 @@ class IfcImporter:
         leaf_spatial_elements = set([ifcopenshell.util.element.get_container(e) for e in elements])
         results = set()
         for spatial_element in leaf_spatial_elements:
-            while True:
+            while spatial_element and spatial_element not in results:
                 results.add(spatial_element)
                 spatial_element = ifcopenshell.util.element.get_aggregate(spatial_element)
-                if not spatial_element or spatial_element.is_a() in ("IfcProject", "IfcProjectLibrary"):
+                if spatial_element and spatial_element.is_a() in ("IfcProject", "IfcProjectLibrary"):
                     break
         return results
 
