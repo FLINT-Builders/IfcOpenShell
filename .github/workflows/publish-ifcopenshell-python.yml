@@ -55,7 +55,7 @@ jobs:
           cd src/ifcopenshell_${{ matrix.config.short_name }}_${{ matrix.pyver }} &&
           make zip PLATFORM=${{ matrix.config.short_name }} PYVERSION=${{ matrix.pyver }}
       - name: Upload zip file to release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@29e53e917877a24fad85510ded594ab3c9ca12de # 2.11.5
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: src/ifcopenshell_${{ matrix.config.short_name }}_${{ matrix.pyver }}/dist/ifcopenshell-python-${{ steps.version.outputs.version }}-${{ matrix.pyver }}-${{ matrix.config.short_name }}.zip
