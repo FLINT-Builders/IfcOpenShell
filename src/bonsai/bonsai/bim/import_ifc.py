@@ -383,7 +383,7 @@ class IfcImporter:
     def get_spatial_elements_filtered_by_elements(
         self, elements: set[ifcopenshell.entity_instance]
     ) -> set[ifcopenshell.entity_instance]:
-        leaf_spatial_elements = set([ifcopenshell.util.element.get_container(e) for e in elements])
+        leaf_spatial_elements = {c for e in elements if (c := ifcopenshell.util.element.get_container(e))}
         results = set()
         for spatial_element in leaf_spatial_elements:
             while True:
