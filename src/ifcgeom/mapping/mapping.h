@@ -86,6 +86,7 @@ namespace geom {
 			}
 		}
 		IfcSchema::IfcStyledItem find_style(const IfcSchema::IfcRepresentationItem&);
+		double curve_measure_value_(const express::base& measure) const;
 	public:
 		POSTFIX_SCHEMA(mapping)(ifcopenshell::file* file, ifcopenshell::geom::settings& settings, ifcopenshell::logger& logger = ifcopenshell::logger::root()) : abstract_mapping(settings, logger), file_(file), placement_rel_to_type_(nullptr) {
 			initialize_units_();

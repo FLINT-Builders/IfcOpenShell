@@ -27,7 +27,7 @@ using namespace ifcopenshell::geom;
 #if defined SCHEMA_HAS_IfcPointByDistanceExpression
 
 taxonomy::ptr mapping::map_impl(const IfcSchema::IfcPointByDistanceExpression& inst) {
-   auto u = (double) inst.DistanceAlong().as<IfcSchema::IfcLengthMeasure>() * length_unit_;
+   auto u = curve_measure_value_(inst.DistanceAlong()) * length_unit_;
    auto basis_curve = map(inst.BasisCurve());
    taxonomy::function_item::ptr curve = taxonomy::dcast<taxonomy::function_item>(basis_curve);
    if (!curve) {
