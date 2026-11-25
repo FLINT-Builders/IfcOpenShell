@@ -113,6 +113,7 @@ namespace ifcopenshell::geom {
 			std::vector<double> normals_;
 			std::vector<double> uvs_;
 			std::vector<int> material_ids_;
+			std::vector<int> edges_material_ids_;
 			std::vector<ifcopenshell::geom::taxonomy::style::ptr> materials_;
 			std::vector<int> item_ids_;
 			std::vector<int> edges_item_ids_;
@@ -133,7 +134,9 @@ namespace ifcopenshell::geom {
 			const std::vector<double>& normals() const { return normals_; }
 			const std::vector<double>& uvs() const { return uvs_; }
 			std::vector<double>& uvs_ref() { return uvs_; }
-			const std::vector<int>& material_ids() const { return material_ids_; }
+			// One entry per face; only for meshes without faces, one entry per loose edge.
+			const std::vector<int>& material_ids() const { return material_ids_.empty() ? edges_material_ids_ : material_ids_; }
+			const std::vector<int>& edges_material_ids() const { return edges_material_ids_; }
 			const std::vector<ifcopenshell::geom::taxonomy::style::ptr>& materials() const { return materials_; }
 			const std::vector<int>& item_ids() const { return item_ids_; }
 			const std::vector<int>& edges_item_ids() const { return edges_item_ids_; }
@@ -210,7 +213,7 @@ namespace ifcopenshell::geom {
 				edges_.push_back(i0);
 				edges_.push_back(i1);
 
-				material_ids_.push_back(style);
+				edges_material_ids_.push_back(style);
 				edges_item_ids_.push_back(item_id);
 			}
 
