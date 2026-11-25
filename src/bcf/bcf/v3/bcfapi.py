@@ -27,8 +27,16 @@ import webbrowser
 from typing import Any, Optional
 
 import requests
+from urllib3.util import parse_url
 
 client_id, client_secret = "", ""
+
+
+def _get_origin(url: str) -> tuple[str, str, Optional[int]]:
+    parsed = parse_url(url)
+    scheme = (parsed.scheme or "").lower()
+    port = parsed.port or {"http": 80, "https": 443}.get(scheme)
+    return scheme, (parsed.host or "").lower(), port
 
 
 class OAuthReceiver(http.server.BaseHTTPRequestHandler):
@@ -78,7 +86,9 @@ class FoundationClient:
         resp = requests.get(f"{self.baseurl}foundation/1.0/auth")
         values = resp.json()
         auth_endpoint = values["oauth2_auth_url"]
-        self.token_endpoint = values["oauth2_token_url"]
+        token_endpoint = values["oauth2_token_url"]
+        self._validate_token_endpoint(token_endpoint)
+        self.token_endpoint = token_endpoint
 
         with http.server.HTTPServer(("", 8080), OAuthReceiver) as server:
             state = str(uuid.uuid4())
@@ -102,32 +112,26 @@ class FoundationClient:
                     "code": server.auth_code,
                     "redirect_uri": f"http://localhost:{server.server_address[1]}/{self.redirect_subdir}",
                 }
-                headers = self._get_access_token_headers()
-                self.set_tokens_from_response(requests.post(self.token_endpoint, data=data, headers=headers))
+                self.set_tokens_from_response(self._post_token_request(data))
 
     def get_refresh_token(self) -> None:
         self.set_tokens_from_response(
-            requests.post(
-                self.token_endpoint,
-                params={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token,
-                },
-            ).json()
+            self._post_token_request({"grant_type": "refresh_token", "refresh_token": self.refresh_token})
         )
 
     def get_new_access_token(self) -> None:
-        headers = self._get_access_token_headers()
-        self.set_tokens_from_response(
-            requests.post(
-                self.token_endpoint,
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token,
-                },
-                headers=headers,
-            ).json()
+        self.get_refresh_token()
+
+    def _post_token_request(self, data: dict[str, str]) -> requests.Response:
+        # Credentials go in the form body only, and redirects are not followed so they cannot be re-sent elsewhere.
+        self._validate_token_endpoint(self.token_endpoint)
+        return requests.post(
+            self.token_endpoint, data=data, headers=self._get_access_token_headers(), allow_redirects=False
         )
+
+    def _validate_token_endpoint(self, token_endpoint: str) -> None:
+        if not self.baseurl or _get_origin(token_endpoint) != _get_origin(self.baseurl):
+            raise ValueError("The OAuth2 token URL must be on the same scheme, host and port as the BCF server.")
 
     def _get_access_token_headers(self) -> dict[str, str]:
         auth_string = f"{self.client_id}:{self.client_secret}"
