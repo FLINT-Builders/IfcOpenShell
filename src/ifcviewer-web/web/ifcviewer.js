@@ -332,6 +332,9 @@
             if (res.status === 200 && buf.byteLength > stop - start) {
               buf = buf.slice(start, stop);
             }
+            if (buf.byteLength !== stop - start) {
+              throw new Error('range fetch returned ' + buf.byteLength + ' bytes, wanted ' + (stop - start));
+            }
             storeBytes(start, stop, buf);
             return buf;
           },

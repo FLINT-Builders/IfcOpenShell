@@ -3975,10 +3975,12 @@ EM_JS(double, ifcvSourceSize, (int sid), {
 // bytes), then call back _ifcv_on_range_done(reqId, ok). Async. File:
 // Blob.slice. URL: an HTTP Range request — if a server ignores Range and
 // returns the whole body (200), slice out the requested window so it still
-// works (just without the bandwidth saving).
+// works (just without the bandwidth saving). Any body that is not exactly
+// `size` bytes fails the read: dst holds no more than that.
 EM_JS(void, ifcvReadRangeInto, (int sid, int reqId, double offset, double size, void* dst), {
     var deliver = function(ok, buf) {
-        if (ok && buf) {
+        if (ok && (!buf || buf.byteLength !== size)) ok = 0;
+        if (ok) {
             HEAPU8.set(new Uint8Array(buf), dst);
             Module["__ifcvBytesLoaded"] = (Module["__ifcvBytesLoaded"] || 0) + buf.byteLength;
         }
