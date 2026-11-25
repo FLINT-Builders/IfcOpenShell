@@ -65,10 +65,30 @@ def calculate_applied_value(
     cost_value: ifcopenshell.entity_instance,
     category_filter: Optional[str] = None,
 ) -> float:
-    if cost_value.ArithmeticOperator and cost_value.Components:
+    return _calculate_applied_value(root_element, cost_value, category_filter, set())
+
+
+def _get_acyclic_components(
+    cost_value: ifcopenshell.entity_instance, expanding: set[int]
+) -> list[ifcopenshell.entity_instance]:
+    # A component that is the cost value itself or one of the cost values it
+    # is nested in would be walked forever.
+    return [c for c in cost_value.Components or [] if c.id() != cost_value.id() and c.id() not in expanding]
+
+
+def _calculate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    expanding: set[int],
+) -> float:
+    components = _get_acyclic_components(cost_value, expanding)
+    if cost_value.ArithmeticOperator and components:
         component_values = []
-        for component in cost_value.Components:
-            component_values.append(calculate_applied_value(root_element, component, category_filter))
+        expanding.add(cost_value.id())
+        for component in components:
+            component_values.append(_calculate_applied_value(root_element, component, category_filter, expanding))
+        expanding.discard(cost_value.id())
         if cost_value.ArithmeticOperator == "ADD":
             return sum(component_values)
         result = component_values.pop(0)
@@ -129,7 +149,7 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
 
 
 def serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
-    result = _serialise_cost_value(cost_value)
+    result = _serialise_cost_value(cost_value, set())
     if result and result[0] == "(" and result[-1] == ")":
         return result[1:-1]
     return result
@@ -142,13 +162,16 @@ def get_assigned_rate_cost_item(cost_item: ifcopenshell.entity_instance) -> ifco
             return assignment.RelatingControl
 
 
-def _serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
+def _serialise_cost_value(cost_value: ifcopenshell.entity_instance, expanding: set[int]) -> str:
     value = ""
-    if cost_value.ArithmeticOperator and cost_value.Components:
+    components = _get_acyclic_components(cost_value, expanding)
+    if cost_value.ArithmeticOperator and components:
         operator = arithmetic_operator_symbols[cost_value.ArithmeticOperator]
         serialised_components = []
-        for component in cost_value.Components:
-            serialised_components.append(_serialise_cost_value(component))
+        expanding.add(cost_value.id())
+        for component in components:
+            serialised_components.append(_serialise_cost_value(component, expanding))
+        expanding.discard(cost_value.id())
         value = operator.join(serialised_components)
     elif cost_value.AppliedValue is not None:
         value = serialise_applied_value(cost_value.AppliedValue)
@@ -164,7 +187,7 @@ def _serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
 
     if category:
         return f"{category}({value})"
-    elif cost_value.Components:
+    elif components:
         return f"({value})"
     return value
 

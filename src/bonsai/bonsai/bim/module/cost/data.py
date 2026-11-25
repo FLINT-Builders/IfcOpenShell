@@ -16,7 +16,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import ifcopenshell
 import ifcopenshell.util.cost
@@ -274,7 +274,10 @@ class CostSchedulesData:
         root_element: ifcopenshell.entity_instance,
         root_element_data: CostItem,
         cost_value: ifcopenshell.entity_instance,
+        expanding: Optional[set[int]] = None,
     ) -> None:
+        # `expanding` holds the ids of the cost values this one is nested in.
+        expanding = set() if expanding is None else expanding
         value_data = cost_value.get_info()
         del value_data["AppliedValue"]
         if tool.Cost.get_assigned_rate_cost_item(root_element):
@@ -299,8 +302,11 @@ class CostSchedulesData:
         value_data["Formula"] = ifcopenshell.util.cost.serialise_cost_value(cost_value)
 
         cls._cost_values[cost_value.id()] = value_data
+        expanding.add(cost_value.id())
         for component in cost_value.Components or []:
-            cls._load_cost_value(root_element, root_element_data, component)
+            if component.id() not in expanding:
+                cls._load_cost_value(root_element, root_element_data, component, expanding)
+        expanding.discard(cost_value.id())
 
     @classmethod
     def cost_quantities(cls) -> list[CostQuantity]:
