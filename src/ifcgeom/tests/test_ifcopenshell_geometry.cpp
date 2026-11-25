@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -381,4 +383,356 @@ TEST_CASE("IfcGeom context priorities create tasks from highest priority represe
     const auto* wall_with_body_only_task = task_for_product(body_first_tasks, wall_with_body_only);
     REQUIRE(wall_with_body_only_task != nullptr);
     REQUIRE(wall_with_body_only_task->representation.id() == body_only_representation.id());
+}
+
+namespace {
+
+// DistanceAlong is an IfcCurveMeasureSelect. These fixtures are opened through
+// the same mapping entry points IfcConvert uses: the product placement for a
+// point-by-distance, and the body representation for an offset curve or a
+// sectioned solid or surface.
+
+void require_ifc4x3_add2() {
+    if (std::string(STRINGIFY(IfcSchema)) != "Ifc4x3_add2") {
+        SKIP("fixture is authored for IFC4X3_ADD2");
+    }
+}
+
+std::string replace_token(std::string text, const std::string& token, const std::string& value) {
+    for (std::string::size_type pos = 0; (pos = text.find(token, pos)) != std::string::npos;) {
+        text.replace(pos, token.size(), value);
+        pos += value.size();
+    }
+    return text;
+}
+
+struct parsed_model {
+    ifcopenshell::logger log;
+    std::unique_ptr<ifcopenshell::file> file;
+    ifcopenshell::geom::settings settings;
+    std::unique_ptr<ifcopenshell::geom::converter> converter;
+
+    explicit parsed_model(const std::string& spf) {
+        log.output_format(ifcopenshell::logger::FMT_INMEMORY);
+        std::istringstream stream(spf);
+        file = std::make_unique<ifcopenshell::file>(stream, static_cast<int>(spf.size()), log);
+        REQUIRE(file->good());
+        settings.set("function-step-param", 1000.0);
+        converter = std::make_unique<ifcopenshell::geom::converter>(
+            ifcopenshell::geom::kernels::construct(file.get(), "passthrough", settings, log), file.get(), settings, log);
+    }
+
+    ifcopenshell::geom::taxonomy::ptr map(const express::base& inst) {
+        return converter->mapping()->map(inst);
+    }
+};
+
+std::size_t error_count(const ifcopenshell::logger& log) {
+    return static_cast<std::size_t>(std::count_if(
+        log.log_messages().begin(), log.log_messages().end(), [](const ifcopenshell::log_message& message) {
+            return message.severity >= static_cast<int>(ifcopenshell::logger::LOG_ERROR);
+        }));
+}
+
+constexpr const char* LINEAR_PLACEMENT_SPF = R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,$,$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCCARTESIANPOINT((40.,0.,0.));
+#7=IFCPOLYLINE((#2,#6));
+#8=IFCPOINTBYDISTANCEEXPRESSION(@A@,$,$,$,#7);
+#9=IFCAXIS2PLACEMENTLINEAR(#8,$,$);
+#10=IFCLINEARPLACEMENT($,#9,#5);
+#11=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'P',$,$,#10,$,$,$);
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+
+constexpr const char* OFFSET_CURVE_SPF = R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,(#6),$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);
+#7=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#6,$,.MODEL_VIEW.,$);
+#8=IFCCARTESIANPOINT((0.,0.,0.));
+#9=IFCCARTESIANPOINT((40.,0.,0.));
+#10=IFCPOLYLINE((#8,#9));
+#11=IFCPOINTBYDISTANCEEXPRESSION(@A@,$,$,$,#10);
+#12=IFCPOINTBYDISTANCEEXPRESSION(@B@,$,$,$,#10);
+#13=IFCOFFSETCURVEBYDISTANCES(#10,(#11,#12),$);
+#14=IFCSHAPEREPRESENTATION(#7,'Body','Curve',(#13));
+#15=IFCPRODUCTDEFINITIONSHAPE($,$,(#14));
+#16=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'offset',$,$,$,#15,$,$);
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+
+constexpr const char* SECTIONED_SOLID_SPF = R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,(#6),$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);
+#7=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#6,$,.MODEL_VIEW.,$);
+#8=IFCCARTESIANPOINT((0.,0.,0.));
+#9=IFCCARTESIANPOINT((40.,0.,0.));
+#10=IFCPOLYLINE((#8,#9));
+#11=IFCDIRECTION((0.,0.,1.));
+#12=IFCPOINTBYDISTANCEEXPRESSION(@A@,$,$,$,#10);
+#13=IFCAXIS2PLACEMENTLINEAR(#12,#11,$);
+#14=IFCPOINTBYDISTANCEEXPRESSION(@B@,$,$,$,#10);
+#15=IFCAXIS2PLACEMENTLINEAR(#14,#11,$);
+#16=IFCCARTESIANPOINTLIST2D(((-1.,0.),(1.,0.),(1.,1.),(-1.,1.),(-1.,0.)),$);
+#17=IFCINDEXEDPOLYCURVE(#16,$,.F.);
+#18=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#17);
+#19=IFCSECTIONEDSOLIDHORIZONTAL(#10,(#18,#18),(#13,#15));
+#20=IFCSHAPEREPRESENTATION(#7,'Body','AdvancedSweptSolid',(#19));
+#21=IFCPRODUCTDEFINITIONSHAPE($,$,(#20));
+#22=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'solid',$,$,$,#21,$,$);
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+
+constexpr const char* SECTIONED_SURFACE_SPF = R"IFC(ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION((''),'2;1');
+FILE_NAME('','',(''),(''),'','','');
+FILE_SCHEMA(('IFC4X3_ADD2'));
+ENDSEC;
+DATA;
+#1=IFCPROJECT('0RYK8PV8D0ee9DDm77xcTZ',$,'T',$,$,$,$,(#6),$);
+#2=IFCCARTESIANPOINT((0.,0.,0.));
+#3=IFCDIRECTION((0.,0.,1.));
+#4=IFCDIRECTION((1.,0.,0.));
+#5=IFCAXIS2PLACEMENT3D(#2,#3,#4);
+#6=IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#5,$);
+#7=IFCGEOMETRICREPRESENTATIONSUBCONTEXT('Body','Model',*,*,*,*,#6,$,.MODEL_VIEW.,$);
+#8=IFCCARTESIANPOINT((0.,0.,0.));
+#9=IFCCARTESIANPOINT((40.,0.,0.));
+#10=IFCPOLYLINE((#8,#9));
+#11=IFCDIRECTION((0.,0.,1.));
+#12=IFCPOINTBYDISTANCEEXPRESSION(@A@,$,$,$,#10);
+#13=IFCAXIS2PLACEMENTLINEAR(#12,#11,$);
+#14=IFCPOINTBYDISTANCEEXPRESSION(@B@,$,$,$,#10);
+#15=IFCAXIS2PLACEMENTLINEAR(#14,#11,$);
+#16=IFCCARTESIANPOINTLIST2D(((-1.,0.),(1.,0.),(1.,1.),(-1.,1.),(-1.,0.)),$);
+#17=IFCINDEXEDPOLYCURVE(#16,$,.F.);
+#18=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#17);
+#19=IFCSECTIONEDSURFACE(#10,(#13,#15),(#18,#18));
+#20=IFCSHAPEREPRESENTATION(#7,'Body','Surface',(#19));
+#21=IFCPRODUCTDEFINITIONSHAPE($,$,(#20));
+#22=IFCBUILDINGELEMENTPROXY('3cWcr4$892GAeKwryhDILR',$,'surface',$,$,$,#21,$,$);
+ENDSEC;
+END-ISO-10303-21;
+)IFC";
+
+Eigen::Vector3d placement_origin(parsed_model& model) {
+    auto points = model.file->instances_by_type<IfcSchema::IfcPointByDistanceExpression>();
+    REQUIRE(points.size() == 1);
+    auto point = model.map(points.front());
+    REQUIRE(point);
+    auto point_matrix = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::matrix4>(point);
+    REQUIRE(point_matrix);
+
+    auto products = model.file->instances_by_type<IfcSchema::IfcBuildingElementProxy>();
+    REQUIRE(products.size() == 1);
+    auto product = model.map(products.front());
+    REQUIRE(product);
+    auto placed = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::collection>(product);
+    REQUIRE(placed);
+    REQUIRE(placed->matrix);
+    CHECK(placed->matrix->translation_part().isApprox(point_matrix->translation_part(), 1e-6));
+    return point_matrix->translation_part();
+}
+
+std::vector<double> offset_span_lengths(parsed_model& model) {
+    auto reps = model.file->instances_by_type<IfcSchema::IfcShapeRepresentation>();
+    REQUIRE(reps.size() == 1);
+    auto mapped = model.map(reps.front());
+    REQUIRE(mapped);
+    auto collection = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::collection>(mapped);
+    REQUIRE(collection);
+    REQUIRE(collection->children.size() == 1);
+    auto curve = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::offset_function>(collection->children.front());
+    REQUIRE(curve);
+    std::vector<double> lengths;
+    for (const auto& span : curve->get_offset()->spans()) {
+        lengths.push_back(span->end() - span->start());
+    }
+    return lengths;
+}
+
+std::pair<double, double> loft_end_stations(parsed_model& model) {
+    auto reps = model.file->instances_by_type<IfcSchema::IfcShapeRepresentation>();
+    REQUIRE(reps.size() == 1);
+    auto mapped = model.map(reps.front());
+    REQUIRE(mapped);
+    auto collection = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::collection>(mapped);
+    REQUIRE(collection);
+    REQUIRE(collection->children.size() == 1);
+    auto loft = ifcopenshell::geom::taxonomy::dcast<ifcopenshell::geom::taxonomy::loft>(collection->children.front());
+    REQUIRE(loft);
+    REQUIRE(loft->children.size() >= 2);
+    REQUIRE(loft->children.front()->matrix);
+    REQUIRE(loft->children.back()->matrix);
+    return {loft->children.front()->matrix->translation_part().x(), loft->children.back()->matrix->translation_part().x()};
+}
+
+void expect_curve_measure_skipped(const std::string& spf, bool placement) {
+    parsed_model model(spf);
+    const auto errors_before = error_count(model.log);
+    ifcopenshell::geom::taxonomy::ptr mapped;
+    if (placement) {
+        auto products = model.file->instances_by_type<IfcSchema::IfcBuildingElementProxy>();
+        REQUIRE(products.size() == 1);
+        mapped = model.map(products.front());
+    } else {
+        auto reps = model.file->instances_by_type<IfcSchema::IfcShapeRepresentation>();
+        REQUIRE(reps.size() == 1);
+        mapped = model.map(reps.front());
+    }
+    CHECK(mapped == nullptr);
+    CHECK(error_count(model.log) > errors_before);
+}
+
+} // namespace
+
+TEST_CASE("IfcLengthMeasure distance places a linear product", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    parsed_model model(replace_token(LINEAR_PLACEMENT_SPF, "@A@", "IFCLENGTHMEASURE(10.)"));
+    const auto origin = placement_origin(model);
+    CHECK(origin.x() == Catch::Approx(10.0).margin(1e-6));
+    CHECK(origin.y() == Catch::Approx(0.0).margin(1e-6));
+    CHECK(origin.z() == Catch::Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("IfcNonNegativeLengthMeasure distance places a linear product", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    parsed_model model(replace_token(LINEAR_PLACEMENT_SPF, "@A@", "IFCNONNEGATIVELENGTHMEASURE(10.)"));
+    const auto origin = placement_origin(model);
+    CHECK(origin.x() == Catch::Approx(10.0).margin(1e-6));
+    CHECK(origin.y() == Catch::Approx(0.0).margin(1e-6));
+    CHECK(origin.z() == Catch::Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("IfcParameterValue distance places a linear product", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    parsed_model model(replace_token(LINEAR_PLACEMENT_SPF, "@A@", "IFCPARAMETERVALUE(10.)"));
+    const auto origin = placement_origin(model);
+    CHECK(origin.x() == Catch::Approx(10.0).margin(1e-6));
+    CHECK(origin.y() == Catch::Approx(0.0).margin(1e-6));
+    CHECK(origin.z() == Catch::Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("DistanceAlong outside the curve measure select is skipped", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    expect_curve_measure_skipped(replace_token(LINEAR_PLACEMENT_SPF, "@A@", "IFCAREAMEASURE(10.)"), true);
+}
+
+TEST_CASE("Offset curve reads parameter distances", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(OFFSET_CURVE_SPF, "@A@", "IFCPARAMETERVALUE(10.)"), "@B@", "IFCPARAMETERVALUE(30.)");
+    parsed_model model(spf);
+    const auto lengths = offset_span_lengths(model);
+    REQUIRE(lengths.size() == 3);
+    CHECK(lengths[0] == Catch::Approx(10.0).margin(1e-6));
+    CHECK(lengths[1] == Catch::Approx(20.0).margin(1e-6));
+    CHECK(lengths[2] == Catch::Approx(10.0).margin(1e-6));
+}
+
+TEST_CASE("Offset curve reads a parameter after a length", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(OFFSET_CURVE_SPF, "@A@", "IFCLENGTHMEASURE(10.)"), "@B@", "IFCPARAMETERVALUE(30.)");
+    parsed_model model(spf);
+    const auto lengths = offset_span_lengths(model);
+    REQUIRE(lengths.size() == 3);
+    CHECK(lengths[0] == Catch::Approx(10.0).margin(1e-6));
+    CHECK(lengths[1] == Catch::Approx(20.0).margin(1e-6));
+    CHECK(lengths[2] == Catch::Approx(10.0).margin(1e-6));
+}
+
+TEST_CASE("Offset curve skips a non curve measure", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(OFFSET_CURVE_SPF, "@A@", "IFCAREAMEASURE(10.)"), "@B@", "IFCLENGTHMEASURE(30.)");
+    expect_curve_measure_skipped(spf, false);
+}
+
+TEST_CASE("Sectioned solid reads parameter stations", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(SECTIONED_SOLID_SPF, "@A@", "IFCPARAMETERVALUE(10.)"), "@B@", "IFCPARAMETERVALUE(30.)");
+    parsed_model model(spf);
+    const auto stations = loft_end_stations(model);
+    CHECK(stations.first == Catch::Approx(10.0).margin(1e-4));
+    CHECK(stations.second == Catch::Approx(30.0).margin(1e-4));
+}
+
+TEST_CASE("Sectioned solid reads a parameter after a length", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(SECTIONED_SOLID_SPF, "@A@", "IFCNONNEGATIVELENGTHMEASURE(10.)"), "@B@", "IFCPARAMETERVALUE(30.)");
+    parsed_model model(spf);
+    const auto stations = loft_end_stations(model);
+    CHECK(stations.first == Catch::Approx(10.0).margin(1e-4));
+    CHECK(stations.second == Catch::Approx(30.0).margin(1e-4));
+}
+
+TEST_CASE("Sectioned solid skips a non curve measure", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(SECTIONED_SOLID_SPF, "@A@", "IFCLENGTHMEASURE(10.)"), "@B@", "IFCAREAMEASURE(30.)");
+    expect_curve_measure_skipped(spf, false);
+}
+
+TEST_CASE("Sectioned surface reads parameter stations", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(SECTIONED_SURFACE_SPF, "@A@", "IFCPARAMETERVALUE(10.)"), "@B@", "IFCPARAMETERVALUE(30.)");
+    parsed_model model(spf);
+    const auto stations = loft_end_stations(model);
+    CHECK(stations.first == Catch::Approx(10.0).margin(1e-4));
+    CHECK(stations.second == Catch::Approx(30.0).margin(1e-4));
+}
+
+TEST_CASE("Sectioned surface reads a parameter after a length", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(SECTIONED_SURFACE_SPF, "@A@", "IFCLENGTHMEASURE(10.)"), "@B@", "IFCPARAMETERVALUE(30.)");
+    parsed_model model(spf);
+    const auto stations = loft_end_stations(model);
+    CHECK(stations.first == Catch::Approx(10.0).margin(1e-4));
+    CHECK(stations.second == Catch::Approx(30.0).margin(1e-4));
+}
+
+TEST_CASE("Sectioned surface skips a non curve measure", "[ifcgeom][curve-measure]") {
+    require_ifc4x3_add2();
+    const auto spf = replace_token(
+        replace_token(SECTIONED_SURFACE_SPF, "@A@", "IFCAREAMEASURE(10.)"), "@B@", "IFCAREAMEASURE(30.)");
+    expect_curve_measure_skipped(spf, false);
 }
