@@ -14,6 +14,7 @@ import bcf.v2.model.extensions as mdl_extensions
 from bcf.inmemory_zipfile import InMemoryZipFile, ZipFileInterface
 from bcf.v2.topic import TopicHandler
 from bcf.xml_parser import AbstractXmlParserSerializer, XmlParserSerializer
+from bcf.zip_limits import read_member
 
 T = TypeVar("T")
 
@@ -54,7 +55,7 @@ class BcfXml:
         """Bcf Version."""
         if not self._version:
             self._version = (
-                self._xml_handler.parse(self._zip_file.read("bcf.version"), mdl.Version)
+                self._xml_handler.parse(read_member(self._zip_file, "bcf.version"), mdl.Version)
                 if self._zip_file
                 else mdl.Version(version_id="2.1")
             )
@@ -68,7 +69,9 @@ class BcfXml:
     def project_info(self) -> Optional[mdl.ProjectExtension]:
         """BCF project information."""
         if not self._project_info and self._zip_file and zipfile.Path(self._zip_file, "project.bcfp").exists():
-            self._project_info = self._xml_handler.parse(self._zip_file.read("project.bcfp"), mdl.ProjectExtension)
+            self._project_info = self._xml_handler.parse(
+                read_member(self._zip_file, "project.bcfp"), mdl.ProjectExtension
+            )
         return self._project_info
 
     @project_info.setter
@@ -83,7 +86,7 @@ class BcfXml:
     @property
     def extension_schema(self) -> Optional[bytes]:
         if not self._extension_schema and self._zip_file and self.project_info and self.project_info.extension_schema:
-            self._extension_schema = self._zip_file.read(self.project_info.extension_schema)
+            self._extension_schema = read_member(self._zip_file, self.project_info.extension_schema)
         return self._extension_schema
 
     @extension_schema.setter
@@ -211,7 +214,7 @@ class BcfXml:
 
     def _save_version(self, destination_zip: ZipFileInterface) -> None:
         if not self._version and self._zip_file:
-            destination_zip.writestr("bcf.version", self._zip_file.read("bcf.version"))
+            destination_zip.writestr("bcf.version", read_member(self._zip_file, "bcf.version"))
         else:
             self._save_xml(destination_zip, "bcf.version", self.version)
 
@@ -219,7 +222,7 @@ class BcfXml:
         if item:
             self._save_xml(destination_zip, target, item)
         elif self._zip_file and zipfile.Path(self._zip_file, target).exists():
-            destination_zip.writestr(target, self._zip_file.read(target))
+            destination_zip.writestr(target, read_member(self._zip_file, target))
 
     def _save_xml(self, destination_zip: ZipFileInterface, inner_file: str, xml_obj: Any) -> None:
         destination_zip.writestr(inner_file, self._xml_handler.serialize(xml_obj))

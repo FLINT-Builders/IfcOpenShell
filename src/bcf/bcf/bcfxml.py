@@ -28,6 +28,7 @@ from bcf.v2.model import Version as Version2
 from bcf.v3.bcfxml import BcfXml as BcfXml3
 from bcf.v3.model import Version as Version3
 from bcf.xml_parser import AbstractXmlParserSerializer, XmlParserSerializer
+from bcf.zip_limits import read_member
 
 BcfXml = Union[BcfXml2, BcfXml3]
 
@@ -67,8 +68,9 @@ def _get_version(filepath: Union[str, Path], xml_handler: Optional[AbstractXmlPa
     """
     xml_handler = xml_handler or XmlParserSerializer()
     with zipfile.ZipFile(filepath) as bcf_zip:
+        data = read_member(bcf_zip, "bcf.version")
         try:
-            version = xml_handler.parse(bcf_zip.read("bcf.version"), Version3)
+            version = xml_handler.parse(data, Version3)
         except:
-            version = xml_handler.parse(bcf_zip.read("bcf.version"), Version2)
+            version = xml_handler.parse(data, Version2)
         return version.version_id

@@ -17,6 +17,7 @@ import bcf.v2.model as mdl
 from bcf.inmemory_zipfile import ZipFileInterface
 from bcf.v2.visinfo import VisualizationInfoHandler
 from bcf.xml_parser import AbstractXmlParserSerializer, XmlParserSerializer
+from bcf.zip_limits import read_path
 
 
 class TopicHandler:
@@ -40,7 +41,7 @@ class TopicHandler:
         if not self._markup:
             markup_path = self._topic_dir.joinpath("markup.bcf")
             if markup_path.exists():
-                self._markup = self._xml_handler.parse(markup_path.read_bytes(), mdl.Markup)
+                self._markup = self._xml_handler.parse(read_path(markup_path), mdl.Markup)
         return self._markup
 
     @markup.setter
@@ -115,7 +116,7 @@ class TopicHandler:
             real_path = self._topic_dir
             for path_part in ref.reference.split("/"):
                 real_path = real_path.parent if path_part == ".." else real_path.joinpath(path_part)
-            self._reference_files[ref.reference] = real_path.read_bytes()
+            self._reference_files[ref.reference] = read_path(real_path)
         return self._reference_files
 
     @property
@@ -133,7 +134,7 @@ class TopicHandler:
             real_path = self._topic_dir
             for path_part in doc.referenced_document.split("/"):
                 real_path = real_path.parent if path_part == ".." else real_path.joinpath(path_part)
-            self._document_references[doc.referenced_document] = real_path.read_bytes()
+            self._document_references[doc.referenced_document] = read_path(real_path)
         return self._document_references
 
     def _load_bim_snippet(self) -> Optional[bytes]:
@@ -141,7 +142,7 @@ class TopicHandler:
         if bim_snippet_obj and not bim_snippet_obj.is_external:
             bim_snippet_path = self._topic_dir.joinpath(bim_snippet_obj.reference)
             if bim_snippet_path.exists():
-                return bim_snippet_path.read_bytes()
+                return read_path(bim_snippet_path)
         return None
 
     @classmethod
@@ -210,7 +211,7 @@ class TopicHandler:
     def _save_xml(self, destination_zip: ZipFileInterface, item: Any, target: str) -> None:
         if self._topic_dir is None:
             return
-        to_write = self._xml_handler.serialize(item) if item else self._topic_dir.joinpath(target).read_bytes()
+        to_write = self._xml_handler.serialize(item) if item else read_path(self._topic_dir.joinpath(target))
         destination_zip.writestr(f"{self._topic_dir.name}/{target}", to_write)
 
     def _save_bim_snippet(self, destination_zip: ZipFileInterface) -> None:

@@ -6,6 +6,7 @@ from typing import Optional
 import bcf.v3.model as mdl
 from bcf.inmemory_zipfile import ZipFileInterface
 from bcf.xml_parser import AbstractXmlParserSerializer, XmlParserSerializer
+from bcf.zip_limits import read_path
 
 
 class DocumentsHandler:
@@ -41,13 +42,13 @@ class DocumentsHandler:
         file_to_open = zipfile.Path(zip_file, "documents.xml")
         if not file_to_open.exists():
             return None
-        definition = xml_handler.parse(file_to_open.read_bytes(), mdl.DocumentInfo)
+        definition = xml_handler.parse(read_path(file_to_open), mdl.DocumentInfo)
         documents = {}
         if def_docs := definition.documents:
             for document in def_docs.document:
                 document_path = zipfile.Path(zip_file, f"documents/{document.guid}")
                 if document_path.exists():
-                    documents[document.filename] = document_path.read_bytes()
+                    documents[document.filename] = read_path(document_path)
         return cls(definition, documents=documents)
 
     def save(self, bcf_zip: ZipFileInterface) -> None:
