@@ -265,12 +265,21 @@ class ScheduleIfcGenerator:
             parent = wbs["ParentObjectId"] if self.wbs.get(wbs["ParentObjectId"]) else None
             siblings.setdefault(parent, []).append((wbs.get("SequenceNumber") or 0, wbs_id))
 
-        def emit(parent) -> None:
-            for _, wbs_id in sorted(siblings.get(parent, []), key=lambda pair: pair[0]):
-                self.create_task_from_wbs(self.wbs[wbs_id], work_schedule)
-                emit(wbs_id)
+        def ordered(parent) -> list[Any]:
+            return [wbs_id for _, wbs_id in sorted(siblings.get(parent, []), key=lambda pair: pair[0])]
 
-        emit(None)
+        # An explicit stack rather than recursion, so a deep breakdown cannot
+        # exhaust the call stack, and a set of emitted ids so a cycle is
+        # rejected rather than followed.
+        emitted = set()
+        stack = list(reversed(ordered(None)))
+        while stack:
+            wbs_id = stack.pop()
+            if wbs_id in emitted:
+                raise ValueError(f"Work breakdown cycle: WBS {wbs_id} is reached more than once")
+            emitted.add(wbs_id)
+            self.create_task_from_wbs(self.wbs[wbs_id], work_schedule)
+            stack.extend(reversed(ordered(wbs_id)))
         for activity_id in self.root_activites:
             self.create_task_from_activity(self.activities[activity_id], None, work_schedule)
 
