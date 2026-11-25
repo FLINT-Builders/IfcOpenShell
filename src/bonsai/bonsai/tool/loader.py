@@ -53,6 +53,9 @@ import bonsai.tool as tool
 
 OBJECT_DATA_TYPE = Union[bpy.types.Mesh, bpy.types.Curve]
 
+# Texture dimensions come from the IFC file, so they must be bounded before any buffer is allocated for them.
+MAX_TEXTURE_DIMENSION = 8192
+
 
 class Loader(bonsai.core.tool.Loader):
     unit_scale: float = 1
@@ -193,6 +196,13 @@ class Loader(bonsai.core.tool.Loader):
         return surface_texture
 
     @classmethod
+    def is_texture_size_supported(cls, width: Any, height: Any) -> bool:
+        return all(
+            isinstance(size, int) and not isinstance(size, bool) and 0 < size <= MAX_TEXTURE_DIMENSION
+            for size in (width, height)
+        )
+
+    @classmethod
     def create_surface_style_rendering(
         cls, blender_material: bpy.types.Material, surface_style: ifcopenshell.entity_instance
     ) -> None:
@@ -326,8 +336,12 @@ class Loader(bonsai.core.tool.Loader):
                     value = texture["RasterCode"]
                     image_bytes = int(value, 2).to_bytes(len(value) // 8, "big")
                     pil_image = Image.open(io.BytesIO(image_bytes))
+                    width, height = pil_image.size
+                    if not cls.is_texture_size_supported(width, height):
+                        print(f"WARNING. Blob texture of size {width}x{height} is not supported, it will be skipped.")
+                        return
                     byte_to_normalized = 1.0 / 255.0
-                    bpy_image = bpy.data.images.new("blob_texture", width=pil_image.width, height=pil_image.height)
+                    bpy_image = bpy.data.images.new("blob_texture", width=width, height=height)
                     # PIL returns rows ordered from top to bottom, blender from bottom to top
                     pil_pixel_data = np.asarray(pil_image.convert("RGBA"), dtype=np.float32)
                     bpy_image.pixels[:] = (pil_pixel_data * byte_to_normalized)[::-1].ravel()
@@ -337,6 +351,13 @@ class Loader(bonsai.core.tool.Loader):
                 # IfcPixelTexture
                 n_components = texture["ColourComponents"]
                 width, height = texture["Width"], texture["Height"]
+                pixels = texture["Pixel"] or ()
+                if not cls.is_texture_size_supported(width, height) or len(pixels) != width * height:
+                    print(
+                        f"WARNING. Pixel texture of size {width}x{height} with {len(pixels)} pixels "
+                        "is not supported, it will be skipped."
+                    )
+                    return
                 blender_pixel_data = np.ones(width * height * 4, dtype=np.float32)
 
                 # according to https://ifc43-docs.standards.buildingsmart.org/IFC/RELEASE/IFC4x3/HTML/lexical/IfcPixelTexture.htm
@@ -344,7 +365,7 @@ class Loader(bonsai.core.tool.Loader):
                 # 2 components - grey scale + alpha
                 # 3 components - RGB
                 # 4 components - RGBA
-                for i, pixel_str in enumerate(iterable=texture["Pixel"]):
+                for i, pixel_str in enumerate(iterable=pixels):
                     pixel_bytes = int(pixel_str, 2).to_bytes(len(pixel_str) // 8, "big")
                     pixel_values = np.array(list(pixel_bytes)) / 255
                     cur_pos = i * 4
