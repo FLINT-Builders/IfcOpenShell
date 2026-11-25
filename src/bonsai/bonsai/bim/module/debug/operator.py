@@ -1105,7 +1105,20 @@ class RestartBlender(bpy.types.Operator):
         else:
             # Microsoft apps do not allow launching blender.exe directly
             # since Blender folder is kind of private.
+            # os.execv joins arguments with spaces without quoting and cmd.exe parses the result,
+            # so each argument is quoted and characters cmd.exe still expands inside quotes are refused.
+            args = sys.argv[1:]
+            unsafe_args = [arg for arg in args if any(c in '"%!' or ord(c) < 32 for c in arg)]
+            if unsafe_args:
+                self.report(
+                    {"ERROR"},
+                    f"Can't restart Blender automatically, arguments contain unsupported characters: {unsafe_args}. "
+                    "Please restart Blender manually.",
+                )
+                return {"CANCELLED"}
+            # Trailing backslashes are doubled so they don't escape the closing quote.
+            quoted_args = ['"' + arg + "\\" * (len(arg) - len(arg.rstrip("\\"))) + '"' for arg in args]
             cmd_exe = Path(os.environ["SystemRoot"]) / "system32" / "cmd.exe"
             blender_app = f"shell:AppsFolder\\BlenderFoundation.Blender_{ms_store_app_id}!BLENDER"
-            cmd_args = ["/c", "start", blender_app] + sys.argv[1:]
+            cmd_args = ["/c", "start", blender_app] + quoted_args
             os.execv(cmd_exe, cmd_args)
