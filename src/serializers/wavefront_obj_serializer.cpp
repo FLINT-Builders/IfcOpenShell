@@ -165,6 +165,8 @@ void wavefront_obj_serializer::write(const ifcopenshell::geom::triangulation_ele
 
 	std::set<int> faces_set (mesh.faces().begin(), mesh.faces().end());
 	const std::vector<int>& edges = mesh.edges();
+	const std::vector<int>& edges_material_ids = mesh.edges_material_ids();
+	std::vector<int>::const_iterator edge_material_it = edges_material_ids.begin();
 
 	for ( std::vector<int>::const_iterator it = edges.begin(); it != edges.end(); ) {
 		const int i1 = *(it++);
@@ -174,7 +176,10 @@ void wavefront_obj_serializer::write(const ifcopenshell::geom::triangulation_ele
 			continue;
 		}
 
-		const int material_id = *(material_it++);
+		if (edge_material_it == edges_material_ids.end()) {
+			break;
+		}
+		const int material_id = *(edge_material_it++);
 
 		if (material_id != previous_material_id) {
 			const ifcopenshell::geom::taxonomy::style::ptr material = mesh.materials()[material_id];

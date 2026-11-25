@@ -186,6 +186,17 @@ void gltf_serializer::write(const ifcopenshell::geom::triangulation_element* o) 
 		return;
 	}
 
+	{
+		const auto& geom = o->geometry();
+		const auto& indices = geom.faces().empty() ? geom.edges() : geom.faces();
+		const size_t stride = geom.faces().empty() ? 2 : 3;
+		if (geom.material_ids().size() * stride != indices.size()) {
+			logger().error("SER", 38, "Mesh " + geom.id() + " has " + std::to_string(geom.material_ids().size()) +
+				" material ids for " + std::to_string(indices.size() / stride) + " primitives, not written to glTF");
+			return;
+		}
+	}
+
 	size_t current_node_index = json_["nodes"].size();
     auto current_leaf_index = current_node_index;
     json_["nodes"].emplace_back();
@@ -349,7 +360,7 @@ void gltf_serializer::write(const ifcopenshell::geom::triangulation_element* o) 
 				std::vector<float> vf(vbegin + idx_begin * 3, vbegin + idx_end * 3);
 				primitive["attributes"]["POSITION"] = write_accessor<3U>(json_, tmp_fstream2_, vf.begin(), vf.end(), bufferViewId++);
 
-				if (o->geometry().normals().size()) {
+				if (o->geometry().normals().size() == o->geometry().verts().size()) {
 					auto nbegin = o->geometry().normals().begin();
 					std::vector<float> nf(nbegin + idx_begin * 3, nbegin + idx_end * 3);
 					primitive["attributes"]["NORMAL"] = write_accessor<3U>(json_, tmp_fstream2_, nf.begin(), nf.end(), bufferViewId++);
