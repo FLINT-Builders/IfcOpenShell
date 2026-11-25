@@ -502,8 +502,6 @@ def _apply_user_preferences() -> None:
         # Match default Bonsai snaps
         scene.tool_settings.snap_elements_base = {"EDGE", "EDGE_PERPENDICULAR", "VERTEX", "EDGE_MIDPOINT", "FACE"}
 
-    tool.Blender.sync_old_preferences()
-
 
 def _install_viewport_overlays() -> None:
     """Sync every Bonsai viewport decorator to its enabled state.
