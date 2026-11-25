@@ -128,50 +128,64 @@ class IfcDataGetter:
         """
         cost_items_data: list[CostItem] = []
 
-        quantity_data = IfcDataGetter.get_cost_item_quantity(file, cost_item)
-        cost_values_data = IfcDataGetter.get_cost_item_values(cost_item)
+        # Walk the nest depth first on an explicit stack. A nested item already on the current path is skipped, so a
+        # cyclic nest is written once around. A None index marks leaving that item's subtree.
+        path: set[int] = set()
+        stack: list[tuple[ifcopenshell.entity_instance, Optional[int], str]] = [(cost_item, index, hierarchy)]
+        while stack:
+            cost_item, index, hierarchy = stack.pop()
+            if index is None:
+                path.remove(cost_item.id())
+                continue
 
-        # Guess IfcCostItem unit.
-        unit = ""
-        if cost_values_data:
-            unit = cost_values_data[0]["unit"]
-        if not unit:
-            unit = quantity_data["unit"]
+            quantity_data = IfcDataGetter.get_cost_item_quantity(file, cost_item)
+            cost_values_data = IfcDataGetter.get_cost_item_values(cost_item)
 
-        rate_subtotal = 0.0
-        total_price = 0.0
-        cost_categories: dict[str, float] = {}
-        for cost_value in cost_values_data or []:
-            category = cost_value["category"]
-            if cost_value["category"] == "*":  # A sum.
-                total_price = cost_value["applied_value"]
-            else:
-                cost_category = "{}{}".format(category, " Cost")
-                cost_categories[cost_category] = cost_value["applied_value"]
-                rate_subtotal += cost_value["applied_value"]
+            # Guess IfcCostItem unit.
+            unit = ""
+            if cost_values_data:
+                unit = cost_values_data[0]["unit"]
+            if not unit:
+                unit = quantity_data["unit"]
 
-        data: CostItem = {
-            "Index": index,
-            "ItemIsASum": IfcDataGetter.cost_item_is_a_sum(cost_item),
-            "Hierarchy": hierarchy,
-            "Id": cost_item.id(),
-            "Identification": cost_item.Identification,
-            "Name": cost_item.Name,
-            "Description": cost_item.Description,
-            "Unit": unit,
-            "Quantities": IfcDataGetter.serialise_cost_quantities(file, cost_item),
-            "Quantity": quantity_data["quantity"],
-            "RateSubtotal": rate_subtotal,
-            "TotalPrice": total_price,
-            "cost_categories": cost_categories,
-        }
-        cost_items_data.append(data)
+            rate_subtotal = 0.0
+            total_price = 0.0
+            cost_categories: dict[str, float] = {}
+            for cost_value in cost_values_data or []:
+                category = cost_value["category"]
+                if cost_value["category"] == "*":  # A sum.
+                    total_price = cost_value["applied_value"]
+                else:
+                    cost_category = "{}{}".format(category, " Cost")
+                    cost_categories[cost_category] = cost_value["applied_value"]
+                    rate_subtotal += cost_value["applied_value"]
 
-        index += 1
-        child_hierarchy = hierarchy + ".1"
-        for i, nested_cost in enumerate(ifcopenshell.util.cost.get_nested_cost_items(cost_item), 1):
-            child_hierarchy = f"{hierarchy}.{i}"
-            cost_items_data.extend(IfcDataGetter.get_cost_items_data(file, nested_cost, index, child_hierarchy))
+            data: CostItem = {
+                "Index": index,
+                "ItemIsASum": IfcDataGetter.cost_item_is_a_sum(cost_item),
+                "Hierarchy": hierarchy,
+                "Id": cost_item.id(),
+                "Identification": cost_item.Identification,
+                "Name": cost_item.Name,
+                "Description": cost_item.Description,
+                "Unit": unit,
+                "Quantities": IfcDataGetter.serialise_cost_quantities(file, cost_item),
+                "Quantity": quantity_data["quantity"],
+                "RateSubtotal": rate_subtotal,
+                "TotalPrice": total_price,
+                "cost_categories": cost_categories,
+            }
+            cost_items_data.append(data)
+
+            path.add(cost_item.id())
+            stack.append((cost_item, None, hierarchy))
+            nested_costs = [
+                nested_cost
+                for nested_cost in ifcopenshell.util.cost.get_nested_cost_items(cost_item)
+                if nested_cost.id() not in path
+            ]
+            for i in range(len(nested_costs), 0, -1):
+                stack.append((nested_costs[i - 1], index + 1, f"{hierarchy}.{i}"))
         return cost_items_data
 
     @staticmethod
