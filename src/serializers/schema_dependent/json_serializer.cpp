@@ -29,8 +29,11 @@
 #include "../../ifcparse/si_prefix.h"
 #include "../../ifcparse/utils.h"
 #include "../../ifcparse/logger.h"
+#include "../walk_guard.h"
 
 using json = nlohmann::json;
+using ifcopenshell::serializers::walk_guard;
+using ifcopenshell::serializers::walk_path;
 
 namespace {
 
@@ -168,9 +171,9 @@ void format_entity_instance(ifcopenshell::logger& log, express::base instance, j
 // A function to be called recursively. Template specialization is used
 // to descend into decomposition, containment and property relationships.
 template <typename A>
-void descend(ifcopenshell::logger& log, A instance, json& tree, express::base parent = express::base()) {
+void descend(ifcopenshell::logger& log, A instance, json& tree, express::base parent = express::base(), walk_path* path = nullptr) {
     if (instance.declaration().is(IfcSchema::IfcObjectDefinition::Class())) {
-        descend(log, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent);
+        descend(log, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent, path);
     } else {
         format_entity_instance(log, instance, tree);
     }
@@ -181,13 +184,18 @@ void descend(ifcopenshell::logger& log, A instance, json& tree, express::base pa
 // Descends into the tree by recursing into IfcRelContainedInSpatialStructure,
 // IfcRelDecomposes, IfcRelDefinesByType, IfcRelDefinesByProperties relations.
 template <>
-void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, json& tree, express::base parent) {
+void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, json& tree, express::base parent, walk_path* path) {
     if (product.declaration().is(IfcSchema::IfcElement::Class())) {
         auto voids = product.as<IfcSchema::IfcElement>().FillsVoids();
         if (voids.size() == 1 && voids.front().RelatingOpeningElement() != parent) {
             // Fills are placed under their corresponding opening, return early to avoid duplication.
             return;
         }
+    }
+
+    walk_guard guard(log, path, product);
+    if (!guard) {
+        return;
     }
 
     format_entity_instance(log, product, tree, parent);
@@ -197,7 +205,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
             log, opening, &IfcSchema::IfcOpeningElement::HasFillings, &IfcSchema::IfcRelFillsElement::RelatedBuildingElement);
 
         for (auto& f : fills) {
-            descend(log, f, tree, product);
+            descend(log, f, tree, product, guard.path());
         }
     }
 
@@ -206,7 +214,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
             log, structure, &IfcSchema::IfcSpatialStructureElement::ContainsElements, &IfcSchema::IfcRelContainedInSpatialStructure::RelatedElements);
 
         for (auto& el : elements) {
-            descend(log, el, tree, product);
+            descend(log, el, tree, product, guard.path());
         }
     }
 
@@ -215,7 +223,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
             log, element, &IfcSchema::IfcElement::HasOpenings, &IfcSchema::IfcRelVoidsElement::RelatedOpeningElement);
 
         for (auto& op : openings) {
-            descend(log, op, tree, product);
+            descend(log, op, tree, product, guard.path());
         }
     }
 
@@ -233,7 +241,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
 #endif
 
     for (auto& ob : structures) {
-        descend(log, ob, tree, product);
+        descend(log, ob, tree, product, guard.path());
     }
 
     // psets are handled as part of format_entity_instance()
