@@ -115,19 +115,28 @@ class Usecase:
         self.edges = []
         self.g.add_node("start", duration=0, duration_type="ELAPSEDTIME", calendar=None)
         self.g.add_node("finish", duration=0, duration_type="ELAPSEDTIME", calendar=None)
+        visited = set()
         for rel in self.work_schedule.Controls:
             for related_object in rel.RelatedObjects:
                 if not related_object.is_a("IfcTask"):
                     continue
-                self.add_node(related_object)
+                self.add_node(related_object, visited)
         self.g.add_edges_from(self.edges)
 
-    def add_node(self, task: ifcopenshell.entity_instance) -> None:
-        if task.IsNestedBy:
-            for rel in task.IsNestedBy:
-                [self.add_node(o) for o in rel.RelatedObjects]
-            return
+    def add_node(self, task: ifcopenshell.entity_instance, visited: set[int]) -> None:
+        # Nesting is walked iteratively with a visited set, as models may contain nesting cycles.
+        stack = [task]
+        while stack:
+            task = stack.pop()
+            if task.id() in visited:
+                continue
+            visited.add(task.id())
+            if task.IsNestedBy:
+                stack.extend(reversed([o for rel in task.IsNestedBy for o in rel.RelatedObjects]))
+                continue
+            self.add_task_node(task)
 
+    def add_task_node(self, task: ifcopenshell.entity_instance) -> None:
         if task.TaskTime and task.TaskTime.ScheduleDuration:
             duration = ifcopenshell.util.date.ifc2datetime(task.TaskTime.ScheduleDuration).days
             duration_type = task.TaskTime.DurationType
