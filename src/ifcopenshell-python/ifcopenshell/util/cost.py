@@ -60,15 +60,58 @@ def get_total_quantity(root_element: ifcopenshell.entity_instance) -> Union[floa
         return quantity[3] if quantity else 1.0
 
 
+def _run_nested(call: Generator[Generator, Any, Any]) -> Any:
+    """Run a generator that yields its recursive sub-calls, on an explicit stack.
+
+    Nested cost items and cost value components come from the file and may be
+    deeper than the Python recursion limit.
+    """
+    stack = [call]
+    result = None
+    while stack:
+        try:
+            sub_call = stack[-1].send(result)
+        except StopIteration as stop:
+            stack.pop()
+            result = stop.value
+        else:
+            stack.append(sub_call)
+            result = None
+    return result
+
+
 def calculate_applied_value(
     root_element: ifcopenshell.entity_instance,
     cost_value: ifcopenshell.entity_instance,
     category_filter: Optional[str] = None,
 ) -> float:
+    return _run_nested(_calculate_applied_value(root_element, cost_value, category_filter, {}))
+
+
+def _calculate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    results: dict[tuple[int, int, Optional[str]], float],
+) -> Generator[Generator, float, float]:
+    key = (root_element.id(), cost_value.id(), category_filter)
+    if key not in results:
+        # A value reached again through cyclic nesting or components counts as zero.
+        results[key] = 0.0
+        results[key] = yield _evaluate_applied_value(root_element, cost_value, category_filter, results)
+    return results[key]
+
+
+def _evaluate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    results: dict[tuple[int, int, Optional[str]], float],
+) -> Generator[Generator, float, float]:
     if cost_value.ArithmeticOperator and cost_value.Components:
         component_values = []
         for component in cost_value.Components:
-            component_values.append(calculate_applied_value(root_element, component, category_filter))
+            component_values.append((yield _calculate_applied_value(root_element, component, category_filter, results)))
         if cost_value.ArithmeticOperator == "ADD":
             return sum(component_values)
         result = component_values.pop(0)
@@ -89,18 +132,26 @@ def calculate_applied_value(
         return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category == "*":
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element)
+            return (yield _sum_child_root_elements(root_element, None, results))
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category:
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element, category_filter=cost_value.Category)
+            return (yield _sum_child_root_elements(root_element, cost_value.Category, results))
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     return 0.0
 
 
 def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category_filter: Optional[str] = None) -> float:
+    return _run_nested(_sum_child_root_elements(root_element, category_filter, {}))
+
+
+def _sum_child_root_elements(
+    root_element: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    results: dict[tuple[int, int, Optional[str]], float],
+) -> Generator[Generator, float, float]:
     result = 0.0
     for rel in root_element.IsNestedBy:
         for child_root_element in rel.RelatedObjects:
@@ -117,7 +168,9 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
             for child_cost_value in values or []:
                 if category_filter and child_cost_value.Category != category_filter:
                     continue
-                child_applied_value = calculate_applied_value(new_child_root_element, child_cost_value)
+                child_applied_value = yield _calculate_applied_value(
+                    new_child_root_element, child_cost_value, None, results
+                )
                 child_quantity = get_total_quantity(child_root_element)
                 child_quantity = 1.0 if child_quantity is None else child_quantity
                 if child_cost_value.UnitBasis:
@@ -129,7 +182,7 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
 
 
 def serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
-    result = _serialise_cost_value(cost_value)
+    result = _run_nested(_serialise_cost_value(cost_value, set()))
     if result and result[0] == "(" and result[-1] == ")":
         return result[1:-1]
     return result
@@ -142,13 +195,18 @@ def get_assigned_rate_cost_item(cost_item: ifcopenshell.entity_instance) -> ifco
             return assignment.RelatingControl
 
 
-def _serialise_cost_value(cost_value: ifcopenshell.entity_instance) -> str:
+def _serialise_cost_value(
+    cost_value: ifcopenshell.entity_instance, ancestors: set[int]
+) -> Generator[Generator, str, str]:
     value = ""
-    if cost_value.ArithmeticOperator and cost_value.Components:
+    # A value that is one of its own components is not expanded again.
+    if cost_value.ArithmeticOperator and cost_value.Components and cost_value.id() not in ancestors:
+        ancestors.add(cost_value.id())
         operator = arithmetic_operator_symbols[cost_value.ArithmeticOperator]
         serialised_components = []
         for component in cost_value.Components:
-            serialised_components.append(_serialise_cost_value(component))
+            serialised_components.append((yield _serialise_cost_value(component, ancestors)))
+        ancestors.discard(cost_value.id())
         value = operator.join(serialised_components)
     elif cost_value.AppliedValue is not None:
         value = serialise_applied_value(cost_value.AppliedValue)

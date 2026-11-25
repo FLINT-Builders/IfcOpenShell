@@ -213,7 +213,7 @@ ifc_schedule(max_depth=1)   # top-level phases only
 
 `max_depth` limits subtask expansion. At the cutoff, `subtasks` is replaced
 with `{"truncated": true, "count": N}` so you know children exist without
-fetching them all. Omit for unlimited depth.
+fetching them all. Omit for the maximum depth of 100.
 
 #### ifc_cost
 

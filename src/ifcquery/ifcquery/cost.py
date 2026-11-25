@@ -6,16 +6,23 @@ from typing import Any
 import ifcopenshell
 import ifcopenshell.util.cost as cost_util
 
+MAX_DEPTH = 100
 
-def _cost_item_to_dict(item: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
+
+def _cost_item_to_dict(
+    item: ifcopenshell.entity_instance, max_depth: int, depth: int, expanded: set[int]
+) -> dict[str, Any]:
     raw_values = cost_util.get_cost_values(item)
     values = [{"formula": v.get("label", ""), "category": v.get("category")} for v in raw_values]
 
-    if max_depth is not None and depth >= max_depth:
-        child_count = len(cost_util.get_nested_cost_items(item))
-        subitems = {"truncated": True, "count": child_count} if child_count else []
+    nested_items = cost_util.get_nested_cost_items(item)
+    if item.id() in expanded:
+        subitems = []
+    elif depth >= max_depth:
+        subitems = {"truncated": True, "count": len(nested_items)} if nested_items else []
     else:
-        subitems = [_cost_item_to_dict(sub, max_depth, depth + 1) for sub in cost_util.get_nested_cost_items(item)]
+        expanded.add(item.id())
+        subitems = [_cost_item_to_dict(sub, max_depth, depth + 1, expanded) for sub in nested_items]
 
     return {
         "id": item.id(),
@@ -38,11 +45,16 @@ def cost(model: ifcopenshell.file, max_depth: int | None = None) -> list[dict[st
     :param max_depth: Levels of cost item nesting to expand, counting root
         items as level 1. Past the cutoff ``subitems`` is replaced by a
         ``{"truncated": True, "count": N}`` marker giving the number of items
-        not expanded. ``None`` (default) expands to unlimited depth.
+        not expanded. ``None`` (default) expands up to ``MAX_DEPTH`` (100)
+        levels, and larger values are capped at it. An item's subitems are
+        expanded only the first time it is reached; an item reached again, as
+        in cyclic nesting, is listed with empty ``subitems``.
     """
+    limit = MAX_DEPTH if max_depth is None else min(max_depth, MAX_DEPTH)
+    expanded: set[int] = set()
     result = []
     for cost_schedule in model.by_type("IfcCostSchedule"):
-        items = [_cost_item_to_dict(i, max_depth, depth=1) for i in cost_util.get_root_cost_items(cost_schedule)]
+        items = [_cost_item_to_dict(i, limit, 1, expanded) for i in cost_util.get_root_cost_items(cost_schedule)]
         result.append(
             {
                 "id": cost_schedule.id(),

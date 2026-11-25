@@ -747,7 +747,7 @@ class IfcSession:
                     "properties": {
                         "max_depth": {
                             "type": "integer",
-                            "description": "Max levels of subtask expansion (omit for unlimited)",
+                            "description": "Max levels of subtask expansion (omit for the maximum of 100)",
                         }
                     },
                     "required": [],
@@ -763,7 +763,7 @@ class IfcSession:
                     "properties": {
                         "max_depth": {
                             "type": "integer",
-                            "description": "Max levels of cost item expansion (omit for unlimited)",
+                            "description": "Max levels of cost item expansion (omit for the maximum of 100)",
                         }
                     },
                     "required": [],
