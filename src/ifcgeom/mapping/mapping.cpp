@@ -758,6 +758,19 @@ taxonomy::ptr mapping::map(const express::base& inst) {
             return it->second;
         }
     }
+    // Instances being mapped further up the call stack on this thread. Re-entering one
+    // means the file contains a reference cycle, which would otherwise recurse forever.
+    static thread_local std::set<std::pair<const mapping*, uint32_t>> in_progress;
+    const auto key = std::make_pair(static_cast<const mapping*>(this), iden);
+    if (!in_progress.insert(key).second) {
+        throw std::runtime_error("Cyclic reference detected while mapping instance");
+    }
+    struct in_progress_guard {
+        std::set<std::pair<const mapping*, uint32_t>>& set;
+        std::pair<const mapping*, uint32_t> key;
+        ~in_progress_guard() { set.erase(key); }
+    } in_progress_release{in_progress, key};
+
     taxonomy::ptr item = nullptr;
 
     // @todo we should check whether there is a notice performance impact on the large sequence
