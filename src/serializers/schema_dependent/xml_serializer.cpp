@@ -33,6 +33,7 @@
 
 using boost::property_tree::ptree;
 using ifcopenshell::serializers::walk_guard;
+using ifcopenshell::serializers::walk_path;
 
 namespace {
 
@@ -190,9 +191,9 @@ std::string qualify_unrooted_instance(const express::base& inst) {
 // A function to be called recursively. Template specialization is used
 // to descend into decomposition, containment and property relationships.
 template <typename A>
-ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, A instance, ptree& tree, express::base parent = express::base()) {
+ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, A instance, ptree& tree, express::base parent = express::base(), walk_path* path = nullptr) {
 	if (instance.declaration().is(IfcSchema::IfcObjectDefinition::Class())) {
-		return descend(log, mapping, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent);
+		return descend(log, mapping, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent, path);
 	} else {
 		return format_entity_instance(log, mapping, instance, tree);
 	}
@@ -232,13 +233,18 @@ auto get_related(ifcopenshell::logger& log, T t, F f, G g) {
 // Descends into the tree by recursing into IfcRelContainedInSpatialStructure,
 // IfcRelDecomposes, IfcRelDefinesByType, IfcRelDefinesByProperties relations.
 template <>
-ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcObjectDefinition product, ptree& tree, express::base parent) {
+ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcObjectDefinition product, ptree& tree, express::base parent, walk_path* path) {
 	if (product.declaration().is(IfcSchema::IfcElement::Class())) {
 		auto voids = product.as<IfcSchema::IfcElement>().FillsVoids();
 		if (voids.size() == 1 && voids.front().RelatingOpeningElement() != parent) {
 			// Fills are placed under their corresponding opening, return early to avoid duplication.
 			return nullptr;
 		}
+	}
+
+	walk_guard guard(log, path, product);
+	if (!guard) {
+		return nullptr;
 	}
 
 	ptree& child = *format_entity_instance(log, mapping, product, tree);
@@ -248,7 +254,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 			log, opening, &IfcSchema::IfcOpeningElement::HasFillings, &IfcSchema::IfcRelFillsElement::RelatedBuildingElement);
 
 		for (auto& f : fills) {
-			descend(log, mapping, f, child, product);
+			descend(log, mapping, f, child, product, guard.path());
 		}
 	}
 
@@ -258,7 +264,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 			(log, structure, &IfcSchema::IfcSpatialStructureElement::ContainsElements, &IfcSchema::IfcRelContainedInSpatialStructure::RelatedElements);
 
 		for (auto& el : elements) {
-			descend(log, mapping, el, child, product);
+			descend(log, mapping, el, child, product, guard.path());
 		}
 	}
 
@@ -267,7 +273,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
             log, element, &IfcSchema::IfcElement::HasOpenings, &IfcSchema::IfcRelVoidsElement::RelatedOpeningElement);
 
         for (auto& op : openings) {
-            descend(log, mapping, op, child, product);
+            descend(log, mapping, op, child, product, guard.path());
         }
     }
 
@@ -288,7 +294,7 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 #endif
 
 	for (auto& ob : structures) {
-		descend(log, mapping, ob, child, product);
+		descend(log, mapping, ob, child, product, guard.path());
 	}
 
 	if (auto object = product.as<IfcSchema::IfcObject>()) {
@@ -367,10 +373,13 @@ ptree* descend(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* 
 }
 
 // Format IfcProperty instances and insert into the DOM. IfcComplexProperties are flattened out.
-void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcProperty>& properties, ptree& node) {
+void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcProperty>& properties, ptree& node, walk_path* path = nullptr) {
     for (auto& p : properties) {
         if (auto complex = p.as<IfcSchema::IfcComplexProperty>()) {
-			format_properties(log, mapping, complex.HasProperties(), node);
+			walk_guard guard(log, path, complex);
+			if (guard) {
+				format_properties(log, mapping, complex.HasProperties(), node, guard.path());
+			}
 		} else {
 			format_entity_instance(log, mapping, p, node);
 		}
@@ -430,17 +439,26 @@ void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_ma
 }
 
 // Format IfcElementQuantity instances and insert into the DOM.
-void format_quantities(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcPhysicalQuantity>& quantities, ptree& node) {
+void format_quantities(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, const std::vector<IfcSchema::IfcPhysicalQuantity>& quantities, ptree& node, walk_path* path = nullptr) {
 	for (auto& p : quantities) {
+		walk_guard guard(log, path, p);
+		if (!guard) {
+			continue;
+		}
 		ptree* node2 = format_entity_instance(log, mapping, p, node);
 		if (node2 && p.declaration().is(IfcSchema::IfcPhysicalComplexQuantity::Class())) {
-            format_quantities(log, mapping, p.as<IfcSchema::IfcPhysicalComplexQuantity>().HasQuantities(), *node2);
+            format_quantities(log, mapping, p.as<IfcSchema::IfcPhysicalComplexQuantity>().HasQuantities(), *node2, guard.path());
 		}
 	}
 }
 
 // Format IfcTask instances and insert into the DOM.
-void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcTask task, ptree& node) {
+void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcTask task, ptree& node, walk_path* path = nullptr) {
+	walk_guard guard(log, path, task);
+	if (!guard) {
+		return;
+	}
+
 	ptree* ntask = format_entity_instance(log, mapping, task, node);
 
 	if (ntask) {
@@ -539,7 +557,7 @@ void format_tasks(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mappin
 			for (auto& object : related_objects)
 			{
                 if (auto task2 = object.as<IfcSchema::IfcTask>()) {
-                    format_tasks(log, mapping, task2, *ntask);
+                    format_tasks(log, mapping, task2, *ntask, guard.path());
                 }
 			}
 		}
