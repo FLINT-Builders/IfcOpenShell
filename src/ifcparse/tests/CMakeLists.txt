@@ -7,6 +7,11 @@ target_compile_definitions(test_ifcopenshell_parse PRIVATE
     IFCOPENSHELL_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/../../ifcopenshell-python/test/fixtures"
 )
 target_link_libraries(test_ifcopenshell_parse PRIVATE Catch2::Catch2WithMain IfcParse)
+if(WITH_ROCKSDB)
+    target_sources(test_ifcopenshell_parse PRIVATE test_rocksdb_length_prefix.cpp)
+    target_compile_definitions(test_ifcopenshell_parse PRIVATE IFOPSH_WITH_ROCKSDB)
+    target_link_libraries(test_ifcopenshell_parse PRIVATE IFCOPENSHELL_RocksDB)
+endif()
 add_dependencies(test_ifcopenshell_parse parse_schema_ifc4)
 catch_discover_tests(test_ifcopenshell_parse
     DL_PATHS
