@@ -40,7 +40,10 @@ services:
     environment:
       - NEO4J_AUTH=${NEO4J_USER}/${NEO4J_INITIAL_PASSWORD}
       - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
-      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      # The TTL background job calls apoc.periodic.iterate and apoc.schema.assert.
+      - NEO4J_dbms_security_procedures_allowlist=apoc.ttl.expireIn,apoc.periodic.iterate,apoc.schema.assert
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.ttl.expireIn,apoc.periodic.iterate,apoc.schema.assert
+      - NEO4J_dbms_security_allow__csv__import__from__file__urls=false
       - NEO4J_dbms_security_auth__minimum__password__length=4
       - NEO4J_server_http_enabled
       - NEO4J_server_http_listen__address=0.0.0.0:7474
