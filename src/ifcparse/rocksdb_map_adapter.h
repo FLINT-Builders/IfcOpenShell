@@ -28,6 +28,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 #include <iterator>
 #include <cstddef>
 #include <cstdint>
@@ -79,6 +80,17 @@ struct DefaultCodec<uint32_t> {
     }
 };
 
+// Decodes a stored list of fixed-width ids. The stored length is not trusted
+// to be a multiple of the id width; a trailing partial id is ignored.
+template <typename T>
+std::vector<T> decode_id_list(const char* data, size_t size) {
+    std::vector<T> values(size / sizeof(T));
+    if (!values.empty()) {
+        memcpy(values.data(), data, values.size() * sizeof(T));
+    }
+    return values;
+}
+
 // Specialization for std::vector<int>.
 template <>
 struct DefaultCodec<std::vector<uint32_t>> {
@@ -88,9 +100,7 @@ struct DefaultCodec<std::vector<uint32_t>> {
         return encoded;
     }
     std::vector<uint32_t> decode(const std::string& encoded) const {
-        std::vector<uint32_t> values(encoded.size() / sizeof(uint32_t), 0);
-        memcpy(values.data(), encoded.data(), encoded.size());
-        return values;
+        return decode_id_list<uint32_t>(encoded.data(), encoded.size());
     }
 };
 
