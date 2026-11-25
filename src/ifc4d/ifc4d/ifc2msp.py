@@ -192,10 +192,14 @@ class Ifc2Msp:
 
     def create_tasks(self):
         self.tasks = ET.SubElement(self.root, "Tasks")
+        self.created_task_ids = set()
         for task in self.get_subtasks(self.work_schedule):
             self.create_task(task)
 
     def create_task(self, task, level=0):
+        if task.id() in self.created_task_ids:
+            return
+        self.created_task_ids.add(task.id())
         el = ET.SubElement(self.tasks, "Task")
         self.link_element(task, el)
         ET.SubElement(el, "Name").text = task.Name or "Unnamed"

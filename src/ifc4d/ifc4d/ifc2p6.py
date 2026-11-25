@@ -179,6 +179,7 @@ class Ifc2P6:
         # Changing the order will result in import failures (but not for all P6 versions, it seems?)
         self.create_calendars(work_schedule)
         self.project_tasks = []
+        self.project_task_ids = set()
         self.activities = []
         self.create_wbs(self.get_subtasks(work_schedule), work_schedule)
         self.create_activities()
@@ -190,9 +191,10 @@ class Ifc2P6:
         planned_start_date.text = start_date
 
     def create_wbs(self, tasks, work_schedule, parent=None):
+        self.project_task_ids.update(task.id() for task in tasks)
         self.project_tasks.extend(tasks)
         for task in tasks:
-            subtasks = self.get_subtasks(task)
+            subtasks = [subtask for subtask in self.get_subtasks(task) if subtask.id() not in self.project_task_ids]
             if not subtasks and task.TaskTime:
                 self.activities.append({"task": task, "work_schedule": work_schedule, "parent": parent})
                 continue
