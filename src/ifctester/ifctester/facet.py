@@ -30,7 +30,17 @@ import ifcopenshell.util.element
 import ifcopenshell.util.unit
 from elementpath.regex import translate_pattern
 
+try:
+    from re import _constants as sre_constants
+    from re import _parser as sre_parse
+except ImportError:  # Python < 3.11
+    import sre_constants
+    import sre_parse
+
 translate_pattern = cache(translate_pattern)
+
+# Bounds the matcher's work per character, since counted repeats are expanded.
+MAX_PATTERN_STATES = 2000
 
 if TYPE_CHECKING:
     from .ids import Specification
@@ -1016,6 +1026,151 @@ class Material(Facet):
         return MaterialResult(is_pass, reason)
 
 
+class XsdPattern:
+    """Full-matches a translated XSD pattern by tracking every NFA state at once.
+
+    Python's re backtracks and can take exponential time on nested quantifiers
+    from an untrusted IDS. XSD patterns have no backreferences or lookarounds,
+    so this matcher runs in time linear in the length of the value.
+    """
+
+    CHAR, SPLIT, JUMP, MATCH = range(4)
+    CATEGORIES = {
+        sre_constants.CATEGORY_DIGIT: r"\d",
+        sre_constants.CATEGORY_NOT_DIGIT: r"\D",
+        sre_constants.CATEGORY_SPACE: r"\s",
+        sre_constants.CATEGORY_NOT_SPACE: r"\S",
+        sre_constants.CATEGORY_WORD: r"\w",
+        sre_constants.CATEGORY_NOT_WORD: r"\W",
+    }
+
+    def __init__(self, pattern: str):
+        parsed = sre_parse.parse(pattern)
+        if parsed.state.flags & ~sre_constants.SRE_FLAG_UNICODE:
+            raise ValueError("Unsupported pattern flags")
+        nodes = list(parsed)
+        # Under full matching, the anchors translate_pattern wraps around the pattern are no-ops.
+        while nodes and nodes[0] == (sre_constants.AT, sre_constants.AT_BEGINNING):
+            nodes.pop(0)
+        while nodes and (
+            nodes[-1] == (sre_constants.AT, sre_constants.AT_END)
+            or (nodes[-1][0] is sre_constants.ASSERT_NOT and nodes[-1][1][0] == 1 and self.consumes(nodes[-1][1][1]))
+        ):
+            nodes.pop()
+        self.ops = []
+        self.args = []
+        self.compile(nodes)
+        self.emit(self.MATCH)
+
+    def consumes(self, nodes) -> bool:
+        return bool(nodes) and nodes[0][0] in (sre_constants.LITERAL, sre_constants.IN)
+
+    def emit(self, op, arg=None) -> int:
+        if len(self.ops) >= MAX_PATTERN_STATES:
+            raise ValueError("Pattern is too complex")
+        self.ops.append(op)
+        self.args.append(arg)
+        return len(self.ops) - 1
+
+    def compile(self, nodes) -> None:
+        for op, av in nodes:
+            if op is sre_constants.LITERAL:
+                self.emit(self.CHAR, chr(av).__eq__)
+            elif op is sre_constants.NOT_LITERAL:
+                self.emit(self.CHAR, chr(av).__ne__)
+            elif op is sre_constants.ANY:
+                self.emit(self.CHAR, "\n".__ne__)
+            elif op is sre_constants.IN:
+                self.emit(self.CHAR, re.compile(self.charset(av)).fullmatch)
+            elif op is sre_constants.SUBPATTERN:
+                if av[1] or av[2]:
+                    raise ValueError("Unsupported pattern flags")
+                self.compile(av[3])
+            elif op is sre_constants.BRANCH:
+                jumps = []
+                for i, branch in enumerate(av[1]):
+                    if i == len(av[1]) - 1:
+                        self.compile(branch)
+                        break
+                    split = self.emit(self.SPLIT)
+                    self.compile(branch)
+                    jumps.append(self.emit(self.JUMP))
+                    self.args[split] = len(self.ops)
+                for jump in jumps:
+                    self.args[jump] = len(self.ops)
+            elif op in (sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT):
+                self.repeat(*av)
+            else:
+                raise ValueError(f"Unsupported pattern construct {op}")
+
+    def repeat(self, min_count: int, max_count: int, nodes) -> None:
+        start = len(self.ops)
+        self.compile(nodes)
+        if len(self.ops) == start:
+            return  # The body only matches the empty string, and so does any repeat of it
+        del self.ops[start:], self.args[start:]
+        for _ in range(min_count):
+            self.compile(nodes)
+        if max_count == sre_constants.MAXREPEAT:
+            split = self.emit(self.SPLIT)
+            self.compile(nodes)
+            self.emit(self.JUMP, split)
+            self.args[split] = len(self.ops)
+            return
+        splits = []
+        for _ in range(max_count - min_count):
+            splits.append(self.emit(self.SPLIT))
+            self.compile(nodes)
+        for split in splits:
+            self.args[split] = len(self.ops)
+
+    def charset(self, items) -> str:
+        result = ""
+        for op, av in items:
+            if op is sre_constants.NEGATE:
+                result += "^"
+            elif op is sre_constants.LITERAL:
+                result += re.escape(chr(av))
+            elif op is sre_constants.RANGE:
+                result += f"{re.escape(chr(av[0]))}-{re.escape(chr(av[1]))}"
+            elif op is sre_constants.CATEGORY and av in self.CATEGORIES:
+                result += self.CATEGORIES[av]
+            else:
+                raise ValueError(f"Unsupported pattern construct {op}")
+        return f"[{result}]"
+
+    def closure(self, states) -> set[int]:
+        result = set()
+        stack = list(states)
+        seen = set()
+        while stack:
+            state = stack.pop()
+            if state in seen:
+                continue
+            seen.add(state)
+            op = self.ops[state]
+            if op == self.SPLIT:
+                stack.extend((state + 1, self.args[state]))
+            elif op == self.JUMP:
+                stack.append(self.args[state])
+            else:
+                result.add(state)
+        return result
+
+    def fullmatch(self, value: str) -> bool:
+        states = self.closure([0])
+        for char in value:
+            states = self.closure([s + 1 for s in states if self.ops[s] == self.CHAR and self.args[s](char)])
+            if not states:
+                return False
+        return any(self.ops[s] == self.MATCH for s in states)
+
+
+@lru_cache(maxsize=1024)
+def compile_xsd_pattern(pattern: str) -> XsdPattern:
+    return XsdPattern(translate_pattern(pattern, back_references=False, lazy_quantifiers=False, anchors=False))
+
+
 class Restriction:
     def __init__(self, options=None, base="string"):
         self.base = base
@@ -1072,10 +1227,7 @@ class Restriction:
                         return False
                     value = value if isinstance(value, list) else [value]
                     for pattern in value:
-                        xsd_pattern = translate_pattern(
-                            pattern, back_references=False, lazy_quantifiers=False, anchors=False
-                        )
-                        if re.compile(xsd_pattern).fullmatch(other) is None:
+                        if not compile_xsd_pattern(pattern).fullmatch(other):
                             return False
                 elif constraint == "length":
                     if len(str(other)) != int(value):
