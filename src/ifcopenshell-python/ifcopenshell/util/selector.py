@@ -1192,15 +1192,16 @@ class FacetTransformer(lark.Transformer):
 
         tree = []
 
-        while container:
+        while container and container not in tree:
             if container.is_a("IfcProject"):
                 break
             tree.append(container)
             container = ifcopenshell.util.element.get_aggregate(container)
 
-        tree_copy = tree.copy()
-        while tree_copy:
-            self.container_trees[tree_copy.pop(0)] = tree_copy.copy()
+        # In an aggregation cycle, suffixes starting past the repeated element miss part of the cycle.
+        last_cached = tree.index(container) if container in tree else len(tree) - 1
+        for i in range(last_cached + 1):
+            self.container_trees[tree[i]] = tree[i:]
         return tree
 
     def comparison(self, args):

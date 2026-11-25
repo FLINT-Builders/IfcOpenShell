@@ -1090,16 +1090,23 @@ def get_container(
                 return container
             if container.is_a(ifc_class):
                 return container
-    elif contained_in_structure := getattr(element, "ContainedInStructure", None):
-        container = contained_in_structure[0].RelatingStructure
-        if not ifc_class:
-            return container
-        while container:
-            if container.is_a(ifc_class):
+        return None
+
+    visited_parents = set()
+    while element and element not in visited_parents:
+        visited_parents.add(element)
+        if contained_in_structure := getattr(element, "ContainedInStructure", None):
+            container = contained_in_structure[0].RelatingStructure
+            if not ifc_class:
                 return container
-            container = get_aggregate(container)
-    elif parent := get_parent(element):
-        return get_container(parent, should_get_direct, ifc_class)
+            visited = set()
+            while container and container not in visited:
+                if container.is_a(ifc_class):
+                    return container
+                visited.add(container)
+                container = get_aggregate(container)
+            return None
+        element = get_parent(element)
 
 
 def get_referenced_structures(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
@@ -1160,8 +1167,12 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    visited = set()
     while queue:
         element = queue.pop()
+        if element in visited:
+            continue
+        visited.add(element)
         for rel in getattr(element, "ContainsElements", []):
             related = rel.RelatedElements
             queue.extend(related)
@@ -1303,9 +1314,11 @@ def get_parent(
     if not ifc_class:
         return parent
 
-    while parent:
+    visited = set()
+    while parent and parent not in visited:
         if parent.is_a(ifc_class):
             return parent
+        visited.add(parent)
         parent = get_parent(parent)
 
     return None
