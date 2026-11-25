@@ -455,7 +455,7 @@ class Project(bonsai.core.tool.Project):
             inverses = ifc_file.get_inverse(current)
             rels_to_clean_up.update(i for i in inverses if i.is_a() in ("IfcRelNests", "IfcRelDeclares"))
 
-            children = ifcopenshell.util.element.get_components(current)
+            children = [c for c in ifcopenshell.util.element.get_components(current) if c not in roots_to_remove]
             queue.extend(children)
             roots_to_remove.update(children)
 

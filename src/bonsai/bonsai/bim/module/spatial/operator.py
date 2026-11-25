@@ -529,13 +529,16 @@ class SetContainerVisibility(bpy.types.Operator):
 
         container = tool.Ifc.get().by_id(self.container)
         queue = [container]
+        seen = {container}
         while queue:
             container = queue.pop()
             if obj := tool.Ifc.get_object(container):
                 if collection := tool.Blender.get_object_bim_props(obj).collection:
                     collection.hide_viewport = should_hide
             if self.should_include_children:
-                queue.extend(ifcopenshell.util.element.get_parts(container))
+                parts = set(ifcopenshell.util.element.get_parts(container)) - seen
+                seen.update(parts)
+                queue.extend(parts)
         return {"FINISHED"}
 
 
