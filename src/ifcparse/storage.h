@@ -588,6 +588,8 @@ namespace ifcopenshell {
 
             unresolved_references* references_to_resolve = nullptr;
 
+            const ifcopenshell::schema_definition* effective_schema() const;
+
             typedef std::map<const ifcopenshell::declaration*, std::vector<express::base>> entities_by_type;
             typedef std::unordered_map<uint32_t, shared_pointer_type> entity_instance_by_name_storage;
             typedef map_transformer<entity_instance_by_name_storage, std::function<express::base(shared_pointer_type)>> entity_instance_by_name;
