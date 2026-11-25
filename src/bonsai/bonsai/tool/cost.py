@@ -763,24 +763,31 @@ class Cost(bonsai.core.tool.Cost):
         level_index: int,
         type: Literal["cost", "cost_rate"] = "cost_rate",
     ) -> None:
-        new = props_collection.add()
-        new.ifc_definition_id = cost_item.id()
-        new.name = cost_item.Name or "Unnamed"
-        new.identification = cost_item.Identification or "XXX"
-        new.is_expanded = (
-            cost_item.id() not in cls.contracted_cost_item_rates
-            if type == "cost_rate"
-            else cost_item.id() not in cls.contracted_cost_items
-        )
-        new.level_index = level_index
-        if cost_item.IsNestedBy:
-            new.has_children = True
-            if new.is_expanded:
-                [
-                    cls.create_new_cost_item_li(props_collection, sub_cost_item, level_index + 1, type)
-                    for rel in cost_item.IsNestedBy
-                    for sub_cost_item in rel.RelatedObjects
-                ]
+        # Iterative and tracks visited items, as nesting read from a file may be cyclic.
+        visited = set()
+        stack = [(cost_item, level_index)]
+        while stack:
+            cost_item, level_index = stack.pop()
+            if cost_item.id() in visited:
+                continue
+            visited.add(cost_item.id())
+            new = props_collection.add()
+            new.ifc_definition_id = cost_item.id()
+            new.name = cost_item.Name or "Unnamed"
+            new.identification = cost_item.Identification or "XXX"
+            new.is_expanded = (
+                cost_item.id() not in cls.contracted_cost_item_rates
+                if type == "cost_rate"
+                else cost_item.id() not in cls.contracted_cost_items
+            )
+            new.level_index = level_index
+            if cost_item.IsNestedBy:
+                new.has_children = True
+                if new.is_expanded:
+                    sub_cost_items = [
+                        sub_cost_item for rel in cost_item.IsNestedBy for sub_cost_item in rel.RelatedObjects
+                    ]
+                    stack.extend((sub_cost_item, level_index + 1) for sub_cost_item in reversed(sub_cost_items))
 
     @classmethod
     def load_schedule_of_rates_tree(cls, schedule_of_rates: ifcopenshell.entity_instance) -> None:
@@ -901,11 +908,18 @@ class Cost(bonsai.core.tool.Cost):
     @classmethod
     def highlight_cost_item(cls, cost_item: ifcopenshell.entity_instance) -> None:
         def expand_ancestors(cost_item: ifcopenshell.entity_instance) -> None:
-            cls.expand_cost_item(cost_item.id())
-            for rel in cost_item.Nests or []:
-                parent_cost = rel.RelatingObject if rel.RelatingObject.is_a("IfcCostItem") else None
-                if parent_cost:
-                    expand_ancestors(parent_cost)
+            # Iterative and tracks visited items, as nesting read from a file may be cyclic.
+            visited = set()
+            stack = [cost_item]
+            while stack:
+                cost_item = stack.pop()
+                if cost_item.id() in visited:
+                    continue
+                visited.add(cost_item.id())
+                cls.expand_cost_item(cost_item.id())
+                for rel in cost_item.Nests or []:
+                    if rel.RelatingObject.is_a("IfcCostItem"):
+                        stack.append(rel.RelatingObject)
             cls.load_cost_schedule_tree()
 
         cost_props = cls.get_cost_props()
@@ -1051,18 +1065,24 @@ class Cost(bonsai.core.tool.Cost):
 
     @classmethod
     def create_cost_item_json(cls, cost_item: ifcopenshell.entity_instance, cost_items: dict, data: list):
-        if cost_item.id() in cost_items.keys():
+        # Iterative and tracks visited items, as nesting read from a file may be cyclic.
+        visited = set()
+        stack = [(cost_item, data)]
+        while stack:
+            cost_item, data = stack.pop()
+            if cost_item.id() in visited or cost_item.id() not in cost_items.keys():
+                continue
+            visited.add(cost_item.id())
             cost_item_data = cost_items[cost_item.id()]
             cost_item_data["id"] = cost_item.id()
             cost_item_data["name"] = cost_item.Name
             cost_item_data["is_nested_by"] = []
             cost_item_data["is_sum"] = cls.is_cost_item_sum(cost_item)
             data.append(cost_item_data)
-        else:
-            return None
-        for rel in cost_item.IsNestedBy or []:
-            for sub_cost_item in rel.RelatedObjects or []:
-                cls.create_cost_item_json(sub_cost_item, cost_items, cost_item_data["is_nested_by"])
+            sub_cost_items = [
+                sub_cost_item for rel in cost_item.IsNestedBy or [] for sub_cost_item in rel.RelatedObjects or []
+            ]
+            stack.extend((sub_cost_item, cost_item_data["is_nested_by"]) for sub_cost_item in reversed(sub_cost_items))
 
     @classmethod
     def is_cost_item_sum(cls, cost_item: ifcopenshell.entity_instance) -> bool:
