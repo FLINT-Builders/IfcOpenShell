@@ -528,9 +528,17 @@ class Spatial(bonsai.core.tool.Spatial):
         props.active_container_index = tool.Blender.get_valid_uilist_index(previous_container_index, props.containers)
 
     @classmethod
-    def import_spatial_element(cls, element: ifcopenshell.entity_instance, level_index: int) -> None:
+    def import_spatial_element(
+        cls,
+        element: ifcopenshell.entity_instance,
+        level_index: int,
+        visited: Optional[set[ifcopenshell.entity_instance]] = None,
+    ) -> None:
         if not element.is_a("IfcProject") and not tool.Root.is_spatial_element(element):
             return
+        if visited is None:
+            visited = set()
+        visited.add(element)
         props = cls.get_spatial_props()
         new = props.containers.add()
         new.ifc_class = element.is_a()
@@ -544,7 +552,7 @@ class Spatial(bonsai.core.tool.Spatial):
             new.elevation = tool.Unit.format_distance(elevation_in_meters)
         new.is_expanded = element.id() not in cls.contracted_containers
         new.level_index = level_index
-        children = ifcopenshell.util.element.get_parts(element)
+        children = [c for c in ifcopenshell.util.element.get_parts(element) if c not in visited]
         if children:
             children = natsorted(
                 children,
@@ -553,8 +561,9 @@ class Spatial(bonsai.core.tool.Spatial):
         new.has_children = bool(children)
         new.ifc_definition_id = element.id()
         if new.is_expanded:
-            for child in children or []:
-                cls.import_spatial_element(child, level_index + 1)
+            for child in children:
+                if child not in visited:
+                    cls.import_spatial_element(child, level_index + 1, visited)
 
     @classmethod
     def create_orientation_slot(cls, container: ifcopenshell.entity_instance) -> None:
