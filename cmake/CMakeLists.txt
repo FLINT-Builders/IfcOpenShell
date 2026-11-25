@@ -95,6 +95,7 @@ option(BUILD_GEOMSERVER "Build IfcGeomServer executable (Open CASCADE is require
 option(BUILD_IFCMAX "Build IfcMax, a 3ds Max plug-in, Windows-only." OFF)
 option(BUILD_BONSAIVIEWER "Build Bonsai Viewer" OFF) # Requires Qt6 + OpenGL 4.5
 option(BUILD_IFCOPENSHELL_PARSE_TESTS "Build C++ unit tests for IfcParse (fetches Catch2 v3)" OFF)
+option(BUILD_GLTF_GEOREF_BOUNDS_TESTS "Build glTF georeferencing list-bounds tests" OFF)
 option(BUILD_IFCOPENSHELL_GEOMETRY_TESTS "Build C++ unit tests for IfcGeom (fetches Catch2 v3)" OFF)
 option(BUILD_BONSAIVIEWER_TESTS "Build unit tests for Bonsai Viewer core (fetches Catch2 v3)" OFF)
 option(BUILD_BONSAIVIEWER_WGPU "Build the experimental wgpu backend (fetches wgpu-native binary release)" OFF)
@@ -646,6 +647,13 @@ if(BUILD_IFCGEOM)
 elseif(BUILD_IFCOPENSHELL_GEOMETRY_TESTS)
     message(FATAL_ERROR "BUILD_IFCOPENSHELL_GEOMETRY_TESTS requires BUILD_IFCGEOM=ON.")
 endif(BUILD_IFCGEOM)
+
+if(BUILD_GLTF_GEOREF_BOUNDS_TESTS)
+    if(NOT BUILD_IFCGEOM)
+        message(FATAL_ERROR "BUILD_GLTF_GEOREF_BOUNDS_TESTS requires BUILD_IFCGEOM=ON.")
+    endif()
+    add_subdirectory(../src/serializers/tests serializers/tests)
+endif()
 
 if(BUILD_CONVERT OR BUILD_IFCPYTHON OR BUILD_BONSAIVIEWER)
     add_subdirectory(../src/serializers serializers)
