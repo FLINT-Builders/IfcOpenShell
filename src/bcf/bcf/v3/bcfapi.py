@@ -109,7 +109,7 @@ class FoundationClient:
         self.set_tokens_from_response(
             requests.post(
                 self.token_endpoint,
-                params={
+                data={
                     "grant_type": "refresh_token",
                     "refresh_token": self.refresh_token,
                 },
