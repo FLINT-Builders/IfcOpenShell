@@ -40,9 +40,13 @@ def remove_boolean(file: ifcopenshell.file, item: ifcopenshell.entity_instance) 
         return
 
     representations = []
+    visited = {item.id()}
     queue = list(file.get_inverse(item))
     while queue:
         inverse = queue.pop()
+        if inverse.id() in visited:
+            continue
+        visited.add(inverse.id())
         if inverse.is_a("IfcShapeRepresentation"):
             representations.append(inverse)
         elif inverse.is_a("IfcBooleanResult"):

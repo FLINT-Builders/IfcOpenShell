@@ -524,13 +524,15 @@ def get_cross_section_area(obj: bpy.types.Object) -> float:
     representation = tool.Geometry.get_active_representation(obj)
     assert representation
     item = representation.Items[0]
+    visited = set()
     while True:
         if item.is_a("IfcExtrudedAreaSolid"):
             mesh = create_mesh_from_shape(item.SweptArea)
             area = get_mesh_area(mesh)
             delete_mesh(mesh)
             return area
-        elif item.is_a("IfcBooleanClippingResult"):
+        elif item.is_a("IfcBooleanClippingResult") and item.id() not in visited:
+            visited.add(item.id())
             item = item.FirstOperand
         else:
             area = get_end_area(obj)

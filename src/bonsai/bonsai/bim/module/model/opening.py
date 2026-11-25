@@ -1175,8 +1175,12 @@ class SelectBoolean(Operator):
         props = tool.Feature.get_boolean_props()
         queue = [tool.Ifc.get().by_id(props.active_boolean.ifc_definition_id)]
         items = {i.ifc_definition_id: i.obj for i in tool.Geometry.get_geometry_props().item_objs}
+        visited = set()
         while queue:
             item = queue.pop()
+            if item.id() in visited:
+                continue
+            visited.add(item.id())
             if item.is_a("IfcBooleanResult"):
                 if self.is_recursive:
                     queue.append(item.FirstOperand)
