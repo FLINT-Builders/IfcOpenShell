@@ -29,14 +29,23 @@ class InMemoryZipFile:
         # Create the in-memory zipfile
         self.in_memory_zip = zipfile.ZipFile(self.in_memory_data, "w", compression, True)
         self.in_memory_zip.debug = debug
+        # Compression is deferred so that every source member has been read,
+        # and so checked, before any output is built.
+        self._pending: list[tuple[str | zipfile.ZipInfo, bytes | str]] = []
 
     def writestr(self, filename_in_zip: str | zipfile.ZipInfo, file_contents: bytes | str) -> None:
         """Appends a file with name filename_in_zip and contents of
         file_contents to the in-memory zip."""
-        self.in_memory_zip.writestr(filename_in_zip, file_contents)
+        self._pending.append((filename_in_zip, file_contents))
+
+    def _flush(self) -> None:
+        for filename_in_zip, file_contents in self._pending:
+            self.in_memory_zip.writestr(filename_in_zip, file_contents)
+        self._pending.clear()
 
     def write_to_file(self, filename: str | bytes | PathLike[str] | PathLike[bytes] | int) -> None:
         """Writes the in-memory zip to a file."""
+        self._flush()
         # Mark the files as having been created on Windows so that
         # Unix permissions are not inferred as 0000
         for zfile in self.in_memory_zip.filelist:
@@ -47,11 +56,12 @@ class InMemoryZipFile:
 
     @property
     def data(self) -> bytes:
+        self._flush()
         return self.in_memory_data.getvalue()
 
     def __enter__(self) -> InMemoryZipFile:
         return self
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        if self._file_name:
+        if self._file_name and exc_type is None:
             self.write_to_file(self._file_name)
