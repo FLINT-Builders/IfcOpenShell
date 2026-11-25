@@ -22,5 +22,8 @@
 using namespace ifcopenshell::geom;
 
 taxonomy::ptr mapping::map_impl(const IfcSchema::IfcGeometricSet& inst) {
-	return map_to_collection(this, inst.Elements());
+	if (auto c = map_to_collection(this, inst.Elements())) {
+		return c;
+	}
+	return taxonomy::make<taxonomy::collection>();
 }
