@@ -264,8 +264,9 @@ class SaveBlendMetadataFile(bpy.types.Operator):
         temp_path = os.path.join(ifc_dir, "__temp_blendmetadata.blend")
         bpy.ops.wm.save_as_mainfile(filepath=temp_path, copy=True)
 
-        cleanup_script = f"""
+        cleanup_script = """
 import bpy
+import sys
 
 # Ensure all styles are loaded before attempting to remove them
 bpy.ops.bim.load_styles()
@@ -308,7 +309,7 @@ for mat_name in ifcstyle_material_names:
     if mat_name in bpy.data.materials:
         bpy.data.materials.remove(bpy.data.materials[mat_name], do_unlink=True)
 
-bpy.ops.wm.save_as_mainfile(filepath=r'{blendmetadata_path}')
+bpy.ops.wm.save_as_mainfile(filepath=sys.argv[sys.argv.index("--") + 1])
 """
         import tempfile
 
@@ -320,7 +321,9 @@ bpy.ops.wm.save_as_mainfile(filepath=r'{blendmetadata_path}')
         import subprocess
 
         result = subprocess.run(
-            [blender_exe, temp_path, "--background", "--python", script_path], capture_output=True, text=True
+            [blender_exe, temp_path, "--background", "--python", script_path, "--", blendmetadata_path],
+            capture_output=True,
+            text=True,
         )
 
         # Print the output from the background process (includes debug info)
