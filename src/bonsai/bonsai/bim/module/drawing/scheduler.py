@@ -16,11 +16,14 @@
 # You should have received a copy of the GNU General Public License
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
+import bisect
+import itertools
 import os
 import re
 import string
 from pathlib import Path
 from textwrap import wrap
+from typing import Any
 
 import openpyxl
 import openpyxl.cell  # Unnecessary, bug in typeshed.
@@ -35,6 +38,8 @@ import bonsai.tool as tool
 from bonsai.bim.module.drawing.svgwriter import SvgWriter
 
 DEBUG = False
+# Upper bound on cells drawn from an ODS print range, whatever the file declares.
+MAX_SCHEDULE_CELLS = 50000
 
 
 def col2num(col):
@@ -283,63 +288,52 @@ class Scheduler:
         # [(child, parent), ...]
         related_styles = []
 
+        # Repeats are kept as (count, value) runs because ODS files routinely
+        # repeat empty rows and columns up to the sheet limits, and a crafted
+        # file can repeat them arbitrarily. Only the printed part is expanded.
         # collect columns width
-        column_widths = []
-        column_styles = []
+        column_runs = []
         for col in table.getElementsByType(TableColumn):
             style_name = col.getAttribute("stylename")
-            col_repeat = col.getAttribute("numbercolumnsrepeated")
-            col_repeat = int(col_repeat) if col_repeat else 1
-            for i in range(col_repeat):
-                if not style_name or "column-width" not in styles[style_name]:
-                    column_width = 50
-                else:
-                    column_width = self.convert_to_mm(styles[style_name]["column-width"])
-                column_styles.append(style_name)
-                column_widths.append(column_width)
+            col_repeat = self.get_count(col, "numbercolumnsrepeated")
+            if not style_name or "column-width" not in styles[style_name]:
+                column_width = 50
+            else:
+                column_width = self.convert_to_mm(styles[style_name]["column-width"])
+            column_runs.append((col_repeat, (column_width, style_name)))
             cell_style = col.getAttribute("defaultcellstylename")
             if cell_style:
                 related_styles.append((style_name, cell_style))
 
         # sometimes there are no column styles (e.g. in ODS from IfcCSV)
         # and we just use some constant number for column widths
-        if not column_widths:
-            row_columns = []
+        if not column_runs:
+            n_columns = 0
             for tr in table.getElementsByType(TableRow):
                 row_cols = 0
                 for td in tr.getElementsByType(TableCell):
-                    column_span = td.getAttribute("numbercolumnsspanned")
-                    column_span = int(column_span) if column_span else 1
-
-                    col_repeat = td.getAttribute("numbercolumnsrepeated")
-                    col_repeat = int(col_repeat) if col_repeat else 1
+                    column_span = self.get_count(td, "numbercolumnsspanned")
+                    col_repeat = self.get_count(td, "numbercolumnsrepeated")
                     row_cols += column_span * col_repeat
-                row_columns.append(row_cols)
-
-            n_columns = max(row_columns)
-            column_widths = [25] * n_columns  # some constant width value 👀
-            column_styles = [None] * n_columns
+                n_columns = max(n_columns, row_cols)
+            column_runs = [(n_columns, (25, None))]  # some constant width value 👀
 
         # collect rows height
-        row_heights = []
-        # TODO: never used yet because unsure about priority for row styles
-        # over column styles or vice versa
-        row_styles = []
-
+        row_runs = []
         for col in table.getElementsByType(TableRow):
             style_name = col.getAttribute("stylename")
-            row_repeat = col.getAttribute("numberrowsrepeated")
-            row_repeat = int(row_repeat) if row_repeat else 1
-            for i in range(row_repeat):
-                if not style_name or "row-height" not in styles[style_name]:
-                    row_height = 6
-                else:
-                    row_height = self.convert_to_mm(styles[style_name]["row-height"])
-                row_styles.append(style_name)
-                row_heights.append(row_height)
+            row_repeat = self.get_count(col, "numberrowsrepeated")
+            if not style_name or "row-height" not in styles[style_name]:
+                row_height = 6
+            else:
+                row_height = self.convert_to_mm(styles[style_name]["row-height"])
+            row_runs.append((row_repeat, row_height))
             cell_style = col.getAttribute("defaultcellstylename")
             if cell_style:
                 related_styles.append((style_name, cell_style))
+
+        n_rows = sum(count for count, _ in row_runs)
+        n_cols = sum(count for count, _ in column_runs)
 
         while len(related_styles) > 0:
             # unzip related styles to children and parents
@@ -358,9 +352,7 @@ class Scheduler:
             min_rc, max_rc = [a1_to_rc(cell.rsplit(".", 1)[1]) for cell in print_range.split(":")]
         else:
             # fallback if print range is not defined
-            n_rows = len(row_heights)
-            n_cols = len(column_widths)
-            n_cells = len(row_heights) * len(column_widths)
+            n_cells = n_rows * n_cols
             cells_limit = 10000
             if n_cells >= cells_limit:
                 raise Exception(
@@ -372,8 +364,25 @@ class Scheduler:
                 )
 
             min_rc, max_rc = (0, 0), (1048576, 16384)
-        min_row, min_col = min_rc
+        min_row, min_col = max(min_rc[0], 0), max(min_rc[1], 0)
         max_row, max_col = max_rc
+        max_row = min(max_row, n_rows - 1)
+        max_col = min(max_col, n_cols - 1)
+
+        n_printed_cells = max(0, max_row - min_row + 1) * max(0, max_col - min_col + 1)
+        if n_printed_cells > MAX_SCHEDULE_CELLS:
+            raise Exception(
+                f"You were about to build a very big table with number of cells more than {MAX_SCHEDULE_CELLS}.\n"
+                f"In fact the print range covers {n_printed_cells} cells \n"
+                "and the operation was stopped to prevent system freeze.\n"
+                "Please reduce the print range in .ods file to proceede."
+            )
+
+        row_heights = self.expand_runs(row_runs, min_row, max_row)
+        column_runs_printed = self.expand_runs(column_runs, min_col, max_col)
+        column_widths = [width for width, _ in column_runs_printed]
+        column_styles = [style_name for _, style_name in column_runs_printed]
+        column_ends = list(itertools.accumulate(count for count, _ in column_runs))
 
         # draw table
         y = self.margin
@@ -385,31 +394,27 @@ class Scheduler:
             if stop_iterating_over_rows:
                 break
 
-            row_repeat = tr.getAttribute("numberrowsrepeated")
-            row_repeat = int(row_repeat) if row_repeat else 1
+            row_repeat = self.get_count(tr, "numberrowsrepeated")
+            if tri < min_row:
+                skipped_rows = min(row_repeat, min_row - tri)
+                tri += skipped_rows
+                row_repeat -= skipped_rows
+            if tri > max_row:
+                break
+            row_cells = self.get_printed_cells(tr, min_col, max_col) if row_repeat else []
 
             for i_row_repeat in range(row_repeat):
-                if tri < min_row:
-                    tri += 1
-                    continue
-                elif tri > max_row:
+                if tri > max_row:
                     stop_iterating_over_rows = True
                     break
 
                 x = self.margin
-                height = row_heights[tri]
-                tdi = 0
+                height = row_heights[tri - min_row]
                 stop_iterating_over_columns = False
 
-                for td in tr.getElementsByType(TableCell):
+                for td, tdi, column_span, col_repeat in row_cells:
                     if stop_iterating_over_columns:
                         break
-
-                    column_span = td.getAttribute("numbercolumnsspanned")
-                    column_span = int(column_span) if column_span else 1
-
-                    col_repeat = td.getAttribute("numbercolumnsrepeated")
-                    col_repeat = int(col_repeat) if col_repeat else 1
 
                     # figuring text alignment
                     cell_style = self.get_style(td.getAttribute("stylename"), styles)
@@ -436,8 +441,12 @@ class Scheduler:
                         if end_tdi > max_col:
                             end_tdi = max_col
 
-                        width = sum(column_widths[start_tdi : end_tdi + 1])
-                        col_style = self.get_style(column_styles[tdi], styles)
+                        width = sum(column_widths[start_tdi - min_col : end_tdi - min_col + 1])
+                        if tdi >= min_col:
+                            column_style = column_styles[tdi - min_col]
+                        else:
+                            column_style = column_runs[bisect.bisect_right(column_ends, tdi)][1][1]
+                        col_style = self.get_style(column_style, styles)
                         final_cell_style = cell_style or col_style
                         background_color = final_cell_style.get("background-color", "#ffffff")
 
@@ -504,6 +513,42 @@ class Scheduler:
         self.svg["height"] = "{}mm".format(total_height)
         self.svg["viewBox"] = "0 0 {} {}".format(total_width, total_height)
         self.svg.save(pretty=True)
+
+    def get_count(self, element, attribute: str) -> int:
+        value = element.getAttribute(attribute)
+        return max(int(value), 1) if value else 1
+
+    def expand_runs(self, runs: list[tuple[int, Any]], start: int, end: int) -> list[Any]:
+        """Expand `(count, value)` runs, keeping only indices `start..end` inclusive."""
+        values = []
+        offset = 0
+        for count, value in runs:
+            if offset > end:
+                break
+            first = max(start, offset)
+            last = min(end, offset + count - 1)
+            if first <= last:
+                values.extend([value] * (last - first + 1))
+            offset += count
+        return values
+
+    def get_printed_cells(self, tr, min_col: int, max_col: int) -> list[tuple[Any, int, int, int]]:
+        """Cells of a row reaching columns `min_col..max_col`, as `(cell, first column, span, repeat)`."""
+        cells = []
+        tdi = 0
+        for td in tr.getElementsByType(TableCell):
+            if tdi > max_col:
+                break
+            column_span = self.get_count(td, "numbercolumnsspanned")
+            col_repeat = self.get_count(td, "numbercolumnsrepeated")
+            if tdi < min_col:
+                skipped_cols = min(col_repeat, (min_col - tdi) // column_span)
+                tdi += skipped_cols * column_span
+                col_repeat -= skipped_cols
+            if col_repeat:
+                cells.append((td, tdi, column_span, col_repeat))
+            tdi += column_span * col_repeat
+        return cells
 
     def get_style(self, style_name: str, styles: dict) -> dict:
         style = styles[style_name] if style_name else {}
