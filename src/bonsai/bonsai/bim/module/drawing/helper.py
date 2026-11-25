@@ -388,7 +388,7 @@ def format_distance(
 
         fmt = None
         if decimal_places is not None:
-            fmt = "%1." + str(decimal_places) + "f"
+            fmt = "%1." + str(max(0, min(int(decimal_places), 10))) + "f"
 
         # Meters
         if unit_length == "METERS":
