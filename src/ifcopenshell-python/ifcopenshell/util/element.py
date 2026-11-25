@@ -37,6 +37,10 @@ MATERIAL_TYPE = Literal[
     "IfcMaterialList",
 ]
 
+# Files may nest or share complex properties and quantities cyclically or arbitrarily deeply, so each one is
+# expanded at most once per lookup and nesting beyond this depth is omitted.
+MAX_COMPLEX_PROPERTY_DEPTH = 64
+
 PrioritisedLayer = namedtuple("PrioritisedLayer", "priority material thickness")
 PrioritisedProfile = namedtuple("PrioritisedProfile", "priority material profile")
 
@@ -328,7 +332,7 @@ def get_quantity(
             result = quantity[3]
         elif quantity.is_a("IfcPhysicalComplexQuantity"):
             data = {k: v for k, v in quantity.get_info().items() if v is not None and k != "Name"}
-            data["properties"] = get_quantities(quantity.HasQuantities, verbose=verbose)
+            data["properties"] = _get_quantities(quantity.HasQuantities, verbose, {quantity.id()}, 1)
             del data["HasQuantities"]
             result = data
         else:
@@ -349,7 +353,17 @@ def get_quantities(
 def get_quantities(
     quantities: list[ifcopenshell.entity_instance], verbose=False
 ) -> dict[str, Union[Any, dict[str, Any]]]:
+    return _get_quantities(quantities, verbose, set(), 0)
+
+
+def _get_quantities(
+    quantities: list[ifcopenshell.entity_instance], verbose: bool, visited: set[int], depth: int
+) -> dict[str, Union[Any, dict[str, Any]]]:
     results = {}
+    to_expand = set()
+    if depth < MAX_COMPLEX_PROPERTY_DEPTH:
+        to_expand = {q.id() for q in quantities or [] if q.is_a("IfcPhysicalComplexQuantity")} - visited
+        visited.update(to_expand)
     for quantity in quantities or []:
         # 0 IfcPhysicalQuantity.Name
         quantity_name = quantity[0]
@@ -363,8 +377,11 @@ def get_quantities(
                     "value": results[quantity_name],
                 }
         elif quantity.is_a("IfcPhysicalComplexQuantity"):
+            if quantity.id() not in to_expand:
+                continue
+            to_expand.discard(quantity.id())
             data = {k: v for k, v in quantity.get_info().items() if v is not None and k != "Name"}
-            data["properties"] = get_quantities(quantity.HasQuantities, verbose=verbose)
+            data["properties"] = _get_quantities(quantity.HasQuantities, verbose, visited, depth + 1)
             del data["HasQuantities"]
             results[quantity_name] = data
             if verbose:
@@ -409,7 +426,7 @@ def get_property(
             result = prop.get_info()
         elif prop.is_a("IfcComplexProperty"):
             data = {k: v for k, v in prop.get_info().items() if v is not None and k != "Name"}
-            data["properties"] = get_properties(prop.HasProperties, verbose=verbose)
+            data["properties"] = _get_properties(prop.HasProperties, verbose, {prop.id()}, 1)
             del data["HasProperties"]
             result = data
         else:
@@ -432,7 +449,17 @@ def get_properties(
 def get_properties(
     properties: list[ifcopenshell.entity_instance], verbose=False
 ) -> dict[str, Union[Any, dict[str, Any]]]:
+    return _get_properties(properties, verbose, set(), 0)
+
+
+def _get_properties(
+    properties: list[ifcopenshell.entity_instance], verbose: bool, visited: set[int], depth: int
+) -> dict[str, Union[Any, dict[str, Any]]]:
     results = {}
+    to_expand = set()
+    if depth < MAX_COMPLEX_PROPERTY_DEPTH:
+        to_expand = {p.id() for p in properties or [] if p.is_a("IfcComplexProperty")} - visited
+        visited.update(to_expand)
     for prop in properties or []:
         ifc_class = prop.is_a()
         prop_name = prop[0]  # 0 IfcProperty.Name
@@ -484,8 +511,11 @@ def get_properties(
                     "value": results[prop_name],
                 }
         elif ifc_class == "IfcComplexProperty":
+            if prop.id() not in to_expand:
+                continue
+            to_expand.discard(prop.id())
             data = {k: v for k, v in prop.get_info().items() if v is not None and k != "Name"}
-            data["properties"] = get_properties(prop.HasProperties, verbose=verbose)
+            data["properties"] = _get_properties(prop.HasProperties, verbose, visited, depth + 1)
             del data["HasProperties"]
             results[prop_name] = data
             if verbose:
