@@ -29,8 +29,10 @@
 #include "../../ifcparse/si_prefix.h"
 #include "../../ifcparse/utils.h"
 #include "../../ifcparse/logger.h"
+#include "../walk_guard.h"
 
 using boost::property_tree::ptree;
+using ifcopenshell::serializers::walk_guard;
 
 namespace {
 
@@ -375,35 +377,56 @@ void format_properties(ifcopenshell::logger& log, ifcopenshell::geom::abstract_m
 	}
 }
 
-void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcGroup group, ptree& node, std::set<std::string> notRootGroups) {
-	// @todo tfk: instead of a set<string> shouldn't we just have a set<IfcGroup>, the current approach
-	// might not work with non-unique or NIL group names.
+auto groupMembers(const IfcSchema::IfcGroup& group) {
+	std::vector<IfcSchema::IfcObjectDefinition> members;
+	for (auto& rel : group.IsGroupedBy()) {
+		auto objs = rel.RelatedObjects();
+		members.insert(members.end(), objs.begin(), objs.end());
+	}
+	return members;
+}
 
-	// @todo tfk: should the set be a passed as a reference?
-	if (!group.Name()) {
+// Writes a named group and, nested inside it, its members. Member groups are
+// expanded in place. Every group is written at most once, keyed by instance
+// identity in `written`, so cyclic or repeated IfcRelAssignsToGroup terminate.
+// Member groups beyond walk_guard::max_depth are left unwritten for the caller
+// to write at the top level, which keeps the XML tree shallow enough to copy,
+// write and destroy without exhausting the stack.
+void writeGroupToNode(ifcopenshell::logger& log, ifcopenshell::geom::abstract_mapping* mapping, IfcSchema::IfcGroup group, ptree& node, std::set<uint32_t>& written) {
+	if (!group.Name() || !written.insert(group.identity()).second) {
 		return;
 	}
 
-    if (notRootGroups.find(*group.Name()) != notRootGroups.end()) {
-        return;
-    }
-    // Write one group to root
-    ptree* node2 = descend(log, mapping, group, node);
-    auto father = group.IsGroupedBy();
-    for (auto& ii : father)
-    {
-        auto objs = ii.RelatedObjects();
-        for (auto entity : objs) {
-            if (entity.as<IfcSchema::IfcGroup>() && entity.Name()) {
-                writeGroupToNode(log, mapping, entity.as<IfcSchema::IfcGroup>(), *node2, notRootGroups);
-                notRootGroups.emplace(*entity.Name());
-            }
-            else {
-                // Write child to father group
-                descend(log, mapping, entity, *node2);
-            }
-        }
-    }
+	struct frame {
+		ptree* node;
+		std::vector<IfcSchema::IfcObjectDefinition> members;
+		size_t next;
+	};
+	std::vector<frame> stack;
+	stack.push_back({descend(log, mapping, group, node), groupMembers(group), 0});
+
+	while (!stack.empty()) {
+		frame& top = stack.back();
+		if (top.next == top.members.size()) {
+			stack.pop_back();
+			continue;
+		}
+		auto entity = top.members[top.next++];
+		ptree* parent = top.node;
+		auto child_group = entity.as<IfcSchema::IfcGroup>();
+		if (child_group && child_group.Name()) {
+			if (stack.size() >= walk_guard::max_depth) {
+				if (written.find(child_group.identity()) == written.end()) {
+					log.warning("SER", 39, "Maximum group nesting depth reached, writing group at the top level:", child_group);
+				}
+			} else if (written.insert(child_group.identity()).second) {
+				ptree* child_node = descend(log, mapping, child_group, *parent);
+				stack.push_back({child_node, groupMembers(child_group), 0});
+			}
+		} else {
+			descend(log, mapping, entity, *parent);
+		}
+	}
 }
 
 // Format IfcElementQuantity instances and insert into the DOM.
@@ -626,16 +649,28 @@ void POSTFIX_SCHEMA(xml_serializer)::finalize() {
 
 	// Write all group sets and values as XML nodes.
 	auto gsets = file->instances_by_type<IfcSchema::IfcGroup>();
-	std::set<std::string> notRootGroups; //selfname, fathername
+	std::set<uint32_t> nestedGroups;
 	for (auto& g : gsets) {
-		writeGroupToNode(log, mapping_, g, groups, notRootGroups);
-	}
-	for (auto it = groups.begin(); it != groups.end();) {
-		if (notRootGroups.find(it->second.get<std::string>("<xmlattr>.Name")) != notRootGroups.end()) {
-			it = groups.erase(it);
-		} else {
-			it++;
+		if (!g.Name()) {
+			continue;
 		}
+		for (auto& member : groupMembers(g)) {
+			auto member_group = member.as<IfcSchema::IfcGroup>();
+			if (member_group && member_group.Name()) {
+				nestedGroups.insert(member_group.identity());
+			}
+		}
+	}
+	std::set<uint32_t> writtenGroups;
+	for (auto& g : gsets) {
+		if (nestedGroups.find(g.identity()) == nestedGroups.end()) {
+			writeGroupToNode(log, mapping_, g, groups, writtenGroups);
+		}
+	}
+	// Groups only reachable through a cycle, or left unwritten at the maximum
+	// nesting depth, have not been written as part of a root group.
+	for (auto& g : gsets) {
+		writeGroupToNode(log, mapping_, g, groups, writtenGroups);
 	}
 
 	// Write all quantities and values as XML nodes.
