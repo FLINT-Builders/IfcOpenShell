@@ -263,6 +263,11 @@ class SaveBlendMetadataFile(bpy.types.Operator):
         ifc_dir = os.path.dirname(ifc_file)
         temp_path = os.path.join(ifc_dir, "__temp_blendmetadata.blend")
         bpy.ops.wm.save_as_mainfile(filepath=temp_path, copy=True)
+        # Only bytes written by this run may be recorded as trusted, so they are not saved in place.
+        output_dir = tempfile.mkdtemp(
+            prefix="bonsai-metadata-", dir=tool.Blender.get_addon_preferences().tmp_dir or None
+        )
+        output_path = os.path.join(output_dir, os.path.basename(blendmetadata_path))
 
         cleanup_script = f"""
 import bpy
@@ -308,10 +313,9 @@ for mat_name in ifcstyle_material_names:
     if mat_name in bpy.data.materials:
         bpy.data.materials.remove(bpy.data.materials[mat_name], do_unlink=True)
 
-bpy.ops.wm.save_as_mainfile(filepath=r'{blendmetadata_path}')
+# Relative paths stay relative to the IFC folder, where the file is copied to.
+bpy.ops.wm.save_as_mainfile(filepath=r'{output_path}', relative_remap=False)
 """
-        import tempfile
-
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as script_file:
             script_file.write(cleanup_script)
             script_path = script_file.name
@@ -337,6 +341,15 @@ bpy.ops.wm.save_as_mainfile(filepath=r'{blendmetadata_path}')
         except Exception:
             pass
 
+        try:
+            with open(output_path, "rb") as fi:
+                data = fi.read()
+        except OSError:
+            self.report({"ERROR"}, "Blend metadata file was not saved.")
+            return {"CANCELLED"}
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+        tool.Project.write_metadata_blend(blendmetadata_path, data)
         return {"FINISHED"}
 
 

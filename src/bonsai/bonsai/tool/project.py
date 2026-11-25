@@ -18,9 +18,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
+import tempfile
 from collections import defaultdict
 from math import radians
 from pathlib import Path
@@ -556,6 +558,55 @@ class Project(bonsai.core.tool.Project):
         if tmp.exists():
             shutil.rmtree(tmp)
         bpy.ops.bim.save_project(filepath=cls.TEMP_PROJECT_PATH.__str__(), should_save_as=True)
+
+    @classmethod
+    def get_trusted_metadata_blends_path(cls) -> Path:
+        return Path(bpy.utils.user_resource("CONFIG")) / "trusted-metadata-blends.json"
+
+    @classmethod
+    def get_trusted_metadata_blends(cls) -> dict[str, str]:
+        """Return metadata blend paths saved by Bonsai on this machine, mapped to the SHA-256 of their contents."""
+        try:
+            with open(cls.get_trusted_metadata_blends_path(), "r") as fi:
+                trusted = json.load(fi)
+        except (OSError, ValueError):
+            return {}
+        return trusted if isinstance(trusted, dict) else {}
+
+    @classmethod
+    def write_metadata_blend(cls, blend_path: str, data: bytes) -> None:
+        """Write a metadata blend and record its contents so it may be loaded automatically later."""
+        with open(blend_path, "wb") as fo:
+            fo.write(data)
+        trusted = cls.get_trusted_metadata_blends()
+        trusted[os.path.normcase(os.path.abspath(blend_path))] = hashlib.sha256(data).hexdigest()
+        trusted_path = cls.get_trusted_metadata_blends_path()
+        trusted_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(trusted_path, "w") as fo:
+            json.dump(trusted, fo, indent=1)
+
+    @classmethod
+    def copy_trusted_metadata_blend(cls, blend_path: str) -> Optional[Path]:
+        """Copy a metadata blend into a private directory, if Bonsai saved exactly these contents to this path.
+
+        The file is read once and only the verified bytes are copied, so the copy is what should be opened,
+        never ``blend_path`` itself, which may have changed since.
+        """
+        expected = cls.get_trusted_metadata_blends().get(os.path.normcase(os.path.abspath(blend_path)))
+        if not expected:
+            return None
+        try:
+            with open(blend_path, "rb") as fi:
+                data = fi.read()
+        except OSError:
+            return None
+        if hashlib.sha256(data).hexdigest() != expected:
+            return None
+        copy_dir = tempfile.mkdtemp(prefix="bonsai-metadata-", dir=tool.Blender.get_addon_preferences().tmp_dir or None)
+        copy_path = Path(copy_dir) / os.path.basename(blend_path)
+        with open(copy_path, "xb") as fo:
+            fo.write(data)
+        return copy_path
 
     @classmethod
     def get_metadata_document_information(cls) -> Optional[ifcopenshell.entity_instance]:
