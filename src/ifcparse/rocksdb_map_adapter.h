@@ -32,6 +32,44 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
+#include <vector>
+
+// Stored values are not trusted to be well formed: every fixed-width field
+// and every array must fit in the bytes the database returned.
+namespace rocksdb_value {
+template <typename T>
+T read(const char* data, size_t size, size_t offset) {
+    if (offset > size || size - offset < sizeof(T)) {
+        throw std::runtime_error("Stored value is shorter than the field it encodes");
+    }
+    T value;
+    memcpy(&value, data + offset, sizeof(T));
+    return value;
+}
+
+template <typename T>
+T read(const std::string& buffer, size_t offset = 0) {
+    return read<T>(buffer.data(), buffer.size(), offset);
+}
+
+template <typename T>
+std::vector<T> read_array(const char* data, size_t size) {
+    if (size % sizeof(T) != 0) {
+        throw std::runtime_error("Stored value is not a whole number of elements");
+    }
+    std::vector<T> values(size / sizeof(T));
+    if (!values.empty()) {
+        memcpy(values.data(), data, size);
+    }
+    return values;
+}
+
+template <typename T>
+std::vector<T> read_array(const std::string& buffer) {
+    return read_array<T>(buffer.data(), buffer.size());
+}
+} // namespace rocksdb_value
 
 template <typename T>
 struct is_std_tuple : std::false_type {};
@@ -54,11 +92,8 @@ struct DefaultCodec<size_t> {
         return encoded;
     }
     size_t decode(const std::string& encoded) const {
-        size_t value = 0;
-        // @todo take min of sizeof(value), len(encoded)
         // @todo unify all serialization primitives
-        memcpy(&value, encoded.data(), sizeof(value));
-        return value;
+        return rocksdb_value::read<size_t>(encoded);
     }
 };
 
@@ -71,11 +106,8 @@ struct DefaultCodec<uint32_t> {
         return encoded;
     }
     uint32_t decode(const std::string& encoded) const {
-        uint32_t value = 0;
-        // @todo take min of sizeof(value), len(encoded)
         // @todo unify all serialization primitives
-        memcpy(&value, encoded.data(), sizeof(value));
-        return value;
+        return rocksdb_value::read<uint32_t>(encoded);
     }
 };
 
@@ -88,9 +120,7 @@ struct DefaultCodec<std::vector<uint32_t>> {
         return encoded;
     }
     std::vector<uint32_t> decode(const std::string& encoded) const {
-        std::vector<uint32_t> values(encoded.size() / sizeof(uint32_t), 0);
-        memcpy(values.data(), encoded.data(), encoded.size());
-        return values;
+        return rocksdb_value::read_array<uint32_t>(encoded);
     }
 };
 

@@ -57,8 +57,7 @@ express::base ifcopenshell::impl::rocks_db_file_storage::assert_existance(size_t
 
     rocksdb::Status s = db->Get(rocksdb::ReadOptions{}, rocksdb_key::type_record(r == entityinstance_ref, number), &v);
     if (s.ok()) {
-        size_t s;
-        memcpy(&s, v.data(), sizeof(size_t));
+        auto s = rocksdb_value::read<size_t>(v);
         if (s >= file->schema()->declarations().size()) {
             throw std::runtime_error("");
         }
@@ -238,8 +237,7 @@ void ifcopenshell::impl::rocks_db_file_storage::process_deletion_inverse(const e
                 std::string s = it->value().ToString();
 
                 // Iterator are snapshotted? So don't get invalidated?
-                std::vector<uint32_t> vals(s.size() / sizeof(uint32_t));
-                memcpy(vals.data(), s.data(), s.size());
+                auto vals = rocksdb_value::read_array<uint32_t>(s);
                 auto removed = std::remove(vals.begin(), vals.end(), (uint32_t)id);
                 if (removed != vals.end()) {
                     vals.erase(removed, vals.end());
