@@ -520,8 +520,11 @@ class context:
                                     for rep in nelem.Representation.Representations
                                     if rep.RepresentationIdentifier == "Body"
                                 )
+                                seen = {body}
                                 while body.Items[0].is_a("IfcMappedItem"):
                                     body = body.Items[0].MappingSource.MappedRepresentation
+                                    assert body not in seen, "Cyclic mapped representation"
+                                    seen.add(body)
                                 body.Items = [body.Items[i]]
                                 ff.write("temp.ifc")
                                 fff = ifcopenshell.open("temp.ifc")

@@ -827,14 +827,19 @@ def get_styles(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entit
         return styles
 
     for representation in [body]:
-        queue = list(representation.Items)
+        # Each item carries the representations mapped on its path, so a cyclic mapping is not followed again.
+        path = frozenset((representation,))
+        queue = [(item, path) for item in representation.Items]
         while queue:
-            item = queue.pop()
+            item, path = queue.pop()
             if item.is_a("IfcMappedItem"):
-                queue.extend(item.MappingSource.MappedRepresentation.Items)
+                mapped_rep = item.MappingSource.MappedRepresentation
+                if mapped_rep not in path:
+                    mapped_path = path | {mapped_rep}
+                    queue.extend((i, mapped_path) for i in mapped_rep.Items)
             if item.is_a("IfcBooleanResult"):
-                queue.append(item.FirstOperand)
-                queue.append(item.SecondOperand)
+                queue.append((item.FirstOperand, path))
+                queue.append((item.SecondOperand, path))
             if item.StyledByItem:
                 styles.extend([s for s in item.StyledByItem[0].Styles if s.is_a("IfcSurfaceStyle")])
     return styles

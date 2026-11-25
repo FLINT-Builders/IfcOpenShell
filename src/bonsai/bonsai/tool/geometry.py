@@ -1577,10 +1577,13 @@ class Geometry(bonsai.core.tool.Geometry):
     def resolve_mapped_representation(
         cls, representation: ifcopenshell.entity_instance
     ) -> ifcopenshell.entity_instance:
-        if representation.RepresentationType == "MappedRepresentation":
-            if not representation.Items:
-                return representation
-            return cls.resolve_mapped_representation(representation.Items[0].MappingSource.MappedRepresentation)
+        seen = {representation}
+        while representation.RepresentationType == "MappedRepresentation" and representation.Items:
+            mapped_rep = representation.Items[0].MappingSource.MappedRepresentation
+            if mapped_rep in seen:
+                break
+            seen.add(mapped_rep)
+            representation = mapped_rep
         return representation
 
     @classmethod
@@ -1727,11 +1730,16 @@ class Geometry(bonsai.core.tool.Geometry):
             # IfcShapeRepresentation or IfcTopologyRepresentation.
             if not representation.is_a("IfcShapeModel"):
                 return
-            queue = list(representation.Items)
+            # Each item carries the representations mapped on its path, so a cyclic mapping is not followed again.
+            path = frozenset((representation,))
+            queue = [(item, path) for item in representation.Items]
             while queue:
-                item = queue.pop()
+                item, path = queue.pop()
                 if item.is_a("IfcMappedItem"):
-                    queue.extend(item.MappingSource.MappedRepresentation.Items)
+                    mapped_rep = item.MappingSource.MappedRepresentation
+                    if mapped_rep not in path:
+                        mapped_path = path | {mapped_rep}
+                        queue.extend((i, mapped_path) for i in mapped_rep.Items)
                 else:
                     new = props.items.add()
                     new.name = item.is_a()
