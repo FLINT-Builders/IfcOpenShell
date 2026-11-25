@@ -59,13 +59,9 @@ def derive_date(
         if current_date:
             return current_date
     for subtask in get_all_nested_tasks(task):
-        current_date = derive_date(
-            subtask,
-            attribute_name,
-            date=date,
-            is_earliest=is_earliest,
-            is_latest=is_latest,
-        )
+        if not subtask.TaskTime or not (current_date := getattr(subtask.TaskTime, attribute_name)):
+            continue
+        current_date = ifcopenshell.util.date.ifc2datetime(current_date)
         if is_earliest:
             if current_date and (date is None or current_date < date):
                 date = current_date
@@ -76,11 +72,13 @@ def derive_date(
 
 
 def derive_calendar(task: ifcopenshell.entity_instance) -> Union[ifcopenshell.entity_instance, None]:
-    calendar = get_calendar(task)
-    if calendar:
-        return calendar
-    for rel in task.Nests or []:
-        return derive_calendar(rel.RelatingObject)
+    visited = set()
+    while task is not None and task not in visited:
+        visited.add(task)
+        calendar = get_calendar(task)
+        if calendar:
+            return calendar
+        task = next((rel.RelatingObject for rel in task.Nests or []), None)
 
 
 def get_calendar(task: ifcopenshell.entity_instance) -> Union[ifcopenshell.entity_instance, None]:
@@ -270,14 +268,17 @@ def is_work_time_applicable_to_day(work_time: ifcopenshell.entity_instance, day)
 
 
 def get_task_work_schedule(task: ifcopenshell.entity_instance) -> Union[ifcopenshell.entity_instance, None]:
-    parent_task = get_parent_task(task)
-    if parent_task:
-        return get_task_work_schedule(parent_task) or get_task_work_schedule(task)
-    else:
+    ancestors = []
+    visited = set()
+    while task is not None and task not in visited:
+        ancestors.append(task)
+        visited.add(task)
+        task = get_parent_task(task)
+    for task in reversed(ancestors):
         for rel in task.HasAssignments:
             if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
                 return rel.RelatingControl
-        return None
+    return None
 
 
 def get_nested_tasks(task: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
@@ -291,9 +292,20 @@ def get_parent_task(task: ifcopenshell.entity_instance) -> Union[ifcopenshell.en
 
 
 def get_all_nested_tasks(task: ifcopenshell.entity_instance) -> Generator[ifcopenshell.entity_instance]:
-    for nested_task in get_nested_tasks(task):
-        yield nested_task
-        yield from get_all_nested_tasks(nested_task)
+    """Get all tasks nested under a task, depth first, excluding the task itself.
+
+    Each task is yielded at most once, even if the file contains cyclic nesting.
+    """
+    visited = {task}
+    stack = [iter(get_nested_tasks(task))]
+    while stack:
+        nested_task = next(stack[-1], None)
+        if nested_task is None:
+            stack.pop()
+        elif nested_task not in visited:
+            visited.add(nested_task)
+            yield nested_task
+            stack.append(iter(get_nested_tasks(nested_task)))
 
 
 def get_work_schedule_tasks(work_schedule: ifcopenshell.entity_instance) -> Generator[ifcopenshell.entity_instance]:
@@ -402,14 +414,17 @@ def get_sequence_assignment(task: ifcopenshell.entity_instance, sequence="succes
     else:
         return []
 
-    relationship = getattr(task, relationship_attr, None)
-    if relationship:
-        return relationship
-
-    for rel in task.Nests or []:
-        result = get_sequence_assignment(rel.RelatingObject, sequence)
-        if result:
-            return result
+    visited = set()
+    stack = [task]
+    while stack:
+        task = stack.pop()
+        if task in visited:
+            continue
+        visited.add(task)
+        relationship = getattr(task, relationship_attr, None)
+        if relationship:
+            return relationship
+        stack.extend(rel.RelatingObject for rel in reversed(task.Nests or []))
 
     return []
 
