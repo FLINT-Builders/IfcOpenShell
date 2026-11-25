@@ -588,27 +588,36 @@ void gltf_serializer::setFile(ifcopenshell::file& f) {
 				std::vector<int64_t> lat_dms = lat_attr;
 				std::vector<int64_t> lon_dms = lon_attr;
 
-				auto to_decimal = [](const std::vector<int64_t>& dms) {
-					double val = dms[0] + dms[1] / 60. + dms[2] / 3600.;
-					if (dms.size() == 4) {
-						val += dms[3] / 3600.e6;
-					}
-					return val;
+				// IfcCompoundPlaneAngleMeasure is LIST [3:4], but the parser does not enforce aggregate bounds
+				auto is_compound_angle = [](const std::vector<int64_t>& dms) {
+					return dms.size() == 3 || dms.size() == 4;
 				};
 
-				auto lat = to_decimal(lat_dms);
-				auto lon = to_decimal(lon_dms);
-				double elev = 0.;
+				if (is_compound_angle(lat_dms) && is_compound_angle(lon_dms)) {
+					auto to_decimal = [](const std::vector<int64_t>& dms) {
+						double val = dms[0] + dms[1] / 60. + dms[2] / 3600.;
+						if (dms.size() == 4) {
+							val += dms[3] / 3600.e6;
+						}
+						return val;
+					};
 
-				/*
-				auto elev_attr = (*sites->begin()).as<express::entity>().get("RefElevation");
-				if (!elev_attr->isNull()) {
-					elev = *elev_attr;
+					auto lat = to_decimal(lat_dms);
+					auto lon = to_decimal(lon_dms);
+					double elev = 0.;
+
+					/*
+					auto elev_attr = (*sites->begin()).as<express::entity>().get("RefElevation");
+					if (!elev_attr->isNull()) {
+						elev = *elev_attr;
+					}
+					*/
+
+					crs_epsg.emplace("EPSG:4326");
+					eastings_northings_elevation = { { lat, lon, elev } };
+				} else {
+					logger().warning("SER", 38, "IfcSite RefLatitude and RefLongitude must have 3 or 4 components, skipping georeferencing");
 				}
-				*/
-
-				crs_epsg.emplace("EPSG:4326");
-				eastings_northings_elevation = { { lat, lon, elev } };
 			}
 		}
 	}
@@ -622,7 +631,11 @@ void gltf_serializer::setFile(ifcopenshell::file& f) {
 			express::base north = north_attr;
 			if (north.declaration().is("IfcDirection")) {
 				std::vector<double> ratios = north.as<express::entity>().get("DirectionRatios");
-				crs_x_axis = { { ratios[1], -ratios[0], 0. } };
+				if (ratios.size() >= 2) {
+					crs_x_axis = { { ratios[1], -ratios[0], 0. } };
+				} else {
+					logger().warning("SER", 39, "TrueNorth must have at least 2 direction ratios, ignoring it");
+				}
 			}
 		}
 	}
