@@ -7,7 +7,12 @@ import ifcopenshell
 import ifcopenshell.util.sequence as seq
 
 
-def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
+def _task_to_dict(
+    task: ifcopenshell.entity_instance, max_depth: int | None, depth: int, visited: set[int] | None = None
+) -> dict[str, Any]:
+    if visited is None:
+        visited = set()
+    visited.add(task.id())
     task_time = task.TaskTime
     start = None
     finish = None
@@ -19,11 +24,15 @@ def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, dep
     for product in seq.get_task_outputs(task):
         outputs.append({"id": product.id(), "type": product.is_a(), "name": getattr(product, "Name", None)})
 
+    nested_tasks = [sub for sub in seq.get_nested_tasks(task) if sub.id() not in visited]
     if max_depth is not None and depth >= max_depth:
-        child_count = len(seq.get_nested_tasks(task))
+        child_count = len(nested_tasks)
         subtasks = {"truncated": True, "count": child_count} if child_count else []
     else:
-        subtasks = [_task_to_dict(sub, max_depth, depth + 1) for sub in seq.get_nested_tasks(task)]
+        subtasks = []
+        for sub in nested_tasks:
+            if sub.id() not in visited:
+                subtasks.append(_task_to_dict(sub, max_depth, depth + 1, visited))
 
     return {
         "id": task.id(),

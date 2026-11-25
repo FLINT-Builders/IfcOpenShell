@@ -234,8 +234,9 @@ class Sequence(bonsai.core.tool.Sequence):
         cls.contracted_tasks = json.loads(props.contracted_tasks)
 
         related_objects_ids = cls.get_sorted_tasks_ids(ifcopenshell.util.sequence.get_root_tasks(work_schedule))
+        visited = set()
         for related_object_id in related_objects_ids:
-            cls.create_new_task_li(related_object_id, 0)
+            cls.create_new_task_li(related_object_id, 0, visited)
 
     @classmethod
     def get_sorted_tasks_ids(cls, tasks: list[ifcopenshell.entity_instance]) -> list[int]:
@@ -268,18 +269,26 @@ class Sequence(bonsai.core.tool.Sequence):
         return related_object_ids
 
     @classmethod
-    def create_new_task_li(cls, related_object_id: int, level_index: int) -> None:
-        task = tool.Ifc.get().by_id(related_object_id)
+    def create_new_task_li(cls, related_object_id: int, level_index: int, visited: Optional[set[int]] = None) -> None:
+        if visited is None:
+            visited = set()
         props = cls.get_task_tree_props()
-        new = props.tasks.add()
-        new.ifc_definition_id = related_object_id
-        new.is_expanded = related_object_id not in cls.contracted_tasks
-        new.level_index = level_index
-        if task.IsNestedBy:
-            new.has_children = True
-            if new.is_expanded:
-                for related_object_id in cls.get_sorted_tasks_ids(ifcopenshell.util.sequence.get_nested_tasks(task)):
-                    cls.create_new_task_li(related_object_id, level_index + 1)
+        stack = [(related_object_id, level_index)]
+        while stack:
+            related_object_id, level_index = stack.pop()
+            if related_object_id in visited:
+                continue
+            visited.add(related_object_id)
+            task = tool.Ifc.get().by_id(related_object_id)
+            new = props.tasks.add()
+            new.ifc_definition_id = related_object_id
+            new.is_expanded = related_object_id not in cls.contracted_tasks
+            new.level_index = level_index
+            if task.IsNestedBy:
+                new.has_children = True
+                if new.is_expanded:
+                    nested_ids = cls.get_sorted_tasks_ids(ifcopenshell.util.sequence.get_nested_tasks(task))
+                    stack.extend((nested_id, level_index + 1) for nested_id in reversed(nested_ids))
 
     # TODO: task argument is never used?
     @classmethod
@@ -832,11 +841,13 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def get_work_schedule(cls, task: ifcopenshell.entity_instance) -> Union[ifcopenshell.entity_instance, None]:
-        for rel in task.HasAssignments or []:
-            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
-                return rel.RelatingControl
-        for rel in task.Nests or []:
-            return cls.get_work_schedule(rel.RelatingObject)
+        visited = set()
+        while task and task.id() not in visited:
+            visited.add(task.id())
+            for rel in task.HasAssignments or []:
+                if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
+                    return rel.RelatingControl
+            task = nests[0].RelatingObject if (nests := task.Nests) else None
 
     @classmethod
     def is_work_schedule_active(cls, work_schedule):
@@ -849,9 +860,11 @@ class Sequence(bonsai.core.tool.Sequence):
 
         def get_ancestor_ids(task):
             ids = []
-            for rel in task.Nests or []:
-                ids.append(rel.RelatingObject.id())
-                ids.extend(get_ancestor_ids(rel.RelatingObject))
+            while nests := task.Nests:
+                task = nests[0].RelatingObject
+                if task.id() in ids:
+                    break
+                ids.append(task.id())
             return ids
 
         contracted_tasks = json.loads(props.contracted_tasks)
@@ -1192,10 +1205,8 @@ class Sequence(bonsai.core.tool.Sequence):
         cls.to_demolish = set()
         cls.in_demolition = set()
         cls.demolished = set()
-        for rel in work_schedule.Controls or []:
-            for related_object in rel.RelatedObjects:
-                if related_object.is_a("IfcTask"):
-                    cls.process_task_status(related_object, date)
+        for task in ifcopenshell.util.sequence.get_work_schedule_tasks(work_schedule):
+            cls.process_task_status(task, date)
         return {
             "TO_BUILD": cls.to_build,
             "IN_CONSTRUCTION": cls.in_construction,
@@ -1207,8 +1218,6 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def process_task_status(cls, task: ifcopenshell.entity_instance, date: datetime) -> None:
-        for rel in task.IsNestedBy or []:
-            [cls.process_task_status(related_object, date) for related_object in rel.RelatedObjects]
         start = ifcopenshell.util.sequence.derive_date(task, "ScheduleStart", is_earliest=True)
         finish = ifcopenshell.util.sequence.derive_date(task, "ScheduleFinish", is_latest=True)
         if not start or not finish:
@@ -1333,8 +1342,6 @@ class Sequence(bonsai.core.tool.Sequence):
     @classmethod
     def get_animation_product_frames(cls, work_schedule: ifcopenshell.entity_instance, settings: dict[str, Any]):
         def preprocess_task(task):
-            for subtask in ifcopenshell.util.sequence.get_nested_tasks(task):
-                preprocess_task(subtask)
             start = ifcopenshell.util.sequence.derive_date(task, "ScheduleStart", is_earliest=True)
             finish = ifcopenshell.util.sequence.derive_date(task, "ScheduleFinish", is_latest=True)
             if not start or not finish:
@@ -1361,8 +1368,22 @@ class Sequence(bonsai.core.tool.Sequence):
             )
 
         product_frames = {}
+        visited = set()
         for root_task in ifcopenshell.util.sequence.get_root_tasks(work_schedule):
-            preprocess_task(root_task)
+            if root_task.id() in visited:
+                continue
+            visited.add(root_task.id())
+            # Nested tasks are processed before the task that nests them.
+            stack = [(root_task, iter(ifcopenshell.util.sequence.get_nested_tasks(root_task)))]
+            while stack:
+                task, subtasks = stack[-1]
+                subtask = next((t for t in subtasks if t.id() not in visited), None)
+                if subtask is None:
+                    stack.pop()
+                    preprocess_task(task)
+                else:
+                    visited.add(subtask.id())
+                    stack.append((subtask, iter(ifcopenshell.util.sequence.get_nested_tasks(subtask))))
         return product_frames
 
     @classmethod
@@ -1560,7 +1581,7 @@ class Sequence(bonsai.core.tool.Sequence):
             relating_work_schedule = work_schedule.IsDeclaredBy[0].RelatingObject
             work_schedule = relating_work_schedule
         tasks_json = []
-        for task in ifcopenshell.util.sequence.get_root_tasks(work_schedule):
+        for task in ifcopenshell.util.sequence.get_work_schedule_tasks(work_schedule):
             if is_baseline:
                 cls.create_new_task_json(task, tasks_json, sequence_type_map, baseline_schedule=work_schedule)
             else:
@@ -1632,8 +1653,6 @@ class Sequence(bonsai.core.tool.Sequence):
             [f"{rel.RelatingProcess.id()}{type_map[rel.SequenceType]}" for rel in task.IsSuccessorFrom or []]
         )
         json.append(data)
-        for nested_task in ifcopenshell.util.sequence.get_nested_tasks(task):
-            cls.create_new_task_json(nested_task, json, type_map, baseline_schedule)
 
     @classmethod
     def generate_gantt_browser_chart(
