@@ -343,22 +343,22 @@ namespace impl {
 
     template <typename T, typename std::enable_if<is_contiguous_container<T>::value && is_contiguous_container<typename T::value_type>::value, int>::type = 0>
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, T& value) {
-        // @todo
-        auto ptr = buffer.data();
-        if (*ptr != ifcopenshell::type_encoder::encode_type<T>()) {
+        if (buffer[0] != ifcopenshell::type_encoder::encode_type<T>()) {
             return false;
         }
-        ptr++;
         value.clear();
-        while (ptr < buffer.data() + buffer.size()) {
-            size_t payload_size;
-            memcpy(&payload_size, ptr, sizeof(size_t));
+        size_t offset = 1;
+        while (offset < buffer.size()) {
+            auto payload_size = rocksdb_value::read<size_t>(buffer, offset);
+            offset += sizeof(size_t);
+            if (payload_size > buffer.size() - offset) {
+                throw std::runtime_error("Stored length prefix exceeds the stored value");
+            }
             // @todo view
-            ptr += sizeof(size_t);
-            std::string part(ptr, payload_size);
+            std::string part(buffer, offset, payload_size);
             value.emplace_back();
             deserialize(storage, part, value.back(), false);
-            ptr += payload_size;
+            offset += payload_size;
         }
         return true;
     }
@@ -369,7 +369,7 @@ namespace impl {
         if (buffer[0] != ifcopenshell::type_encoder::encode_type<T>()) {
             return false;
         }
-        memcpy(&value, buffer.data() + 1, sizeof(T));
+        value = rocksdb_value::read<T>(buffer, 1);
         return true;
     }
 
