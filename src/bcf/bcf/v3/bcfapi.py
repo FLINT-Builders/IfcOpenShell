@@ -160,6 +160,21 @@ class BcfClient:
         self.version_id = version["version_id"]
         self.baseurl = version["api_base_url"]
 
+    def _get_download_path(self, filename: str) -> str:
+        # Ids in the filename come from the server and must not escape the temporary directory.
+        if (
+            any(c in filename for c in ("/", "\\", "\0"))
+            or os.path.splitdrive(filename)[0]
+            or os.path.isabs(filename)
+            or filename in ("", ".", "..")
+        ):
+            raise ValueError(f"Invalid id in download filename {filename!r}")
+        directory = os.path.realpath(self.filepath)
+        path = os.path.realpath(os.path.join(directory, filename))
+        if os.path.dirname(path) != directory:
+            raise ValueError(f"Invalid id in download filename {filename!r}")
+        return path
+
     def get(self, endpoint: str, params: Any = None, is_auth_required: bool = False) -> Any:
         # TODO: handle error http status codes and raise exception. Follow error.json standard.
         headers = {"Authorization": f"Bearer {self.foundation_client.get_access_token()}"}
@@ -296,9 +311,10 @@ class BcfClient:
             "Content-type": "application/octet-stream",
         }
 
+        path = self._get_download_path(f"{project_id}_{topic_id}_snippet.txt")
         response = requests.get(f"{self.baseurl}/projects/{project_id}/topics/{topic_id}/snippet", headers=headers)
         content = response.content.decode("utf-8")
-        with open(os.path.join(self.filepath, f"{project_id}_{topic_id}_snippet.txt"), "w") as f:
+        with open(path, "w") as f:
             f.write(content)
         return response.status_code, content
 
@@ -554,9 +570,10 @@ class BcfClient:
             "Content-type": "application/octet-stream",
         }
 
+        path = self._get_download_path(f"{project_id}_{topic_id}_{document_id}_document.txt")
         response = requests.get(f"{self.baseurl}/projects/{project_id}/topics/documents/{document_id}", headers=headers)
         content = response.content.decode("utf-8")
-        with open(os.path.join(self.filepath, f"{project_id}_{topic_id}_{document_id}_document.txt"), "w") as f:
+        with open(path, "w") as f:
             f.write(content)
         return response.status_code, content
 
