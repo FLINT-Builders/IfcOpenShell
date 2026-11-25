@@ -372,6 +372,9 @@ def get_cost_rate(
     if cost_item.CostValues:
         potential_rates = file.get_inverse(cost_item.CostValues[0])
         for potential_rate in potential_rates:
+            # Cost values and resources can also reference a cost value.
+            if not potential_rate.is_a("IfcCostItem"):
+                continue
             schedule = get_cost_schedule(potential_rate)
             if schedule.PredefinedType == "SCHEDULEOFRATES":
                 return potential_rate
