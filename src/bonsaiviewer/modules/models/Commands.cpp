@@ -56,12 +56,19 @@
 #include <QUuid>
 
 #include <QtCore/private/qzipwriter_p.h>
-#include <QtCore/private/qzipreader_p.h>
 #include <QCryptographicHash>
+#include <QtEndian>
 
 #include <Eigen/Dense>
+#ifdef QT_ZLIB_LIB
+#include <QtZlib/zlib.h>
+#else
+#include <zlib.h>
+#endif
 
+#include <algorithm>
 #include <memory>
+#include <vector>
 
 namespace bonsaiviewer::modules::models {
 
@@ -97,6 +104,173 @@ QString rdbviewCacheRoot() {
         .filePath("ifcviewer-rdbview");
 }
 
+// Limits on what a .rdbview may expand to, well above real model databases.
+// They are checked against the central directory before anything is written,
+// and the bytes actually inflated are held to the validated sizes.
+constexpr int kRdbviewMaxEntries = 4096;
+constexpr quint64 kRdbviewMaxEntryBytes = quint64(1) << 30;
+constexpr quint64 kRdbviewMaxTotalBytes = quint64(2) << 30;
+constexpr quint64 kRdbviewMaxRatio = 100;
+constexpr quint64 kRdbviewRatioFloorBytes = quint64(1) << 20;
+constexpr qint64 kRdbviewChunk = 64 * 1024;
+
+struct RdbviewEntry {
+    QString target;          // absolute output path inside the extraction dir
+    quint16 method = 0;      // 0 stored, 8 deflate
+    quint64 compressed_size = 0;
+    quint64 size = 0;
+    qint64 data_offset = 0;
+};
+
+quint16 le16(const char* p) { return qFromLittleEndian<quint16>(p); }
+quint32 le32(const char* p) { return qFromLittleEndian<quint32>(p); }
+
+bool readAt(QFile& file, qint64 offset, char* out, qint64 n) {
+    return file.seek(offset) && file.read(out, n) == n;
+}
+
+// Reads the zip's central directory and checks every regular file entry
+// against the limits above. Nothing is written to disk.
+bool readRdbviewEntries(QFile& zip, const QString& dir, std::vector<RdbviewEntry>& entries) {
+    constexpr qint64 eocd_size = 22;
+    const qint64 file_size = zip.size();
+    if (file_size < eocd_size) return false;
+    const qint64 tail_size = std::min<qint64>(file_size, eocd_size + 0xFFFF);
+    const qint64 tail_offset = file_size - tail_size;
+    QByteArray tail(tail_size, Qt::Uninitialized);
+    if (!readAt(zip, tail_offset, tail.data(), tail_size)) return false;
+    qint64 eocd = -1;
+    for (qint64 i = tail_size - eocd_size; i >= 0; --i) {
+        if (le32(tail.constData() + i) == 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return false;
+
+    const char* e = tail.constData() + eocd;
+    const quint16 entry_count = le16(e + 10);
+    const qint64 cd_offset = le32(e + 16);
+    const qint64 cd_end = cd_offset + le32(e + 12);
+    if (le16(e + 4) != 0 || le16(e + 6) != 0 || le16(e + 8) != entry_count) return false;
+    if (entry_count > kRdbviewMaxEntries) return false;
+    if (cd_end > tail_offset + eocd) return false;
+
+    const QString base = QDir::cleanPath(dir) + '/';
+    quint64 total_size = 0;
+    quint64 total_compressed = 0;
+    qint64 pos = cd_offset;
+    for (int i = 0; i < entry_count; ++i) {
+        char h[46];
+        if (pos + 46 > cd_end || !readAt(zip, pos, h, 46) || le32(h) != 0x02014b50) return false;
+        const quint8 host = quint8(h[5]);
+        const quint16 flags = le16(h + 8);
+        const quint16 method = le16(h + 10);
+        const quint64 compressed_size = le32(h + 20);
+        const quint64 size = le32(h + 24);
+        const quint16 name_len = le16(h + 28);
+        const quint32 attributes = le32(h + 38);
+        const qint64 local_offset = le32(h + 42);
+        pos += 46;
+        if (pos + name_len > cd_end) return false;
+        QByteArray raw_name(name_len, Qt::Uninitialized);
+        if (!readAt(zip, pos, raw_name.data(), name_len)) return false;
+        pos += qint64(name_len) + le16(h + 30) + le16(h + 32);
+        if (pos > cd_end) return false;
+
+        QString name = (flags & (1 << 11)) ? QString::fromUtf8(raw_name) : QString::fromLocal8Bit(raw_name);
+        name = QDir::fromNativeSeparators(name);
+        // Same entry typing as QZipReader: Unix hosts by mode, DOS-style hosts by attribute.
+        const quint32 type = (attributes >> 16) & 0170000;
+        bool is_file = false;
+        if (host == 3) is_file = type != 0040000 && type != 0120000;
+        else if (host == 0 || host == 6 || host == 11 || host == 14) is_file = !(attributes & 0x10);
+        if (!is_file || name.endsWith('/')) continue;  // directories are recreated as needed
+
+        while (name.startsWith('.') || name.startsWith('/')) name.remove(0, 1);
+        const QString target = QDir::cleanPath(base + name);
+        if (name.isEmpty() || !target.startsWith(base)) return false;
+
+        if (flags & 1) return false;  // encrypted
+        if (method != 0 && method != 8) return false;
+        if (method == 0 && compressed_size != size) return false;
+        if (size > kRdbviewMaxEntryBytes) return false;
+        if (size >= kRdbviewRatioFloorBytes && size > kRdbviewMaxRatio * compressed_size) return false;
+        total_size += size;
+        total_compressed += compressed_size;
+        if (total_size > kRdbviewMaxTotalBytes) return false;
+
+        char lh[30];
+        if (local_offset + 30 > cd_offset || !readAt(zip, local_offset, lh, 30) || le32(lh) != 0x04034b50) {
+            return false;
+        }
+        RdbviewEntry entry;
+        entry.target = target;
+        entry.method = method;
+        entry.compressed_size = compressed_size;
+        entry.size = size;
+        entry.data_offset = local_offset + 30 + le16(lh + 26) + le16(lh + 28);
+        if (entry.data_offset + qint64(compressed_size) > cd_offset) return false;
+        entries.push_back(entry);
+    }
+    // Many small entries must not add up to a bomb either.
+    if (total_size >= kRdbviewRatioFloorBytes && total_size > kRdbviewMaxRatio * total_compressed) return false;
+    return true;
+}
+
+// Streams one entry into `out`, or nowhere when `out` is null. Fails unless the
+// data decodes to exactly the validated size, and never produces more.
+bool copyRdbviewEntry(QFile& zip, const RdbviewEntry& entry, QFile* out) {
+    if (!zip.seek(entry.data_offset)) return false;
+    QByteArray in(kRdbviewChunk, Qt::Uninitialized);
+    quint64 remaining_in = entry.compressed_size;
+
+    if (entry.method == 0) {
+        while (remaining_in > 0) {
+            const qint64 n = qint64(std::min<quint64>(remaining_in, kRdbviewChunk));
+            if (zip.read(in.data(), n) != n) return false;
+            if (out && out->write(in.constData(), n) != n) return false;
+            remaining_in -= quint64(n);
+        }
+        return true;
+    }
+
+    QByteArray buf(kRdbviewChunk, Qt::Uninitialized);
+    z_stream stream{};
+    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) return false;
+    quint64 produced = 0;
+    bool ok = false;
+    for (;;) {
+        if (stream.avail_in == 0 && remaining_in > 0) {
+            const qint64 n = qint64(std::min<quint64>(remaining_in, kRdbviewChunk));
+            if (zip.read(in.data(), n) != n) break;
+            remaining_in -= quint64(n);
+            stream.next_in = reinterpret_cast<Bytef*>(in.data());
+            stream.avail_in = uInt(n);
+        }
+        stream.next_out = reinterpret_cast<Bytef*>(buf.data());
+        stream.avail_out = uInt(kRdbviewChunk);
+        const int rc = inflate(&stream, Z_NO_FLUSH);
+        if (rc != Z_OK && rc != Z_STREAM_END) break;  // Z_BUF_ERROR here means truncated input
+        const qint64 n = kRdbviewChunk - qint64(stream.avail_out);
+        produced += quint64(n);
+        if (produced > entry.size) break;
+        if (out && out->write(buf.constData(), n) != n) break;
+        if (rc == Z_STREAM_END) {
+            ok = produced == entry.size;
+            break;
+        }
+    }
+    inflateEnd(&stream);
+    return ok;
+}
+
+bool writeRdbviewEntries(QFile& zip, const std::vector<RdbviewEntry>& entries) {
+    for (const RdbviewEntry& entry : entries) {
+        QDir().mkpath(QFileInfo(entry.target).absolutePath());
+        QFile f(entry.target);
+        if (!f.open(QIODevice::WriteOnly) || !copyRdbviewEntry(zip, entry, &f)) return false;
+    }
+    return true;
+}
+
 // A .rdbview is a zip of `model.rdb/` (the data DB) + `model.ifcview` (geometry
 // sidecar). Unzip it into a per-source subdir (hashed from path + mtime + size,
 // so a re-open reuses an existing extraction) and return the extracted
@@ -114,16 +288,20 @@ QString extractRdbview(const QString& rdbview_path) {
 
     if (QFileInfo::exists(rdb)) return rdb;  // already extracted this session
 
-    QZipReader reader(rdbview_path);
-    if (reader.status() != QZipReader::NoError) return {};
-    QDir().mkpath(dir);
-    for (const QZipReader::FileInfo& entry : reader.fileInfoList()) {
-        if (!entry.isFile) continue;                 // dirs recreated below as needed
-        const QString out = QDir(dir).filePath(entry.filePath);
-        QDir().mkpath(QFileInfo(out).absolutePath());
-        QFile f(out);
-        if (!f.open(QIODevice::WriteOnly)) return {};
-        f.write(reader.fileData(entry.filePath));
+    // Everything is validated, including the real inflated size of each
+    // deflated entry, before the extraction dir is created. Extraction then
+    // reads the same open file against the same validated entry list.
+    QFile zip(rdbview_path);
+    if (!zip.open(QIODevice::ReadOnly)) return {};
+    std::vector<RdbviewEntry> entries;
+    if (!readRdbviewEntries(zip, dir, entries)) return {};
+    for (const RdbviewEntry& entry : entries) {
+        if (entry.method == 8 && !copyRdbviewEntry(zip, entry, nullptr)) return {};
+    }
+
+    if (!writeRdbviewEntries(zip, entries)) {
+        QDir(dir).removeRecursively();
+        return {};
     }
     return QFileInfo::exists(rdb) ? rdb : QString();  // empty if the bundle lacked model.rdb
 }
