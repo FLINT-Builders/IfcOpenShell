@@ -95,10 +95,13 @@ class Nest(bonsai.core.tool.Nest):
     def get_components_recursively(cls, element: ifcopenshell.entity_instance) -> set[ifcopenshell.entity_instance]:
         """Get elements components recursively, resulting set includes `element`."""
         components = set()
-        queue = {element}
+        seen = {element}
+        queue = [element]
         while queue:
             element = queue.pop()
-            queue.update(new_components := set(ifcopenshell.util.element.get_components(element)))
+            new_components = set(ifcopenshell.util.element.get_components(element)) - seen
+            seen.update(new_components)
+            queue.extend(new_components)
             components.update(new_components)
         return components
 

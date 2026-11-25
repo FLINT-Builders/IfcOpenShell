@@ -117,24 +117,25 @@ class Aggregate(bonsai.core.tool.Aggregate):
     def get_aggregates_recursively(cls, element: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
         """Get elements aggregates recursively, resulting set includes `element`."""
         aggregates: list[ifcopenshell.entity_instance] = list()
-        queue = {element}
-        while queue:
-            element = queue.pop()
-            aggregate = ifcopenshell.util.element.get_aggregate(element)
-            if aggregate:
-                queue.update({aggregate})
+        seen = set()
+        while element and element not in seen:
+            seen.add(element)
             if ifcopenshell.util.element.get_parts(element):
                 aggregates.append(element)
+            element = ifcopenshell.util.element.get_aggregate(element)
         return aggregates
 
     @classmethod
     def get_parts_recursively(cls, element: ifcopenshell.entity_instance) -> set[ifcopenshell.entity_instance]:
         """Get elements parts recursively, resulting set includes `element`."""
         parts = set()
-        queue = {element}
+        seen = {element}
+        queue = [element]
         while queue:
             element = queue.pop()
-            queue.update(new_parts := set(ifcopenshell.util.element.get_parts(element)))
+            new_parts = set(ifcopenshell.util.element.get_parts(element)) - seen
+            seen.update(new_parts)
+            queue.extend(new_parts)
             parts.update(new_parts)
         return parts
 
