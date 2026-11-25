@@ -215,11 +215,16 @@ class RepresentationItemsData:
             # IfcShapeRepresentation or IfcTopologyRepresentation.
             if not element.is_a("IfcShapeModel"):
                 return 0
-            queue = list(element.Items)
+            # Each item carries the representations mapped on its path, so a cyclic mapping is not followed again.
+            path = frozenset((element,))
+            queue = [(item, path) for item in element.Items]
             while queue:
-                item = queue.pop()
+                item, path = queue.pop()
                 if item.is_a("IfcMappedItem"):
-                    queue.extend(item.MappingSource.MappedRepresentation.Items)
+                    mapped_rep = item.MappingSource.MappedRepresentation
+                    if mapped_rep not in path:
+                        mapped_path = path | {mapped_rep}
+                        queue.extend((i, mapped_path) for i in mapped_rep.Items)
                 else:
                     result += 1
         return result
