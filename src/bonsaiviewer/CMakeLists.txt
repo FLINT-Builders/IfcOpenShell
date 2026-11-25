@@ -28,7 +28,7 @@ set(QT_VERSION 6 CACHE STRING "Qt version")
 # target ends up available either way for the link step below.
 find_package(Qt${QT_VERSION} REQUIRED
              COMPONENTS Core Gui Widgets Svg
-             OPTIONAL_COMPONENTS CorePrivate
+             OPTIONAL_COMPONENTS CorePrivate ZlibPrivate
              PATHS ${QT_DIR})
 
 set(BONSAIVIEWER_FILES
@@ -144,6 +144,16 @@ target_link_libraries(BonsaiViewer PRIVATE
     Qt${QT_VERSION}::Svg
     Qt${QT_VERSION}::Widgets
 )
+
+# .rdbview extraction inflates zip entries with zlib. A Qt built with its
+# bundled zlib exports it from Qt Core behind ZlibPrivate; a Qt built against
+# the system zlib does not, so link that directly.
+if(TARGET Qt${QT_VERSION}::ZlibPrivate)
+    target_link_libraries(BonsaiViewer PRIVATE Qt${QT_VERSION}::ZlibPrivate)
+else()
+    find_package(ZLIB REQUIRED)
+    target_link_libraries(BonsaiViewer PRIVATE ZLIB::ZLIB)
+endif()
 
 # BUNDLE DESTINATION must be "." (install-prefix root) on macOS — Qt's
 # deploy generator emits `macdeployqt BonsaiViewer.app` (no path
