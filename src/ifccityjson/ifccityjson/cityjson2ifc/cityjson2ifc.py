@@ -18,6 +18,7 @@
 # along with ifccityjson.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import re
 from datetime import datetime
 
 import ifcopenshell
@@ -252,13 +253,23 @@ class Cityjson2ifc:
         file = self.properties["file_destination"] + self.properties["file_extension"]
         self.IFC_model.write(file)
 
+    @staticmethod
+    def get_lod_file_suffix(lod):
+        # The lod comes from the CityJSON file and must not add path segments to the output path.
+        suffix = re.sub(r"[^A-Za-z0-9._-]", "_", lod)
+        if not suffix or suffix.startswith("."):
+            suffix = "_" + suffix
+        return suffix
+
     def write_files(self):
         for lod, IFC_representation_sub_context in self.IFC_representation_sub_contexts.items():
             sub_context_id = IFC_representation_sub_context.id()
 
             # TODO this method makes a copy of the IFC_model by writing it and importing it,
             # TODO but maybe there is a better method.
-            file = self.properties["file_destination"] + lod + self.properties["file_extension"]
+            file = (
+                self.properties["file_destination"] + self.get_lod_file_suffix(lod) + self.properties["file_extension"]
+            )
             self.IFC_model.write(file)
             IFC_copied_model: ifcopenshell.file
             IFC_copied_model = ifcopenshell.open(file)
