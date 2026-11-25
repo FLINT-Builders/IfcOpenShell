@@ -41,8 +41,13 @@ def remove_boolean(file: ifcopenshell.file, item: ifcopenshell.entity_instance) 
 
     representations = []
     queue = list(file.get_inverse(item))
+    # Malformed files may contain cycles of boolean results.
+    visited = {item}
     while queue:
         inverse = queue.pop()
+        if inverse in visited:
+            continue
+        visited.add(inverse)
         if inverse.is_a("IfcShapeRepresentation"):
             representations.append(inverse)
         elif inverse.is_a("IfcBooleanResult"):
