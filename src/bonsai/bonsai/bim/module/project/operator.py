@@ -1599,34 +1599,55 @@ class LoadLink(bpy.types.Operator, tool.Ifc.Operator):
             pprops = tool.Project.get_project_props()
             gprops = tool.Georeference.get_georeference_props()
 
-            code = f"""
+            # Scene values are untrusted (they come from the .blend), so they are
+            # passed to the background script as JSON data, never as source code.
+            settings = {
+                "has_blender_offset": gprops.has_blender_offset,
+                "blender_offset_x": gprops.blender_offset_x,
+                "blender_offset_y": gprops.blender_offset_y,
+                "blender_offset_z": gprops.blender_offset_z,
+                "blender_x_axis_abscissa": gprops.blender_x_axis_abscissa,
+                "blender_x_axis_ordinate": gprops.blender_x_axis_ordinate,
+                "distance_limit": pprops.distance_limit,
+                "false_origin_mode": pprops.false_origin_mode,
+                "false_origin": pprops.false_origin,
+                "project_north": pprops.project_north,
+                # Use absolute path to be safe from cwd changes.
+                "filepath": str(self.filepath_),
+                "query": self.query,
+                # Use str instead of as_posix to avoid issues with Windows shared paths.
+                "blend_filepath": str(blend_filepath),
+            }
+
+            code = """
 import bpy
+import json
 import sys
 
 def run():
     import bonsai.tool as tool
+    with open(sys.argv[sys.argv.index("--") + 1], encoding="utf-8") as f:
+        settings = json.load(f)
     gprops = tool.Georeference.get_georeference_props()
     # Our model origin becomes their host model origin
-    gprops.has_blender_offset = {gprops.has_blender_offset}
-    gprops.blender_offset_x = "{gprops.blender_offset_x}"
-    gprops.blender_offset_y = "{gprops.blender_offset_y}"
-    gprops.blender_offset_z = "{gprops.blender_offset_z}"
-    gprops.blender_x_axis_abscissa = "{gprops.blender_x_axis_abscissa}"
-    gprops.blender_x_axis_ordinate = "{gprops.blender_x_axis_ordinate}"
+    gprops.has_blender_offset = bool(settings["has_blender_offset"])
+    gprops.blender_offset_x = str(settings["blender_offset_x"])
+    gprops.blender_offset_y = str(settings["blender_offset_y"])
+    gprops.blender_offset_z = str(settings["blender_offset_z"])
+    gprops.blender_x_axis_abscissa = str(settings["blender_x_axis_abscissa"])
+    gprops.blender_x_axis_ordinate = str(settings["blender_x_axis_ordinate"])
     pprops = tool.Project.get_project_props()
-    pprops.distance_limit = {pprops.distance_limit}
-    pprops.false_origin_mode = "{pprops.false_origin_mode}"
-    pprops.false_origin = "{pprops.false_origin}"
-    pprops.project_north = "{pprops.project_north}"
-    # Use absolute path to be safe from cwd changes.
+    pprops.distance_limit = float(settings["distance_limit"])
+    pprops.false_origin_mode = str(settings["false_origin_mode"])
+    pprops.false_origin = str(settings["false_origin"])
+    pprops.project_north = str(settings["project_north"])
     try:
-        bpy.ops.bim.load_linked_project(filepath=r"{str(self.filepath_)}", query={repr(self.query)})
+        bpy.ops.bim.load_linked_project(filepath=str(settings["filepath"]), query=str(settings["query"]))
     except RuntimeError as e:
         # Operator failed (returned CANCELLED with error report)
-        print(f"Failed to load linked project: {{e}}")
+        print(f"Failed to load linked project: {e}")
         sys.exit(1)
-    # Use str instead of as_posix to avoid issues with Windows shared paths.
-    bpy.ops.wm.save_as_mainfile(filepath=r"{str(blend_filepath)}")
+    bpy.ops.wm.save_as_mainfile(filepath=str(settings["blend_filepath"]))
 
 try:
     run()
@@ -1639,6 +1660,8 @@ except Exception as e:
             t = time.time()
             with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as temp_file:
                 temp_file.write(code)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as settings_file:
+                json.dump(settings, settings_file)
             run = subprocess.run(
                 [
                     bpy.app.binary_path,
@@ -1651,6 +1674,8 @@ except Exception as e:
                     temp_file.name,
                     "--python-exit-code",
                     "1",
+                    "--",
+                    settings_file.name,
                 ]
             )
             if run.returncode == 1:
