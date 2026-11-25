@@ -29,9 +29,29 @@ taxonomy::ptr mapping::map_impl(const IfcSchema::IfcMappedItem& inst) {
 	taxonomy::matrix4::ptr trsf2 = taxonomy::cast<taxonomy::matrix4>(map(placement));
 	Eigen::Matrix4d res = gtrsf->ccomponents() * trsf2->ccomponents();
 
+	auto mapped_representation = rmap.MappedRepresentation();
+
+	struct in_progress_guard {
+		std::set<express::base>& in_progress;
+		express::base representation;
+		~in_progress_guard() {
+			if (representation) {
+				in_progress.erase(representation);
+			}
+		}
+	} guard{mapped_representations_in_progress_, express::base{}};
+
+	if (mapped_representation) {
+		if (!mapped_representations_in_progress_.insert(mapped_representation).second) {
+			logger_.message(ifcopenshell::logger::LOG_ERROR, "GEO", 404, "Cyclic mapped representation encountered for:", inst);
+			return nullptr;
+		}
+		guard.representation = mapped_representation;
+	}
+
 	// @todo immutable for caching?
 	// @todo allow for multiple levels of matrix?
-	auto shapes = taxonomy::dcast<taxonomy::collection>(map(rmap.MappedRepresentation()));
+	auto shapes = taxonomy::dcast<taxonomy::collection>(map(mapped_representation));
 	if (shapes == nullptr) {
 		if (failed_on_purpose_.find(rmap.MappedRepresentation()) != failed_on_purpose_.end()) {
 			// propagate
