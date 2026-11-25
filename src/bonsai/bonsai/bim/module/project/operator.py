@@ -1100,9 +1100,9 @@ class LoadProject(bpy.types.Operator, IFCFileSelector, ImportHelper):
                     metadata_path = Path(str(filepath) + suffix)
                 if metadata_path.exists() and metadata_path.is_file():
                     try:
-                        bpy.ops.bim.load_blend_metadata_and_ifc(filepath=filepath)
-                        self.report({"INFO"}, f"Loaded metadata file: {metadata_path.name}")
-                        return {"FINISHED"}
+                        if "FINISHED" in bpy.ops.bim.load_blend_metadata_and_ifc(filepath=filepath):
+                            self.report({"INFO"}, f"Loaded metadata file: {metadata_path.name}")
+                            return {"FINISHED"}
                     except Exception as e:
                         self.report({"WARNING"}, f"Failed to load metadata file, using regular load: {e}")
 
@@ -3626,10 +3626,27 @@ class LoadBlendMetadataAndIFC(bpy.types.Operator):
         else:
             metadata_path = ifc_file + suffix
 
+        # The metadata file sits next to an IFC that may come from anywhere, so it is opened only if Bonsai
+        # saved it here, and only through the verified copy.
+        metadata_copy = tool.Project.copy_trusted_metadata_blend(metadata_path)
+        if not metadata_copy:
+            self.report(
+                {"WARNING"},
+                f"Not loading {os.path.basename(metadata_path)}: it was not saved by Bonsai on this machine "
+                "or has changed since.",
+            )
+            return {"CANCELLED"}
+        metadata_dir = os.path.dirname(os.path.abspath(metadata_path))
+
         # Define a handler to load the IFC project after the blend file is loaded and context is restored
         @persistent
         def load_handler(*args):
             bpy.app.handlers.load_post.remove(load_handler)
+            # Relative paths were saved relative to the metadata file, not to the copy that was opened.
+            for datablocks in (bpy.data.images, bpy.data.movieclips, bpy.data.sounds, bpy.data.fonts):
+                for datablock in datablocks:
+                    if not datablock.library and datablock.filepath.startswith("//"):
+                        datablock.filepath = bpy.path.abspath(datablock.filepath, start=metadata_dir)
             # After loading metadata, clear blend warning (no geometry loaded yet)
             props = tool.Blender.get_bim_props()
             props.has_blend_warning = False
@@ -3640,7 +3657,7 @@ class LoadBlendMetadataAndIFC(bpy.types.Operator):
             self.report({"INFO"}, f"Loaded metadata and IFC: {metadata_path}, {ifc_file}")
 
         bpy.app.handlers.load_post.append(load_handler)
-        bpy.ops.wm.open_mainfile(filepath=metadata_path)
+        bpy.ops.wm.open_mainfile(filepath=str(metadata_copy))
         return {"FINISHED"}
 
 
