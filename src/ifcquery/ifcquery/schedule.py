@@ -6,8 +6,10 @@ from typing import Any
 import ifcopenshell
 import ifcopenshell.util.sequence as seq
 
+MAX_DEPTH = 100
 
-def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
+
+def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int, depth: int, expanded: set[int]) -> dict[str, Any]:
     task_time = task.TaskTime
     start = None
     finish = None
@@ -19,11 +21,14 @@ def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, dep
     for product in seq.get_task_outputs(task):
         outputs.append({"id": product.id(), "type": product.is_a(), "name": getattr(product, "Name", None)})
 
-    if max_depth is not None and depth >= max_depth:
-        child_count = len(seq.get_nested_tasks(task))
-        subtasks = {"truncated": True, "count": child_count} if child_count else []
+    nested_tasks = seq.get_nested_tasks(task)
+    if task.id() in expanded:
+        subtasks = []
+    elif depth >= max_depth:
+        subtasks = {"truncated": True, "count": len(nested_tasks)} if nested_tasks else []
     else:
-        subtasks = [_task_to_dict(sub, max_depth, depth + 1) for sub in seq.get_nested_tasks(task)]
+        expanded.add(task.id())
+        subtasks = [_task_to_dict(sub, max_depth, depth + 1, expanded) for sub in nested_tasks]
 
     return {
         "id": task.id(),
@@ -50,11 +55,16 @@ def schedule(model: ifcopenshell.file, max_depth: int | None = None) -> list[dic
     :param max_depth: Levels of subtask nesting to expand, counting root tasks
         as level 1. Past the cutoff ``subtasks`` is replaced by a
         ``{"truncated": True, "count": N}`` marker giving the number of tasks
-        not expanded. ``None`` (default) expands to unlimited depth.
+        not expanded. ``None`` (default) expands up to ``MAX_DEPTH`` (100)
+        levels, and larger values are capped at it. A task's subtasks are
+        expanded only the first time it is reached; a task reached again, as
+        in cyclic nesting, is listed with empty ``subtasks``.
     """
+    limit = MAX_DEPTH if max_depth is None else min(max_depth, MAX_DEPTH)
+    expanded: set[int] = set()
     result = []
     for work_schedule in model.by_type("IfcWorkSchedule"):
-        tasks = [_task_to_dict(t, max_depth, depth=1) for t in seq.get_root_tasks(work_schedule)]
+        tasks = [_task_to_dict(t, limit, 1, expanded) for t in seq.get_root_tasks(work_schedule)]
         result.append(
             {
                 "id": work_schedule.id(),

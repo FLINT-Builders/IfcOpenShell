@@ -148,7 +148,11 @@ def main():
 
     schedule_parser = subparsers.add_parser("schedule", help="List work plans and tasks from the model")
     schedule_parser.add_argument(
-        "--depth", type=int, default=None, metavar="N", help="Limit subtask expansion to N levels (default: unlimited)"
+        "--depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit subtask expansion to N levels (default and maximum: 100)",
     )
 
     cost_parser = subparsers.add_parser("cost", help="List cost schedules and cost items from the model")
@@ -157,7 +161,7 @@ def main():
         type=int,
         default=None,
         metavar="N",
-        help="Limit cost item expansion to N levels (default: unlimited)",
+        help="Limit cost item expansion to N levels (default and maximum: 100)",
     )
 
     subparsers.add_parser("contexts", help="List geometric representation contexts and subcontexts")
