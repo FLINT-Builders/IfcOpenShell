@@ -238,8 +238,7 @@ void ifcopenshell::impl::rocks_db_file_storage::process_deletion_inverse(const e
                 std::string s = it->value().ToString();
 
                 // Iterator are snapshotted? So don't get invalidated?
-                std::vector<uint32_t> vals(s.size() / sizeof(uint32_t));
-                memcpy(vals.data(), s.data(), s.size());
+                auto vals = decode_id_list<uint32_t>(s.data(), s.size());
                 auto removed = std::remove(vals.begin(), vals.end(), (uint32_t)id);
                 if (removed != vals.end()) {
                     vals.erase(removed, vals.end());
