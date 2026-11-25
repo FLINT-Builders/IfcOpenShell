@@ -3984,7 +3984,6 @@ class OverrideMoveSelect(bpy.types.Operator):
 
             if parts := ifcopenshell.util.element.get_parts(element):
                 aggregates_to_move.append(tool.Ifc.get_object(element))
-                aggregates_to_move.extend(tool.Ifc.get_object(e) for e in tool.Aggregate.get_parts_recursively(element))
                 continue
 
             # Controls the aggregate level it should consider to move

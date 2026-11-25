@@ -335,6 +335,8 @@ class Spatial(bonsai.core.tool.Spatial):
             elements = set()
             while queue:
                 item = queue.pop()
+                if item in elements:
+                    continue
                 elements.add(item)
                 queue.extend(ifcopenshell.util.element.get_decomposition(item))
         for element in elements:
@@ -617,9 +619,11 @@ class Spatial(bonsai.core.tool.Spatial):
         props = cls.get_spatial_props()
         contracted_containers = set(json.loads(props.contracted_containers))
         queue = [container]
+        seen = {container}
         while queue:
             item = queue.pop()
-            if is_recursive and (children := ifcopenshell.util.element.get_parts(item)):
+            if is_recursive and (children := set(ifcopenshell.util.element.get_parts(item)) - seen):
+                seen.update(children)
                 queue.extend(children)
             contracted_containers.add(item.id())
         props.contracted_containers = json.dumps(list(contracted_containers))
@@ -629,9 +633,11 @@ class Spatial(bonsai.core.tool.Spatial):
         props = cls.get_spatial_props()
         contracted_containers = set(json.loads(props.contracted_containers))
         queue = [container]
+        seen = {container}
         while queue:
             item = queue.pop()
-            if is_recursive and (children := ifcopenshell.util.element.get_parts(item)):
+            if is_recursive and (children := set(ifcopenshell.util.element.get_parts(item)) - seen):
+                seen.update(children)
                 queue.extend(children)
             contracted_containers.discard(item.id())
         props.contracted_containers = json.dumps(list(contracted_containers))
@@ -711,6 +717,7 @@ class Spatial(bonsai.core.tool.Spatial):
 
         if is_recursive:
             queue = [tool.Ifc.get().by_id(ifc_definition_id)]
+            seen = set(queue)
             while queue:
                 element = queue.pop()
                 children = [
@@ -724,7 +731,9 @@ class Spatial(bonsai.core.tool.Spatial):
                         expanded_elements_list.remove(ifc_definition_id)
                     elif should_expand is True and ifc_definition_id not in expanded_elements_list:
                         expanded_elements_list.append(ifc_definition_id)
-                    queue.extend(children)
+                    new_children = [e for e in children if e not in seen]
+                    seen.update(new_children)
+                    queue.extend(new_children)
 
         props.expanded_elements = json.dumps(expanded_elements)
 
@@ -1364,6 +1373,8 @@ class Spatial(bonsai.core.tool.Spatial):
                 elements = set()
                 while queue:
                     item = queue.pop()
+                    if item in elements:
+                        continue
                     elements.add(item)
                     queue.extend(ifcopenshell.util.element.get_decomposition(item))
             if not element_filter:

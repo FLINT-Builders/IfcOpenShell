@@ -431,7 +431,8 @@ class Geometry(bonsai.core.tool.Geometry):
     @classmethod
     def unlock_scale_object_with_openings(cls, obj: bpy.types.Object) -> None:
         element = tool.Ifc.get_entity(obj)
-        queue = {element}
+        seen = {element}
+        queue = [element]
         while queue:
             element = queue.pop()
             if getattr(element, "HasOpenings", None):
@@ -439,7 +440,9 @@ class Geometry(bonsai.core.tool.Geometry):
                 continue
             obj = tool.Ifc.get_object(element)
             cls.unlock_scale(obj)
-            queue.update(new_parts := set(ifcopenshell.util.element.get_parts(element)))
+            new_parts = set(ifcopenshell.util.element.get_parts(element)) - seen
+            seen.update(new_parts)
+            queue.extend(new_parts)
 
     @classmethod
     def delete_ifc_item(cls, obj: bpy.types.Object) -> None:

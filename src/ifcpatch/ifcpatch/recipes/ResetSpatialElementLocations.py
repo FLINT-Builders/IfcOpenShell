@@ -59,11 +59,13 @@ class Patcher:
     def patch(self) -> None:
         project = self.file.by_type("IfcProject")[0]
         queue = [project]
+        seen = {project}
         while queue:
             element = queue.pop()
             if not self.ifc_class or element.is_a(self.ifc_class):
                 self.patch_placement_to_origin(element)
-            if parts := ifcopenshell.util.element.get_parts(element):
+            if parts := set(ifcopenshell.util.element.get_parts(element)) - seen:
+                seen.update(parts)
                 queue.extend(parts)
 
     def patch_placement_to_origin(self, element: ifcopenshell.entity_instance) -> None:
