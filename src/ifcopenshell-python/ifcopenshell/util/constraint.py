@@ -65,21 +65,27 @@ def get_metrics(constraint: ifcopenshell.entity_instance) -> list[ifcopenshell.e
     return metrics
 
 
-def get_metric_reference(metric: ifcopenshell.entity_instance, is_deep=True):
-    def get_reference_Attribute(ref, path):
-        if ref:
-            if is_deep:
-                if not path:
-                    path = ref.AttributeIdentifier
-                else:
-                    path += ".{}".format(ref.AttributeIdentifier) if ref.AttributeIdentifier else ""
-                return get_reference_Attribute(ref.InnerReference, path)
-            else:
-                return ref.AttributeIdentifier
-        return path
+MAX_REFERENCE_DEPTH = 32
 
+
+def get_metric_reference(metric: ifcopenshell.entity_instance, is_deep=True):
     reference = metric.ReferencePath
-    return get_reference_Attribute(reference, "")
+    if not reference:
+        return ""
+    if not is_deep:
+        return reference.AttributeIdentifier
+
+    # InnerReference chains may be cyclic or arbitrarily long in untrusted files.
+    path = ""
+    visited = set()
+    while reference and reference.id() not in visited and len(visited) < MAX_REFERENCE_DEPTH:
+        visited.add(reference.id())
+        if not path:
+            path = reference.AttributeIdentifier
+        elif reference.AttributeIdentifier:
+            path += ".{}".format(reference.AttributeIdentifier)
+        reference = reference.InnerReference
+    return path
 
 
 def get_metric_constraints(
