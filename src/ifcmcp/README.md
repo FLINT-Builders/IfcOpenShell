@@ -225,7 +225,7 @@ ifc_cost(max_depth=2)   # top two levels of the BoQ
 ```
 
 `max_depth` limits cost item expansion, same truncation convention as
-`ifc_schedule`.
+`ifc_schedule`. Defaults to 64 levels.
 
 #### ifc_schema
 
