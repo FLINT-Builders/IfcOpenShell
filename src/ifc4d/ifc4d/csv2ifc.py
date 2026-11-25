@@ -63,6 +63,15 @@ RESOURCE_MAP = {
     "PRODUCT": "IfcConstructionProductResource",
 }
 
+# Leading characters that make spreadsheet applications interpret a CSV cell as a formula.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def escape_formula(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
 
 class Csv2Ifc:
     """Class to import resources from a CSV file into an IFC file.
@@ -296,7 +305,7 @@ class Ifc2Csv:
         self, writer: _csv._writer, resource: ifcopenshell.entity_instance, hierarchy_level: int
     ) -> None:
         row = self.get_row(resource, hierarchy_level)
-        writer.writerow(row)
+        writer.writerow([escape_formula(value) for value in row])
         resources = ifcopenshell.util.resource.get_nested_resources(resource)
         for resource in resources:
             self.process_recourse(writer, resource, hierarchy_level + 1)
