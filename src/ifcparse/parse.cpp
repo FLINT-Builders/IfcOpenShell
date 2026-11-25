@@ -1139,8 +1139,7 @@ void ifcopenshell::impl::rocks_db_file_storage::unregister_inverse(unsigned id_f
     auto inst_id = inst.id();
     auto key = rocksdb_key::inverse(inst_id, from_entity->index_in_schema(), attribute_index);
     if (db->Get(rocksdb::ReadOptions{}, key, &s).ok()) {
-        std::vector<uint32_t> vals(s.size() / sizeof(uint32_t));
-        memcpy(vals.data(), s.data(), s.size());
+        auto vals = decode_id_list<uint32_t>(s.data(), s.size());
         auto it = std::find(vals.begin(), vals.end(), (uint32_t)id_from);
         if (it != vals.end()) {
             vals.erase(it);
@@ -1197,12 +1196,14 @@ void ifcopenshell::impl::rocks_db_file_storage::remove_type_ref(const express::b
         std::string s;
         auto key = rocksdb_key::type_list(new_entity.declaration().index_in_schema());
         if (db->Get(rocksdb::ReadOptions{}, key, &s).ok()) {
-            std::vector<size_t> vals(s.size() / sizeof(size_t));
-            memcpy(vals.data(), s.data(), s.size());
-            vals.erase(std::find(vals.begin(), vals.end(), (size_t)new_entity.id()));
-            s.resize(vals.size() * sizeof(size_t));
-            memcpy(s.data(), vals.data(), s.size());
-            db->Put(wopts, key, s);
+            auto vals = decode_id_list<size_t>(s.data(), s.size());
+            auto it = std::find(vals.begin(), vals.end(), (size_t)new_entity.id());
+            if (it != vals.end()) {
+                vals.erase(it);
+                s.resize(vals.size() * sizeof(size_t));
+                memcpy(s.data(), vals.data(), s.size());
+                db->Put(wopts, key, s);
+            }
         }
     }
 
@@ -3110,8 +3111,7 @@ std::vector<express::base> file::instances_by_type_excl_subtypes(const ifcopensh
             if (it != x.bytype_.end()) {
                 const auto& s = it->second;
                 // @todo generalize this, bytype_ should be a map_adapter
-                std::vector<size_t> vals(s.size() / sizeof(size_t));
-                memcpy(vals.data(), s.data(), s.size());
+                auto vals = decode_id_list<size_t>(s.data(), s.size());
                 for (auto& v : vals) {
                     ret.push_back(x.assert_existance(v, ifcopenshell::impl::rocks_db_file_storage::entityinstance_ref));
                 }
@@ -3149,8 +3149,7 @@ std::vector<express::base> file::instances_by_reference(int t) {
             auto it = std::unique_ptr<rocksdb::Iterator>(x.db->NewIterator(rocksdb::ReadOptions()));
             it->Seek(prefix);
             while (it->Valid() && it->key().starts_with(prefix)) {
-                std::vector<uint32_t> vals(it->value().size() / sizeof(uint32_t));
-                memcpy(vals.data(), it->value().data(), it->value().size());
+                auto vals = decode_id_list<uint32_t>(it->value().data(), it->value().size());
                 for (auto& v : vals) {
                     ret.push_back(instance_by_id(v));
                 }
@@ -3177,8 +3176,7 @@ bool file::all_referencing_instances(int instance_id, const std::function<bool(u
             auto it = std::unique_ptr<rocksdb::Iterator>(x.db->NewIterator(rocksdb::ReadOptions()));
             it->Seek(prefix);
             while (it->Valid() && it->key().starts_with(prefix)) {
-                std::vector<uint32_t> vals(it->value().size() / sizeof(uint32_t));
-                memcpy(vals.data(), it->value().data(), it->value().size());
+                auto vals = decode_id_list<uint32_t>(it->value().data(), it->value().size());
                 for (auto& v : vals) {
                     if (!pred(v)) {
                         return false;
@@ -3337,8 +3335,7 @@ std::vector<int> file::get_inverse_indices_by_id(int instance_id) {
             auto it = std::unique_ptr<rocksdb::Iterator>(x.db->NewIterator(rocksdb::ReadOptions()));
             it->Seek(prefix);
             while (it->Valid() && it->key().starts_with(prefix)) {
-                std::vector<uint32_t> vals(it->value().size() / sizeof(uint32_t));
-                memcpy(vals.data(), it->value().data(), it->value().size());
+                auto vals = decode_id_list<uint32_t>(it->value().data(), it->value().size());
                 auto tuple = key_from_string<std::tuple<int, int, int>>(it->key().ToString().substr(2));
                 for (auto& i : vals) {
                     mapping[i].push_back(std::get<2>(tuple));
@@ -3410,8 +3407,7 @@ std::vector<express::entity> file::get_inverse(int instance_id, const ifcopenshe
                     auto it = std::unique_ptr<rocksdb::Iterator>(x.db->NewIterator(rocksdb::ReadOptions()));
                     it->Seek(prefix);
                     while (it->Valid() && it->key().starts_with(prefix)) {
-                        std::vector<uint32_t> vals(it->value().size() / sizeof(uint32_t));
-                        memcpy(vals.data(), it->value().data(), it->value().size());
+                        auto vals = decode_id_list<uint32_t>(it->value().data(), it->value().size());
                         for (auto& v : vals) {
                             return_value.push_back(instance_by_id(v).template as<express::entity>());
                         }

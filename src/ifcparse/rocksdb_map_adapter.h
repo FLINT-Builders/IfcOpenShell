@@ -32,12 +32,24 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 template <typename T>
 struct is_std_tuple : std::false_type {};
 
 template <typename... Ts>
 struct is_std_tuple<std::tuple<Ts...>> : std::true_type {};
+
+// Stored id lists come from an opened database directory and may have a
+// length that is not a multiple of the id width; trailing bytes are ignored.
+template <typename T>
+std::vector<T> decode_id_list(const char* data, size_t size) {
+    std::vector<T> values(size / sizeof(T));
+    if (!values.empty()) {
+        memcpy(values.data(), data, values.size() * sizeof(T));
+    }
+    return values;
+}
 
 // Serialization and deserialization primitives
 template <typename T>
@@ -88,9 +100,7 @@ struct DefaultCodec<std::vector<uint32_t>> {
         return encoded;
     }
     std::vector<uint32_t> decode(const std::string& encoded) const {
-        std::vector<uint32_t> values(encoded.size() / sizeof(uint32_t), 0);
-        memcpy(values.data(), encoded.data(), encoded.size());
-        return values;
+        return decode_id_list<uint32_t>(encoded.data(), encoded.size());
     }
 };
 
