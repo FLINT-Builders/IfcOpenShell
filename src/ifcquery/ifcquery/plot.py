@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import base64
+import operator
 import os
 from io import BytesIO
 from typing import Any
@@ -53,6 +54,19 @@ except Exception:
 
 VIEWS = ("floorplan", "elevation", "section", "auto")
 OUTPUT_FORMATS = ("svg", "png", "base64")
+MAX_RASTER_DIMENSION = 8192
+MAX_RASTER_PIXELS = MAX_RASTER_DIMENSION * MAX_RASTER_DIMENSION
+
+
+def _raster_dimension(name: str, value: Any) -> int:
+    try:
+        value = operator.index(value)
+    except TypeError:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from None
+    # CairoSVG falls back to the SVG page size when a dimension is 0, so 0 is not "unset".
+    if not 1 <= value <= MAX_RASTER_DIMENSION:
+        raise ValueError(f"{name} must be between 1 and {MAX_RASTER_DIMENSION} pixels, got {value}")
+    return value
 
 
 def _escape_css_attr(name: str) -> str:
@@ -176,16 +190,21 @@ def plot(
         width_mm, height_mm: Page size in mm.
         scale: Model-to-paper scale (0.01 means 1:100).
         merge_projection: Passed through to ifcopenshell.draw.main.
-        png_width, png_height: Raster size in pixels for png/base64 outputs.
+        png_width, png_height: Raster size in pixels for png/base64 outputs, each at most
+            MAX_RASTER_DIMENSION. Each drawing group is rasterised at this size and stacked
+            vertically, so png_width * png_height * groups must not exceed MAX_RASTER_PIXELS.
 
     Raises:
         ImportError: if ifcopenshell.draw or CairoSVG is not available (as required).
-        ValueError: invalid args or selector matches nothing.
+        ValueError: invalid args, raster size over the limits, or selector matches nothing.
     """
     if output_format not in OUTPUT_FORMATS:
         raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, got {output_format!r}")
     if view not in VIEWS:
         raise ValueError(f"view must be one of {VIEWS}, got {view!r}")
+    if output_format != "svg":
+        png_width = _raster_dimension("png_width", png_width)
+        png_height = _raster_dimension("png_height", png_height)
     if not _HAS_DRAW:
         raise ImportError("ifcopenshell.draw is not available in this environment.")
 
@@ -251,6 +270,11 @@ def plot(
     svgs = list(svg_split(BytesIO(svg_bytes)))
     if not svgs:
         raise ValueError(_diagnose_empty_drawing(model, view))
+    if png_width * png_height * len(svgs) > MAX_RASTER_PIXELS:
+        raise ValueError(
+            f"Raster of {png_width}x{png_height} pixels for each of {len(svgs)} drawing groups exceeds "
+            f"the limit of {MAX_RASTER_PIXELS} pixels; reduce png_width/png_height or plot fewer elements"
+        )
 
     composite = None
     png_bytes = None

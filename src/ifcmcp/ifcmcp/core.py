@@ -475,8 +475,8 @@ class IfcSession:
         :param width_mm: Paper width in mm (default 297 = A4).
         :param height_mm: Paper height in mm (default 420 = A4).
         :param scale: Model-to-paper scale ratio (default 0.01 = 1:100).
-        :param png_width: Raster output width in pixels (default 1024).
-        :param png_height: Raster output height in pixels (default 1024).
+        :param png_width: Raster output width in pixels (default 1024, max 8192).
+        :param png_height: Raster output height in pixels (default 1024, max 8192).
         :param output_format: ``'svg'`` or ``'png'`` (default ``'png'``).
         :return: SVG or PNG bytes depending on output_format.
         """
