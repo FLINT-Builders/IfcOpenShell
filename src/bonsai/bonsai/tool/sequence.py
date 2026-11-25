@@ -832,11 +832,13 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def get_work_schedule(cls, task: ifcopenshell.entity_instance) -> Union[ifcopenshell.entity_instance, None]:
-        for rel in task.HasAssignments or []:
-            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
-                return rel.RelatingControl
-        for rel in task.Nests or []:
-            return cls.get_work_schedule(rel.RelatingObject)
+        visited = set()
+        while task is not None and task.id() not in visited:
+            visited.add(task.id())
+            for rel in task.HasAssignments or []:
+                if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
+                    return rel.RelatingControl
+            task = task.Nests[0].RelatingObject if task.Nests else None
 
     @classmethod
     def is_work_schedule_active(cls, work_schedule):
@@ -849,9 +851,8 @@ class Sequence(bonsai.core.tool.Sequence):
 
         def get_ancestor_ids(task):
             ids = []
-            for rel in task.Nests or []:
-                ids.append(rel.RelatingObject.id())
-                ids.extend(get_ancestor_ids(rel.RelatingObject))
+            while task.Nests and (task := task.Nests[0].RelatingObject).id() not in ids:
+                ids.append(task.id())
             return ids
 
         contracted_tasks = json.loads(props.contracted_tasks)
@@ -1585,7 +1586,8 @@ class Sequence(bonsai.core.tool.Sequence):
         if baseline_schedule:
             for rel in task.Declares:
                 for baseline_task in rel.RelatedObjects:
-                    if baseline_schedule.id() == ifcopenshell.util.sequence.get_task_work_schedule(baseline_task).id():
+                    work_schedule = ifcopenshell.util.sequence.get_task_work_schedule(baseline_task)
+                    if work_schedule and baseline_schedule.id() == work_schedule.id():
                         baseline_task = task
                         break
 
