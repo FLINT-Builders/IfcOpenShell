@@ -16,6 +16,8 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
+from collections.abc import Generator
+
 import ifcopenshell
 import ifcopenshell.api.nest
 import ifcopenshell.api.owner
@@ -65,26 +67,46 @@ class Usecase:
     file: ifcopenshell.file
     current: list[ifcopenshell.entity_instance]
     duplicate: list[ifcopenshell.entity_instance]
+    visited: set[int]
 
     def execute(
         self, task: ifcopenshell.entity_instance
     ) -> tuple[list[ifcopenshell.entity_instance], list[ifcopenshell.entity_instance]]:
         self.current = []
         self.duplicate = []
+        self.visited = set()
         self.duplicate_task(task)
         self.copy_sequence_relationship()
         return self.current, self.duplicate
 
     def duplicate_task(self, task: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
+        new_task = self.copy_task(task)
+        # copy_indirect_attributes yields each nested task and is sent back its finished copy,
+        # so nesting is walked depth first without recursion.
+        stack = [(new_task, self.copy_indirect_attributes(task, new_task))]
+        finished_copy = None
+        while stack:
+            try:
+                nested_task = stack[-1][1].send(finished_copy)
+            except StopIteration:
+                finished_copy = stack.pop()[0]
+                continue
+            nested_copy = self.copy_task(nested_task)
+            stack.append((nested_copy, self.copy_indirect_attributes(nested_task, nested_copy)))
+            finished_copy = None
+        return new_task
+
+    def copy_task(self, task: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
+        self.visited.add(task.id())
         new_task = ifcopenshell.util.element.copy_deep(self.file, task)
+        self.visited.add(new_task.id())
         self.current.append(task)
         self.duplicate.append(new_task)
-        self.copy_indirect_attributes(task, new_task)
         return new_task
 
     def copy_indirect_attributes(
         self, from_element: ifcopenshell.entity_instance, to_element: ifcopenshell.entity_instance
-    ) -> None:
+    ) -> Generator[ifcopenshell.entity_instance, ifcopenshell.entity_instance, None]:
         for inverse in self.file.get_inverse(from_element):
             if inverse.is_a("IfcRelDefinesByProperties"):
                 inverse = ifcopenshell.util.element.copy(self.file, inverse)
@@ -92,12 +114,11 @@ class Usecase:
                 pset = ifcopenshell.util.element.copy_deep(self.file, inverse.RelatingPropertyDefinition)
                 inverse.RelatingPropertyDefinition = pset
             elif inverse.is_a("IfcRelNests") and inverse.RelatingObject == from_element:
-                nested_tasks = [e for e in inverse.RelatedObjects]
-                if nested_tasks:
-                    new_tasks = []
-                    for t in nested_tasks:
-                        new_task = self.duplicate_task(t)
-                        new_tasks.append(new_task)
+                new_tasks = []
+                for t in inverse.RelatedObjects:
+                    if t.id() not in self.visited:
+                        new_tasks.append((yield t))
+                if new_tasks:
                     inverse = ifcopenshell.util.element.copy(self.file, inverse)
                     inverse.RelatingObject = to_element
                     inverse.RelatedObjects = new_tasks

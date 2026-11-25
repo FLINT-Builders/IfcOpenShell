@@ -113,6 +113,7 @@ class Usecase:
         }
         self.g = nx.DiGraph()
         self.edges = []
+        self.visited_tasks = set()
         self.g.add_node("start", duration=0, duration_type="ELAPSEDTIME", calendar=None)
         self.g.add_node("finish", duration=0, duration_type="ELAPSEDTIME", calendar=None)
         for rel in self.work_schedule.Controls:
@@ -123,11 +124,18 @@ class Usecase:
         self.g.add_edges_from(self.edges)
 
     def add_node(self, task: ifcopenshell.entity_instance) -> None:
-        if task.IsNestedBy:
-            for rel in task.IsNestedBy:
-                [self.add_node(o) for o in rel.RelatedObjects]
-            return
+        stack = [task]
+        while stack:
+            task = stack.pop()
+            if task.id() in self.visited_tasks:
+                continue
+            self.visited_tasks.add(task.id())
+            if task.IsNestedBy:
+                stack.extend(o for rel in reversed(task.IsNestedBy) for o in reversed(rel.RelatedObjects))
+            else:
+                self.add_leaf_node(task)
 
+    def add_leaf_node(self, task: ifcopenshell.entity_instance) -> None:
         if task.TaskTime and task.TaskTime.ScheduleDuration:
             duration = ifcopenshell.util.date.ifc2datetime(task.TaskTime.ScheduleDuration).days
             duration_type = task.TaskTime.DurationType
