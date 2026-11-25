@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <set>
 
 #include <nlohmann/json.hpp>
 
@@ -165,12 +166,44 @@ void format_entity_instance(ifcopenshell::logger& log, express::base instance, j
 }
 
 
+// Relationships in the input may form cycles or arbitrarily deep chains, so the
+// recursive walk below emits every instance at most once and stops at max_depth.
+struct traversal {
+    static constexpr std::size_t max_depth = 256;
+    std::set<express::base> visited;
+    std::size_t depth = 0;
+};
+
+class depth_scope {
+  public:
+    depth_scope(ifcopenshell::logger& log, traversal& state, const express::base& instance)
+        : state_(state), entered_(state.depth < traversal::max_depth) {
+        if (entered_) {
+            ++state_.depth;
+        } else {
+            log.error("SER", 38, "Maximum relationship depth exceeded", instance);
+        }
+    }
+    ~depth_scope() {
+        if (entered_) {
+            --state_.depth;
+        }
+    }
+    depth_scope(const depth_scope&) = delete;
+    depth_scope& operator=(const depth_scope&) = delete;
+    explicit operator bool() const { return entered_; }
+
+  private:
+    traversal& state_;
+    bool entered_;
+};
+
 // A function to be called recursively. Template specialization is used
 // to descend into decomposition, containment and property relationships.
 template <typename A>
-void descend(ifcopenshell::logger& log, A instance, json& tree, express::base parent = express::base()) {
+void descend(ifcopenshell::logger& log, A instance, json& tree, traversal& state, express::base parent = express::base()) {
     if (instance.declaration().is(IfcSchema::IfcObjectDefinition::Class())) {
-        descend(log, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, parent);
+        descend(log, instance.template as<IfcSchema::IfcObjectDefinition>(), tree, state, parent);
     } else {
         format_entity_instance(log, instance, tree);
     }
@@ -181,13 +214,18 @@ void descend(ifcopenshell::logger& log, A instance, json& tree, express::base pa
 // Descends into the tree by recursing into IfcRelContainedInSpatialStructure,
 // IfcRelDecomposes, IfcRelDefinesByType, IfcRelDefinesByProperties relations.
 template <>
-void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, json& tree, express::base parent) {
+void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, json& tree, traversal& state, express::base parent) {
     if (product.declaration().is(IfcSchema::IfcElement::Class())) {
         auto voids = product.as<IfcSchema::IfcElement>().FillsVoids();
         if (voids.size() == 1 && voids.front().RelatingOpeningElement() != parent) {
             // Fills are placed under their corresponding opening, return early to avoid duplication.
             return;
         }
+    }
+
+    depth_scope scope(log, state, product);
+    if (!scope || !state.visited.insert(product).second) {
+        return;
     }
 
     format_entity_instance(log, product, tree, parent);
@@ -197,7 +235,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
             log, opening, &IfcSchema::IfcOpeningElement::HasFillings, &IfcSchema::IfcRelFillsElement::RelatedBuildingElement);
 
         for (auto& f : fills) {
-            descend(log, f, tree, product);
+            descend(log, f, tree, state, product);
         }
     }
 
@@ -206,7 +244,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
             log, structure, &IfcSchema::IfcSpatialStructureElement::ContainsElements, &IfcSchema::IfcRelContainedInSpatialStructure::RelatedElements);
 
         for (auto& el : elements) {
-            descend(log, el, tree, product);
+            descend(log, el, tree, state, product);
         }
     }
 
@@ -215,7 +253,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
             log, element, &IfcSchema::IfcElement::HasOpenings, &IfcSchema::IfcRelVoidsElement::RelatedOpeningElement);
 
         for (auto& op : openings) {
-            descend(log, op, tree, product);
+            descend(log, op, tree, state, product);
         }
     }
 
@@ -233,7 +271,7 @@ void descend(ifcopenshell::logger& log, IfcSchema::IfcObjectDefinition product, 
 #endif
 
     for (auto& ob : structures) {
-        descend(log, ob, tree, product);
+        descend(log, ob, tree, state, product);
     }
 
     // psets are handled as part of format_entity_instance()
@@ -581,7 +619,8 @@ void POSTFIX_SCHEMA(json_serializer)::finalize() {
     }
     */
 
-    descend(logger(), project, output["metaObjects"]);
+    traversal state;
+    descend(logger(), project, output["metaObjects"], state);
 
     std::ofstream f(ifcopenshell::path::from_utf8(json_filename).c_str());
     f << output.dump(4);
