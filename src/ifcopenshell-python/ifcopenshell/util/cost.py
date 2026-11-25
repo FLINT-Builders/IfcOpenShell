@@ -219,9 +219,23 @@ def get_root_cost_items(cost_schedule: ifcopenshell.entity_instance) -> list[ifc
 def get_all_nested_cost_items(
     cost_item: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
-    for cost_item in get_nested_cost_items(cost_item):
-        yield cost_item
-        yield from get_all_nested_cost_items(cost_item)
+    """Get the cost items nested under a cost item at any depth, in depth-first order.
+
+    An item that is already on the current nesting path is skipped, so a cyclic nest is not followed again.
+    """
+    path = [cost_item.id()]
+    path_ids = set(path)
+    stack = [iter(get_nested_cost_items(cost_item))]
+    while stack:
+        nested_cost_item = next(stack[-1], None)
+        if nested_cost_item is None:
+            stack.pop()
+            path_ids.remove(path.pop())
+        elif nested_cost_item.id() not in path_ids:
+            yield nested_cost_item
+            path.append(nested_cost_item.id())
+            path_ids.add(nested_cost_item.id())
+            stack.append(iter(get_nested_cost_items(nested_cost_item)))
 
 
 def get_nested_cost_items(cost_item: ifcopenshell.entity_instance, is_deep=False) -> list[ifcopenshell.entity_instance]:
@@ -331,12 +345,22 @@ def get_product_quantity_names(elements: list[ifcopenshell.entity_instance]) -> 
 
 
 def get_cost_schedule(cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
-    """Returns the cost schedule of a cost item."""
-    for rel in cost_item.HasAssignments or []:
-        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
-            return rel.RelatingControl
-    for rel in cost_item.Nests or []:
-        return get_cost_schedule(rel.RelatingObject)
+    """Returns the cost schedule of a cost item.
+
+    Parent cost items are searched in nesting order. Each is visited once, so a cyclic nest that never reaches a
+    cost schedule returns None.
+    """
+    visited = set()
+    stack = [cost_item]
+    while stack:
+        cost_item = stack.pop()
+        if cost_item.id() in visited:
+            continue
+        visited.add(cost_item.id())
+        for rel in cost_item.HasAssignments or []:
+            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+                return rel.RelatingControl
+        stack.extend(rel.RelatingObject for rel in reversed(cost_item.Nests or []))
 
 
 def get_cost_rate(
@@ -344,13 +368,14 @@ def get_cost_rate(
 ) -> Optional[ifcopenshell.entity_instance]:
     """Returns the cost rate of a cost item."""
     # There is no direct relationship between a cost item and a cost rate in IFC, so we need to infer it, based on the assumption that cost_rate.CostValues == cost_item.CostValues.
-    if get_cost_schedule(cost_item).PredefinedType == "SCHEDULEOFRATES":
+    schedule = get_cost_schedule(cost_item)
+    if schedule and schedule.PredefinedType == "SCHEDULEOFRATES":
         return None  # Cost item is already a cost rate
     if cost_item.CostValues:
         potential_rates = file.get_inverse(cost_item.CostValues[0])
         for potential_rate in potential_rates:
             schedule = get_cost_schedule(potential_rate)
-            if schedule.PredefinedType == "SCHEDULEOFRATES":
+            if schedule and schedule.PredefinedType == "SCHEDULEOFRATES":
                 return potential_rate
     return None
 
