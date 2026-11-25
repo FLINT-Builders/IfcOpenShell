@@ -791,14 +791,19 @@ class Loader(bonsai.core.tool.Loader):
     def find_decomposed_ifc_class(
         cls, element: ifcopenshell.entity_instance, ifc_class: str
     ) -> Union[ifcopenshell.entity_instance, None]:
-        if element.is_a(ifc_class):
-            return element
-        rel_aggregates = element.IsDecomposedBy
-        for rel_aggregate in rel_aggregates:
-            for part in rel_aggregate.RelatedObjects:
-                result = cls.find_decomposed_ifc_class(part, ifc_class)
-                if result:
-                    return result
+        # Track visited elements, as files may contain cyclic decompositions.
+        queue = [element]
+        visited = set()
+        while queue:
+            element = queue.pop()
+            if element in visited:
+                continue
+            visited.add(element)
+            if element.is_a(ifc_class):
+                return element
+            for rel_aggregate in reversed(element.IsDecomposedBy):
+                queue.extend(reversed(rel_aggregate.RelatedObjects))
+        return None
 
     @classmethod
     def create_generic_shape(
