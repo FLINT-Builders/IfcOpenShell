@@ -51,25 +51,40 @@ class ifc5D2json:
         return schedule_data
 
     def extract_cost_item_data(self, cost_item: ifcopenshell.entity_instance, json_data):
-        data = {}
-        self.extract_cost_item_quantities(cost_item, data)
-        self.populate_cost_values(cost_item, data)
-        self.populate_nesting_index(cost_item, data)
-        cost_rate = ifcopenshell.util.cost.get_cost_rate(self.file, cost_item)
-        data = {**data, **cost_item.get_info(recursive=True)}
-        data["id"] = cost_item.id()
-        data["IsNestedBy"] = []
-        data["IsSum"] = self.check_if_cost_item_is_sum(cost_item)
-        data["Classification"] = self.get_cost_classifications(cost_item)
-        data["CostRate"] = {
-            "id": cost_rate.id() if cost_rate else None,
-            "Identification": cost_rate.Identification if cost_rate else None,
-            "Name": cost_rate.Name if cost_rate else None,
-        }
-        json_data.append(data)
-        for rel in cost_item.IsNestedBy or []:
-            for sub_cost in rel.RelatedObjects:
-                self.extract_cost_item_data(sub_cost, data["IsNestedBy"])
+        # Walk the nest depth first on an explicit stack. A nested item already on the current path is skipped, so a
+        # cyclic nest is exported once around. A None in place of the output list marks leaving that item's subtree.
+        path = set()
+        stack = [(cost_item, json_data)]
+        while stack:
+            cost_item, json_data = stack.pop()
+            if json_data is None:
+                path.remove(cost_item.id())
+                continue
+            data = {}
+            self.extract_cost_item_quantities(cost_item, data)
+            self.populate_cost_values(cost_item, data)
+            self.populate_nesting_index(cost_item, data)
+            cost_rate = ifcopenshell.util.cost.get_cost_rate(self.file, cost_item)
+            data = {**data, **cost_item.get_info(recursive=True)}
+            data["id"] = cost_item.id()
+            data["IsNestedBy"] = []
+            data["IsSum"] = self.check_if_cost_item_is_sum(cost_item)
+            data["Classification"] = self.get_cost_classifications(cost_item)
+            data["CostRate"] = {
+                "id": cost_rate.id() if cost_rate else None,
+                "Identification": cost_rate.Identification if cost_rate else None,
+                "Name": cost_rate.Name if cost_rate else None,
+            }
+            json_data.append(data)
+            path.add(cost_item.id())
+            stack.append((cost_item, None))
+            sub_costs = [
+                sub_cost
+                for rel in cost_item.IsNestedBy or []
+                for sub_cost in rel.RelatedObjects
+                if sub_cost.id() not in path
+            ]
+            stack.extend((sub_cost, data["IsNestedBy"]) for sub_cost in reversed(sub_costs))
 
     def get_cost_classifications(self, cost_item: ifcopenshell.entity_instance) -> list:
         results = []
