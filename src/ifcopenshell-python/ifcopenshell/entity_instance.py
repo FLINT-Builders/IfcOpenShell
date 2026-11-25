@@ -339,50 +339,7 @@ class entity_instance_mixin:
             >>> dict_keys(['Description', 'Name', 'BuildingAddress', 'LongName', 'GlobalId', 'ObjectPlacement', 'OwnerHistory', 'ObjectType',
             >>> ...'ElevationOfTerrain', 'CompositionType', 'id', 'Representation', 'type', 'ElevationOfRefHeight'])
         """
-
-        def _():
-            try:
-                if include_identifier:
-                    yield "id", self.id()
-                yield "type", self.is_a()
-            except BaseException:
-                logging.exception("unhandled exception while getting id / type info on {}".format(self))
-            for i in range(len(self)):
-                try:
-                    if self.get_attribute_names()[i] in ignore:
-                        continue
-                    attr_value = self[i]
-
-                    to_include = {"v": True}
-
-                    if recursive or scalar_only:
-
-                        def is_instance(e):
-                            return isinstance(e, entity_instance_mixin)
-
-                        def get_info_(inst):
-                            return entity_instance_mixin.get_info(
-                                inst,
-                                include_identifier=include_identifier,
-                                recursive=recursive,
-                                return_type=return_type,
-                                ignore=ignore,
-                            )
-
-                        def do_ignore(inst):
-                            to_include["v"] = False
-                            return None
-
-                        attr_value = entity_instance_mixin.walk(
-                            is_instance, get_info_ if recursive else do_ignore, attr_value
-                        )
-
-                    if to_include["v"]:
-                        yield self.attribute_name(i), attr_value
-                except BaseException:
-                    logging.exception("unhandled exception occurred setting attribute name for {}".format(self))
-
-        return return_type(_())
+        return _get_info_py(self, include_identifier, recursive, return_type, ignore, scalar_only, set())
 
     def get_info(
         self,
@@ -405,3 +362,66 @@ class entity_instance_mixin:
         )
 
     __dict__ = property(get_info)
+
+
+def _get_info_py(
+    self: entity_instance_mixin,
+    include_identifier: bool,
+    recursive: bool,
+    return_type: Union[type[dict], type],
+    ignore: Sequence[str],
+    scalar_only: bool,
+    expanding: set[int],
+) -> dict[str, Any]:
+    # `expanding` holds the identities of the instances from the root down to
+    # `self`. A reference back into that chain is a cycle and is not expanded.
+    def id_and_type():
+        try:
+            if include_identifier:
+                yield "id", self.id()
+            yield "type", self.is_a()
+        except BaseException:
+            logging.exception("unhandled exception while getting id / type info on {}".format(self))
+
+    def _():
+        yield from id_and_type()
+        for i in range(len(self)):
+            try:
+                if self.get_attribute_names()[i] in ignore:
+                    continue
+                attr_value = self[i]
+
+                to_include = {"v": True}
+
+                if recursive or scalar_only:
+
+                    def is_instance(e):
+                        return isinstance(e, entity_instance_mixin)
+
+                    def get_info_(inst):
+                        return _get_info_py(inst, include_identifier, recursive, return_type, ignore, False, expanding)
+
+                    def do_ignore(inst):
+                        to_include["v"] = False
+                        return None
+
+                    attr_value = entity_instance_mixin.walk(
+                        is_instance, get_info_ if recursive else do_ignore, attr_value
+                    )
+
+                if to_include["v"]:
+                    yield self.attribute_name(i), attr_value
+            except BaseException:
+                logging.exception("unhandled exception occurred setting attribute name for {}".format(self))
+
+    if not (recursive and self.is_entity()):
+        return return_type(_())
+
+    identity = self.identity()
+    if identity in expanding:
+        return return_type(id_and_type())
+    expanding.add(identity)
+    try:
+        return return_type(_())
+    finally:
+        expanding.discard(identity)

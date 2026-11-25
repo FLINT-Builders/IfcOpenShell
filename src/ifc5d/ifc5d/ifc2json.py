@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import ifcopenshell
 import ifcopenshell.util.cost
@@ -133,7 +133,9 @@ class ifc5D2json:
         if is_sum:
             data["TotalAppliedValue"] = None
 
-    def extract_cost_value(self, root_element, root_element_data, cost_value):
+    def extract_cost_value(self, root_element, root_element_data, cost_value, expanding: Optional[set[int]] = None):
+        # `expanding` holds the ids of the cost values this one is nested in.
+        expanding = set() if expanding is None else expanding
         value_data = cost_value.get_info()
         del value_data["AppliedValue"]
         if value_data["UnitBasis"]:
@@ -156,8 +158,11 @@ class ifc5D2json:
         value_data["Formula"] = ifcopenshell.util.cost.serialise_cost_value(cost_value)
 
         self._cost_values[cost_value.id()] = value_data
+        expanding.add(cost_value.id())
         for component in cost_value.Components or []:
-            self.extract_cost_value(root_element, root_element_data, component)
+            if component.id() not in expanding:
+                self.extract_cost_value(root_element, root_element_data, component, expanding)
+        expanding.discard(cost_value.id())
 
     def extract_cost_item_quantities(self, cost_item, data):
         data["TotalCostQuantity"] = ifcopenshell.util.cost.get_total_quantity(cost_item)
