@@ -321,6 +321,7 @@ class Usecase:
             [
                 self.cascade_task(nested_task, task_sequence=task_sequence + [task])
                 for nested_task in rel.RelatedObjects or []
+                if nested_task != task and nested_task not in task_sequence
             ]
 
     def get_lag_time_days(self, lag_time: ifcopenshell.entity_instance) -> int:

@@ -232,6 +232,7 @@ class Sequence(bonsai.core.tool.Sequence):
         props.tasks.clear()
         props = cls.get_work_schedule_props()
         cls.contracted_tasks = json.loads(props.contracted_tasks)
+        cls.task_tree_ids = set()
 
         related_objects_ids = cls.get_sorted_tasks_ids(ifcopenshell.util.sequence.get_root_tasks(work_schedule))
         for related_object_id in related_objects_ids:
@@ -269,6 +270,9 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def create_new_task_li(cls, related_object_id: int, level_index: int) -> None:
+        if related_object_id in cls.task_tree_ids:
+            return
+        cls.task_tree_ids.add(related_object_id)
         task = tool.Ifc.get().by_id(related_object_id)
         props = cls.get_task_tree_props()
         new = props.tasks.add()
@@ -832,11 +836,16 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def get_work_schedule(cls, task: ifcopenshell.entity_instance) -> Union[ifcopenshell.entity_instance, None]:
-        for rel in task.HasAssignments or []:
-            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
-                return rel.RelatingControl
-        for rel in task.Nests or []:
-            return cls.get_work_schedule(rel.RelatingObject)
+        visited = set()
+        while task.id() not in visited:
+            visited.add(task.id())
+            for rel in task.HasAssignments or []:
+                if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcWorkSchedule"):
+                    return rel.RelatingControl
+            if not task.Nests:
+                return None
+            task = task.Nests[0].RelatingObject
+        return None
 
     @classmethod
     def is_work_schedule_active(cls, work_schedule):
@@ -849,9 +858,13 @@ class Sequence(bonsai.core.tool.Sequence):
 
         def get_ancestor_ids(task):
             ids = []
-            for rel in task.Nests or []:
-                ids.append(rel.RelatingObject.id())
-                ids.extend(get_ancestor_ids(rel.RelatingObject))
+            parents = [rel.RelatingObject for rel in reversed(task.Nests or [])]
+            while parents:
+                parent = parents.pop()
+                if parent.id() in ids:
+                    continue
+                ids.append(parent.id())
+                parents.extend(rel.RelatingObject for rel in reversed(parent.Nests or []))
             return ids
 
         contracted_tasks = json.loads(props.contracted_tasks)
@@ -1192,6 +1205,7 @@ class Sequence(bonsai.core.tool.Sequence):
         cls.to_demolish = set()
         cls.in_demolition = set()
         cls.demolished = set()
+        cls.processed_task_ids = set()
         for rel in work_schedule.Controls or []:
             for related_object in rel.RelatedObjects:
                 if related_object.is_a("IfcTask"):
@@ -1207,6 +1221,9 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def process_task_status(cls, task: ifcopenshell.entity_instance, date: datetime) -> None:
+        if task.id() in cls.processed_task_ids:
+            return
+        cls.processed_task_ids.add(task.id())
         for rel in task.IsNestedBy or []:
             [cls.process_task_status(related_object, date) for related_object in rel.RelatedObjects]
         start = ifcopenshell.util.sequence.derive_date(task, "ScheduleStart", is_earliest=True)
@@ -1333,6 +1350,9 @@ class Sequence(bonsai.core.tool.Sequence):
     @classmethod
     def get_animation_product_frames(cls, work_schedule: ifcopenshell.entity_instance, settings: dict[str, Any]):
         def preprocess_task(task):
+            if task.id() in preprocessed_task_ids:
+                return
+            preprocessed_task_ids.add(task.id())
             for subtask in ifcopenshell.util.sequence.get_nested_tasks(task):
                 preprocess_task(subtask)
             start = ifcopenshell.util.sequence.derive_date(task, "ScheduleStart", is_earliest=True)
@@ -1361,6 +1381,7 @@ class Sequence(bonsai.core.tool.Sequence):
             )
 
         product_frames = {}
+        preprocessed_task_ids = set()
         for root_task in ifcopenshell.util.sequence.get_root_tasks(work_schedule):
             preprocess_task(root_task)
         return product_frames
@@ -1560,6 +1581,7 @@ class Sequence(bonsai.core.tool.Sequence):
             relating_work_schedule = work_schedule.IsDeclaredBy[0].RelatingObject
             work_schedule = relating_work_schedule
         tasks_json = []
+        cls.task_json_ids = set()
         for task in ifcopenshell.util.sequence.get_root_tasks(work_schedule):
             if is_baseline:
                 cls.create_new_task_json(task, tasks_json, sequence_type_map, baseline_schedule=work_schedule)
@@ -1569,6 +1591,9 @@ class Sequence(bonsai.core.tool.Sequence):
 
     @classmethod
     def create_new_task_json(cls, task, json, type_map=None, baseline_schedule=None):
+        if task.id() in cls.task_json_ids:
+            return
+        cls.task_json_ids.add(task.id())
         task_time = task.TaskTime
         resources = ifcopenshell.util.sequence.get_task_resources(task, is_recursive=False)
 
