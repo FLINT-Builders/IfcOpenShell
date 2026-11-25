@@ -1228,7 +1228,10 @@ class Loader(bonsai.core.tool.Loader):
     def is_native_swept_disk_solid(
         cls, element: ifcopenshell.entity_instance, representation: ifcopenshell.entity_instance
     ) -> bool:
-        items = [i["item"] for i in ifcopenshell.util.representation.resolve_items(representation)]
+        try:
+            items = [i["item"] for i in ifcopenshell.util.representation.resolve_items(representation)]
+        except ValueError:
+            return False
         if len(items) == 1 and items[0].is_a("IfcSweptDiskSolid"):
             if tool.Parametric.is_railing(element):
                 return False
