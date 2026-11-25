@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import ifcopenshell
 import ifcopenshell.util.cost
@@ -45,12 +45,29 @@ class ifc5D2json:
     def build_schedule_tree(self, cost_schedule: ifcopenshell.entity_instance) -> dict[str, Any]:
         schedule_data = []
         self._cost_values = {}
+        visited: set[int] = set()
         for rel in cost_schedule.Controls or []:
             for cost_item in rel.RelatedObjects:
-                self.extract_cost_item_data(cost_item, schedule_data)
+                self.extract_cost_item_data(cost_item, schedule_data, visited)
         return schedule_data
 
-    def extract_cost_item_data(self, cost_item: ifcopenshell.entity_instance, json_data):
+    def extract_cost_item_data(
+        self, cost_item: ifcopenshell.entity_instance, json_data, visited: Optional[set[int]] = None
+    ):
+        # Cost items already extracted are skipped, as nesting may form a cycle.
+        visited = set() if visited is None else visited
+        stack = [(cost_item, json_data)]
+        while stack:
+            cost_item, json_data = stack.pop()
+            if cost_item.id() in visited:
+                continue
+            visited.add(cost_item.id())
+            data = self.get_cost_item_data(cost_item)
+            json_data.append(data)
+            sub_costs = [sub_cost for rel in cost_item.IsNestedBy or [] for sub_cost in rel.RelatedObjects]
+            stack.extend((sub_cost, data["IsNestedBy"]) for sub_cost in reversed(sub_costs))
+
+    def get_cost_item_data(self, cost_item: ifcopenshell.entity_instance) -> dict[str, Any]:
         data = {}
         self.extract_cost_item_quantities(cost_item, data)
         self.populate_cost_values(cost_item, data)
@@ -66,10 +83,7 @@ class ifc5D2json:
             "Identification": cost_rate.Identification if cost_rate else None,
             "Name": cost_rate.Name if cost_rate else None,
         }
-        json_data.append(data)
-        for rel in cost_item.IsNestedBy or []:
-            for sub_cost in rel.RelatedObjects:
-                self.extract_cost_item_data(sub_cost, data["IsNestedBy"])
+        return data
 
     def get_cost_classifications(self, cost_item: ifcopenshell.entity_instance) -> list:
         results = []
