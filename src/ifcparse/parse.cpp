@@ -972,7 +972,7 @@ direct_aggregate read_direct_aggregate(
             }
         } else if (next.is_keyword()) {
             try {
-                const auto* declaration = (storage.schema ? storage.schema : storage.file->schema())->declaration_by_name(next.as_string());
+                const auto* declaration = storage.effective_schema()->declaration_by_name(next.as_string());
                 tokens->next();
                 auto data = storage.load(tokens, entity_instance_name, declaration, entity, attribute_index);
                 storage.read_simple_type_instances.push_back(data);
@@ -1047,7 +1047,7 @@ shared_pointer_type ifcopenshell::impl::in_memory_file_storage::load(
                 }
             } else if (next.is_keyword()) {
                 try {
-                    const auto* simple_declaration = (schema ? schema : file->schema())->declaration_by_name(next.as_string());
+                    const auto* simple_declaration = effective_schema()->declaration_by_name(next.as_string());
                     tokens->next();
                     if (retain_value) {
                         auto data = load(tokens, entity_instance_name, simple_declaration, entity, reference_attribute_index);
@@ -1085,6 +1085,16 @@ void ifcopenshell::impl::in_memory_file_storage::try_read_semicolon(ifcopenshell
     if (!semilocon.is_operator(';')) {
         tokens->stream->seek(old_offset);
     }
+}
+
+const ifcopenshell::schema_definition* ifcopenshell::impl::in_memory_file_storage::effective_schema() const {
+    if (schema != nullptr) {
+        return schema;
+    }
+    if (file != nullptr) {
+        return file->schema();
+    }
+    throw exception("Typed value encountered before schema is known");
 }
 
 void ifcopenshell::impl::in_memory_file_storage::register_inverse(unsigned id_from, const ifcopenshell::entity* from_entity, int inst_id, int attribute_index) {
