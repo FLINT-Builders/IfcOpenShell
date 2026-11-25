@@ -8,21 +8,38 @@ import ifcopenshell.util.cost as cost_util
 
 
 def _cost_item_to_dict(item: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
-    raw_values = cost_util.get_cost_values(item)
-    values = [{"formula": v.get("label", ""), "category": v.get("category")} for v in raw_values]
+    # Walk the nest depth first on an explicit stack. A nested item already on the current path is skipped, so a
+    # cyclic nest is listed once around. A None in place of the output list marks leaving that item's subtree.
+    result: list[dict[str, Any]] = []
+    path: set[int] = set()
+    stack: list[tuple[ifcopenshell.entity_instance, int, list | None]] = [(item, depth, result)]
+    while stack:
+        item, depth, siblings = stack.pop()
+        if siblings is None:
+            path.remove(item.id())
+            continue
 
-    if max_depth is not None and depth >= max_depth:
-        child_count = len(cost_util.get_nested_cost_items(item))
-        subitems = {"truncated": True, "count": child_count} if child_count else []
-    else:
-        subitems = [_cost_item_to_dict(sub, max_depth, depth + 1) for sub in cost_util.get_nested_cost_items(item)]
+        raw_values = cost_util.get_cost_values(item)
+        values = [{"formula": v.get("label", ""), "category": v.get("category")} for v in raw_values]
 
-    return {
-        "id": item.id(),
-        "name": getattr(item, "Name", None),
-        "values": values,
-        "subitems": subitems,
-    }
+        path.add(item.id())
+        stack.append((item, depth, None))
+        nested = [sub for sub in cost_util.get_nested_cost_items(item) if sub.id() not in path]
+        if max_depth is not None and depth >= max_depth:
+            subitems = {"truncated": True, "count": len(nested)} if nested else []
+        else:
+            subitems = []
+            stack.extend((sub, depth + 1, subitems) for sub in reversed(nested))
+
+        siblings.append(
+            {
+                "id": item.id(),
+                "name": getattr(item, "Name", None),
+                "values": values,
+                "subitems": subitems,
+            }
+        )
+    return result[0]
 
 
 def cost(model: ifcopenshell.file, max_depth: int | None = None) -> list[dict[str, Any]]:
