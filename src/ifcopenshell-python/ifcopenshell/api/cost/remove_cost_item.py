@@ -17,7 +17,7 @@
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
 import ifcopenshell
-import ifcopenshell.api.cost
+import ifcopenshell.util.cost
 import ifcopenshell.util.element
 
 
@@ -40,24 +40,24 @@ def remove_cost_item(file: ifcopenshell.file, cost_item: ifcopenshell.entity_ins
         ifcopenshell.api.cost.remove_cost_item(model, cost_item=item)
     """
     # TODO: do a deep purge
-    for inverse in file.get_inverse(cost_item):
-        if inverse.is_a("IfcRelNests"):
-            if inverse.RelatingObject == cost_item:
-                for related_object in inverse.RelatedObjects:
-                    ifcopenshell.api.cost.remove_cost_item(file, cost_item=related_object)
-            elif inverse.RelatedObjects == (cost_item,):
+    cost_items = [cost_item, *ifcopenshell.util.cost.get_all_nested_cost_items(cost_item)]
+    # Nested items are removed before their parents, which also removes the parents' nesting relationships.
+    for cost_item in reversed(cost_items):
+        for inverse in file.get_inverse(cost_item):
+            if inverse.is_a("IfcRelNests"):
+                if inverse.RelatedObjects == (cost_item,):
+                    history = inverse.OwnerHistory
+                    file.remove(inverse)
+                    if history:
+                        ifcopenshell.util.element.remove_deep2(file, history)
+            elif inverse.is_a("IfcRelAssignsToControl"):
+                if len(inverse.RelatedObjects) >= 2:
+                    continue
                 history = inverse.OwnerHistory
                 file.remove(inverse)
                 if history:
                     ifcopenshell.util.element.remove_deep2(file, history)
-        elif inverse.is_a("IfcRelAssignsToControl"):
-            if len(inverse.RelatedObjects) >= 2:
-                continue
-            history = inverse.OwnerHistory
-            file.remove(inverse)
-            if history:
-                ifcopenshell.util.element.remove_deep2(file, history)
-    history = cost_item.OwnerHistory
-    file.remove(cost_item)
-    if history:
-        ifcopenshell.util.element.remove_deep2(file, history)
+        history = cost_item.OwnerHistory
+        file.remove(cost_item)
+        if history:
+            ifcopenshell.util.element.remove_deep2(file, history)

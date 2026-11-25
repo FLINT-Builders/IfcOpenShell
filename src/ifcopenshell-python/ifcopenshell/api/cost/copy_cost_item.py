@@ -16,10 +16,12 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Union
+from collections.abc import Generator
+from typing import Any, Union
 
 import ifcopenshell
 import ifcopenshell.api.nest
+import ifcopenshell.util.cost
 import ifcopenshell.util.element
 
 
@@ -56,23 +58,29 @@ def copy_cost_item(
 class Usecase:
     file: ifcopenshell.file
     new_cost_items: list[ifcopenshell.entity_instance]
+    copied_cost_items: set[int]
 
     def execute(
         self, cost_item: ifcopenshell.entity_instance
     ) -> Union[ifcopenshell.entity_instance, list[ifcopenshell.entity_instance]]:
         self.new_cost_items = []
-        self.duplicate_cost_item(cost_item)
+        # Nesting read from a file may be cyclic, so each item is copied at most once.
+        self.copied_cost_items = set()
+        ifcopenshell.util.cost._evaluate(self.duplicate_cost_item(cost_item))
         return self.new_cost_items[0] if len(self.new_cost_items) == 1 else self.new_cost_items
 
-    def duplicate_cost_item(self, cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
+    def duplicate_cost_item(
+        self, cost_item: ifcopenshell.entity_instance
+    ) -> Generator[Generator, Any, ifcopenshell.entity_instance]:
         new_cost_item = ifcopenshell.util.element.copy_deep(self.file, cost_item)
+        self.copied_cost_items.update((cost_item.id(), new_cost_item.id()))
         self.new_cost_items.append(new_cost_item)
-        self.copy_indirect_attributes(cost_item, new_cost_item)
+        yield self.copy_indirect_attributes(cost_item, new_cost_item)
         return new_cost_item
 
     def copy_indirect_attributes(
         self, from_element: ifcopenshell.entity_instance, to_element: ifcopenshell.entity_instance
-    ) -> None:
+    ) -> Generator[Generator, Any, None]:
         for inverse in self.file.get_inverse(from_element):
             if inverse.is_a("IfcRelDefinesByProperties"):
                 inverse = ifcopenshell.util.element.copy(self.file, inverse)
@@ -80,11 +88,11 @@ class Usecase:
                 pset = ifcopenshell.util.element.copy_deep(self.file, inverse.RelatingPropertyDefinition)
                 inverse.RelatingPropertyDefinition = pset
             elif inverse.is_a("IfcRelNests") and inverse.RelatingObject == from_element:
-                nested_cost_items = [e for e in inverse.RelatedObjects]
+                nested_cost_items = [e for e in inverse.RelatedObjects if e.id() not in self.copied_cost_items]
                 if nested_cost_items:
                     new_cost_items = []
                     for cost_item in nested_cost_items:
-                        new_cost_item = self.duplicate_cost_item(cost_item)
+                        new_cost_item = yield self.duplicate_cost_item(cost_item)
                         new_cost_items.append(new_cost_item)
                     inverse = ifcopenshell.util.element.copy(self.file, inverse)
                     inverse.RelatingObject = to_element

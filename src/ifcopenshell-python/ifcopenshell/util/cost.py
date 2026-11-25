@@ -60,15 +60,57 @@ def get_total_quantity(root_element: ifcopenshell.entity_instance) -> Union[floa
         return quantity[3] if quantity else 1.0
 
 
+def _evaluate(generator: Generator) -> Any:
+    # Runs generators that yield sub-generators instead of recursing, so that
+    # deeply nested cost items cannot exhaust the Python stack.
+    stack = [generator]
+    result = None
+    while stack:
+        try:
+            child = stack[-1].send(result)
+        except StopIteration as stop:
+            stack.pop()
+            result = stop.value
+        else:
+            stack.append(child)
+            result = None
+    return result
+
+
 def calculate_applied_value(
     root_element: ifcopenshell.entity_instance,
     cost_value: ifcopenshell.entity_instance,
     category_filter: Optional[str] = None,
 ) -> float:
+    return _evaluate(_calculate_applied_value(root_element, cost_value, category_filter, {}))
+
+
+def _calculate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    cache: dict[tuple, float],
+) -> Generator[Generator, float, float]:
+    # Each value is calculated once per call. Nesting or components read from
+    # a file may be cyclic, so a value reached again while it is still being
+    # calculated contributes nothing.
+    key = (root_element.id(), cost_value.id())
+    if key not in cache:
+        cache[key] = 0.0
+        cache[key] = yield _calculate_uncached_applied_value(root_element, cost_value, category_filter, cache)
+    return cache[key]
+
+
+def _calculate_uncached_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    cache: dict[tuple, float],
+) -> Generator[Generator, float, float]:
     if cost_value.ArithmeticOperator and cost_value.Components:
         component_values = []
         for component in cost_value.Components:
-            component_values.append(calculate_applied_value(root_element, component, category_filter))
+            component_values.append((yield _calculate_applied_value(root_element, component, category_filter, cache)))
         if cost_value.ArithmeticOperator == "ADD":
             return sum(component_values)
         result = component_values.pop(0)
@@ -89,18 +131,34 @@ def calculate_applied_value(
         return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category == "*":
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element)
+            return (yield _sum_child_root_elements(root_element, None, cache))
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category:
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element, category_filter=cost_value.Category)
+            return (yield _sum_child_root_elements(root_element, cost_value.Category, cache))
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     return 0.0
 
 
 def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category_filter: Optional[str] = None) -> float:
+    return _evaluate(_sum_child_root_elements(root_element, category_filter, {}))
+
+
+def _sum_child_root_elements(
+    root_element: ifcopenshell.entity_instance, category_filter: Optional[str], cache: dict[tuple, float]
+) -> Generator[Generator, float, float]:
+    key = ("sum", root_element.id(), category_filter)
+    if key not in cache:
+        cache[key] = 0.0
+        cache[key] = yield _sum_uncached_child_root_elements(root_element, category_filter, cache)
+    return cache[key]
+
+
+def _sum_uncached_child_root_elements(
+    root_element: ifcopenshell.entity_instance, category_filter: Optional[str], cache: dict[tuple, float]
+) -> Generator[Generator, float, float]:
     result = 0.0
     for rel in root_element.IsNestedBy:
         for child_root_element in rel.RelatedObjects:
@@ -117,7 +175,9 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
             for child_cost_value in values or []:
                 if category_filter and child_cost_value.Category != category_filter:
                     continue
-                child_applied_value = calculate_applied_value(new_child_root_element, child_cost_value)
+                child_applied_value = yield _calculate_applied_value(
+                    new_child_root_element, child_cost_value, None, cache
+                )
                 child_quantity = get_total_quantity(child_root_element)
                 child_quantity = 1.0 if child_quantity is None else child_quantity
                 if child_cost_value.UnitBasis:
@@ -219,9 +279,24 @@ def get_root_cost_items(cost_schedule: ifcopenshell.entity_instance) -> list[ifc
 def get_all_nested_cost_items(
     cost_item: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
-    for cost_item in get_nested_cost_items(cost_item):
-        yield cost_item
-        yield from get_all_nested_cost_items(cost_item)
+    yield from _get_all_nested_cost_items(cost_item, {cost_item.id()})
+
+
+def _get_all_nested_cost_items(
+    cost_item: ifcopenshell.entity_instance, visited: set[int]
+) -> Generator[ifcopenshell.entity_instance]:
+    # Iterative and tracks visited items, as nesting read from a file may be cyclic.
+    stack = [iter(get_nested_cost_items(cost_item))]
+    while stack:
+        nested_cost_item = next(stack[-1], None)
+        if nested_cost_item is None:
+            stack.pop()
+            continue
+        if nested_cost_item.id() in visited:
+            continue
+        visited.add(nested_cost_item.id())
+        yield nested_cost_item
+        stack.append(iter(get_nested_cost_items(nested_cost_item)))
 
 
 def get_nested_cost_items(cost_item: ifcopenshell.entity_instance, is_deep=False) -> list[ifcopenshell.entity_instance]:
@@ -235,9 +310,13 @@ def get_schedule_cost_items(
     cost_schedule: ifcopenshell.entity_instance,
 ) -> Generator[ifcopenshell.entity_instance]:
     """Get all cost schedule cost items, including the nested ones."""
+    visited = set()
     for cost_item in get_root_cost_items(cost_schedule):
+        if cost_item.id() in visited:
+            continue
+        visited.add(cost_item.id())
         yield cost_item
-        yield from get_all_nested_cost_items(cost_item)
+        yield from _get_all_nested_cost_items(cost_item, visited)
 
 
 def get_cost_assignments_by_type(
@@ -330,13 +409,16 @@ def get_product_quantity_names(elements: list[ifcopenshell.entity_instance]) -> 
     return [n for n in names if n != "id"]
 
 
-def get_cost_schedule(cost_item: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
-    """Returns the cost schedule of a cost item."""
-    for rel in cost_item.HasAssignments or []:
-        if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
-            return rel.RelatingControl
-    for rel in cost_item.Nests or []:
-        return get_cost_schedule(rel.RelatingObject)
+def get_cost_schedule(cost_item: ifcopenshell.entity_instance) -> Optional[ifcopenshell.entity_instance]:
+    """Returns the cost schedule of a cost item, or None if it has none."""
+    visited = set()
+    while cost_item is not None and cost_item.id() not in visited:
+        visited.add(cost_item.id())
+        for rel in cost_item.HasAssignments or []:
+            if rel.is_a("IfcRelAssignsToControl") and rel.RelatingControl.is_a("IfcCostSchedule"):
+                return rel.RelatingControl
+        cost_item = next((rel.RelatingObject for rel in cost_item.Nests or []), None)
+    return None
 
 
 def get_cost_rate(
@@ -344,13 +426,16 @@ def get_cost_rate(
 ) -> Optional[ifcopenshell.entity_instance]:
     """Returns the cost rate of a cost item."""
     # There is no direct relationship between a cost item and a cost rate in IFC, so we need to infer it, based on the assumption that cost_rate.CostValues == cost_item.CostValues.
-    if get_cost_schedule(cost_item).PredefinedType == "SCHEDULEOFRATES":
+    cost_schedule = get_cost_schedule(cost_item)
+    if cost_schedule is None:
+        return None
+    if cost_schedule.PredefinedType == "SCHEDULEOFRATES":
         return None  # Cost item is already a cost rate
     if cost_item.CostValues:
         potential_rates = file.get_inverse(cost_item.CostValues[0])
         for potential_rate in potential_rates:
             schedule = get_cost_schedule(potential_rate)
-            if schedule.PredefinedType == "SCHEDULEOFRATES":
+            if schedule is not None and schedule.PredefinedType == "SCHEDULEOFRATES":
                 return potential_rate
     return None
 

@@ -8,20 +8,35 @@ import ifcopenshell.util.cost as cost_util
 
 
 def _cost_item_to_dict(item: ifcopenshell.entity_instance, max_depth: int | None, depth: int) -> dict[str, Any]:
+    # Iterative and tracks visited items, as nesting read from a file may be cyclic.
+    visited = {item.id()}
+    result = _cost_item_fields(item)
+    stack = [(item, depth, result)]
+    while stack:
+        item, depth, data = stack.pop()
+        nested_items = cost_util.get_nested_cost_items(item)
+        if max_depth is not None and depth >= max_depth:
+            child_count = len(nested_items)
+            data["subitems"] = {"truncated": True, "count": child_count} if child_count else []
+            continue
+        for sub in nested_items:
+            if sub.id() in visited:
+                continue
+            visited.add(sub.id())
+            sub_data = _cost_item_fields(sub)
+            data["subitems"].append(sub_data)
+            stack.append((sub, depth + 1, sub_data))
+    return result
+
+
+def _cost_item_fields(item: ifcopenshell.entity_instance) -> dict[str, Any]:
     raw_values = cost_util.get_cost_values(item)
     values = [{"formula": v.get("label", ""), "category": v.get("category")} for v in raw_values]
-
-    if max_depth is not None and depth >= max_depth:
-        child_count = len(cost_util.get_nested_cost_items(item))
-        subitems = {"truncated": True, "count": child_count} if child_count else []
-    else:
-        subitems = [_cost_item_to_dict(sub, max_depth, depth + 1) for sub in cost_util.get_nested_cost_items(item)]
-
     return {
         "id": item.id(),
         "name": getattr(item, "Name", None),
         "values": values,
-        "subitems": subitems,
+        "subitems": [],
     }
 
 

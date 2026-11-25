@@ -127,7 +127,23 @@ class IfcDataGetter:
         :param index: Current hierarchy depth.
         """
         cost_items_data: list[CostItem] = []
+        # Iterative and tracks visited items, as nesting read from a file may be cyclic.
+        visited = set()
+        stack = [(cost_item, index, hierarchy)]
+        while stack:
+            cost_item, index, hierarchy = stack.pop()
+            if cost_item.id() in visited:
+                continue
+            visited.add(cost_item.id())
+            cost_items_data.append(IfcDataGetter.get_cost_item_data(file, cost_item, index, hierarchy))
+            nested_costs = list(enumerate(ifcopenshell.util.cost.get_nested_cost_items(cost_item), 1))
+            stack.extend((nested_cost, index + 1, f"{hierarchy}.{i}") for i, nested_cost in reversed(nested_costs))
+        return cost_items_data
 
+    @staticmethod
+    def get_cost_item_data(
+        file: ifcopenshell.file, cost_item: ifcopenshell.entity_instance, index: int, hierarchy: str
+    ) -> CostItem:
         quantity_data = IfcDataGetter.get_cost_item_quantity(file, cost_item)
         cost_values_data = IfcDataGetter.get_cost_item_values(cost_item)
 
@@ -165,14 +181,7 @@ class IfcDataGetter:
             "TotalPrice": total_price,
             "cost_categories": cost_categories,
         }
-        cost_items_data.append(data)
-
-        index += 1
-        child_hierarchy = hierarchy + ".1"
-        for i, nested_cost in enumerate(ifcopenshell.util.cost.get_nested_cost_items(cost_item), 1):
-            child_hierarchy = f"{hierarchy}.{i}"
-            cost_items_data.extend(IfcDataGetter.get_cost_items_data(file, nested_cost, index, child_hierarchy))
-        return cost_items_data
+        return data
 
     @staticmethod
     def get_schedule_cost_items_data(file: ifcopenshell.file, schedule: ifcopenshell.entity_instance) -> list[CostItem]:
