@@ -202,16 +202,17 @@ def string_to_duration(duration_string):
     hours = 0
     minutes = 0
     seconds = 0
-    match = findall(r"(\d+\.?\d*)d", duration_string)
+    # Only start at the beginning of a digit run, with one way to split it, so long digit runs match in linear time.
+    match = findall(r"(?<!\d)(\d+(?:\.\d*)?)d", duration_string)
     if match:
         days = float(match[0])
-    match = findall(r"(\d+\.?\d*)h", duration_string)
+    match = findall(r"(?<!\d)(\d+(?:\.\d*)?)h", duration_string)
     if match:
         hours = float(match[0])
-    match = findall(r"(\d+\.?\d*)m", duration_string)
+    match = findall(r"(?<!\d)(\d+(?:\.\d*)?)m", duration_string)
     if match:
         minutes = float(match[0])
-    match = findall(r"(\d+\.?\d*)s", duration_string)
+    match = findall(r"(?<!\d)(\d+(?:\.\d*)?)s", duration_string)
     if match:
         seconds = float(match[0])
     return isodate.duration_isoformat(datetime.timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds))
