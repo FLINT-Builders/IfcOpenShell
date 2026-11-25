@@ -39,6 +39,19 @@ struct is_std_tuple : std::false_type {};
 template <typename... Ts>
 struct is_std_tuple<std::tuple<Ts...>> : std::true_type {};
 
+// Decodes a value that is a packed array of T, rejecting a length that is not a whole number of elements.
+template <typename T>
+std::vector<T> decode_packed(const char* data, size_t size) {
+    if (size % sizeof(T) != 0) {
+        throw std::runtime_error("Invalid packed record of " + std::to_string(size) + " bytes");
+    }
+    std::vector<T> values(size / sizeof(T));
+    if (size) {
+        memcpy(values.data(), data, size);
+    }
+    return values;
+}
+
 // Serialization and deserialization primitives
 template <typename T>
 struct DefaultCodec;
@@ -55,8 +68,10 @@ struct DefaultCodec<size_t> {
     }
     size_t decode(const std::string& encoded) const {
         size_t value = 0;
-        // @todo take min of sizeof(value), len(encoded)
         // @todo unify all serialization primitives
+        if (encoded.size() != sizeof(value)) {
+            throw std::runtime_error("Invalid record of " + std::to_string(encoded.size()) + " bytes");
+        }
         memcpy(&value, encoded.data(), sizeof(value));
         return value;
     }
@@ -72,8 +87,10 @@ struct DefaultCodec<uint32_t> {
     }
     uint32_t decode(const std::string& encoded) const {
         uint32_t value = 0;
-        // @todo take min of sizeof(value), len(encoded)
         // @todo unify all serialization primitives
+        if (encoded.size() != sizeof(value)) {
+            throw std::runtime_error("Invalid record of " + std::to_string(encoded.size()) + " bytes");
+        }
         memcpy(&value, encoded.data(), sizeof(value));
         return value;
     }
@@ -88,9 +105,7 @@ struct DefaultCodec<std::vector<uint32_t>> {
         return encoded;
     }
     std::vector<uint32_t> decode(const std::string& encoded) const {
-        std::vector<uint32_t> values(encoded.size() / sizeof(uint32_t), 0);
-        memcpy(values.data(), encoded.data(), encoded.size());
-        return values;
+        return decode_packed<uint32_t>(encoded.data(), encoded.size());
     }
 };
 
