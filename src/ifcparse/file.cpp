@@ -30,7 +30,12 @@ ifcopenshell::IfcBaseClass* ifcopenshell::impl::rocks_db_file_storage::rocksdb_i
 */
 
 ifcopenshell::impl::rocks_db_file_storage::rocksdb_types_iterator::value_type const& ifcopenshell::impl::rocks_db_file_storage::rocksdb_types_iterator::operator*() const {
-    return storage_->file->schema()->declarations()[*read_id_()];
+    const auto id = read_id_();
+    const auto& declarations = storage_->file->schema()->declarations();
+    if (!id || *id >= declarations.size()) {
+        throw exception("Invalid type key encountered");
+    }
+    return declarations[*id];
 }
 
 express::base ifcopenshell::impl::rocks_db_file_storage::assert_existance(size_t number, instance_ref r) {
@@ -57,6 +62,9 @@ express::base ifcopenshell::impl::rocks_db_file_storage::assert_existance(size_t
 
     rocksdb::Status s = db->Get(rocksdb::ReadOptions{}, rocksdb_key::type_record(r == entityinstance_ref, number), &v);
     if (s.ok()) {
+        if (v.size() != sizeof(size_t)) {
+            throw exception("Invalid type record for instance #" + std::to_string(number));
+        }
         size_t s;
         memcpy(&s, v.data(), sizeof(size_t));
         if (s >= file->schema()->declarations().size()) {
@@ -238,8 +246,7 @@ void ifcopenshell::impl::rocks_db_file_storage::process_deletion_inverse(const e
                 std::string s = it->value().ToString();
 
                 // Iterator are snapshotted? So don't get invalidated?
-                std::vector<uint32_t> vals(s.size() / sizeof(uint32_t));
-                memcpy(vals.data(), s.data(), s.size());
+                auto vals = decode_packed<uint32_t>(s.data(), s.size());
                 auto removed = std::remove(vals.begin(), vals.end(), (uint32_t)id);
                 if (removed != vals.end()) {
                     vals.erase(removed, vals.end());

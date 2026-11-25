@@ -66,7 +66,11 @@ namespace {
                 std::string str;
                 array_.db_ptr->db->Get(rocksdb::ReadOptions{},
                     (is_header ? rocksdb_key::header_attribute(entity_or_type->name(), index_) : rocksdb_key::attribute(entity_or_type->as_entity() != nullptr, instance_name_, index_)), &str);
-                ::impl::deserialize(array_.db_ptr, str, val);
+                if (!::impl::deserialize(array_.db_ptr, str, val)) {
+                    throw ifcopenshell::exception(
+                        "On instance #" + std::to_string(instance_name_) + " of " + entity_or_type->name() + ": " +
+                        "Invalid stored value for type <" + ::impl::variant_type_name<T>::get() + "> at index " + std::to_string(index_));
+                }
             } else {
                 static_assert(
                     std::is_same_v<T, enumeration_reference> ||
@@ -124,11 +128,35 @@ namespace {
                 (is_header ? rocksdb_key::header_attribute(entity_or_type->name(), index_) : rocksdb_key::attribute(entity_or_type->as_entity() != nullptr, instance_name_, index_)), &str).ok()) {
                 return type_encoder::encode_type<blank>() - 'A';
             }
+            if (str.empty() || str[0] < 'A' || (size_t)(str[0] - 'A') >= Argument_UNKNOWN) {
+                throw ifcopenshell::exception("Invalid stored type at index " + std::to_string(index_) + " on instance #" + std::to_string(instance_name_));
+            }
             return (size_t) str[0] - 'A';
         }
 #endif
         throw std::logic_error("RocksDB storage is unavailable");
     }
+
+#ifdef IFOPSH_WITH_ROCKSDB
+    enumeration_reference read_enumeration_(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& str)
+    {
+        if (str.size() != 1 + 2 * sizeof(size_t) || str[0] != type_encoder::encode_type<enumeration_reference>()) {
+            throw ifcopenshell::exception("Invalid enumeration value encountered");
+        }
+        size_t declaration_index, item_index;
+        memcpy(&declaration_index, str.data() + 1, sizeof(size_t));
+        memcpy(&item_index, str.data() + 1 + sizeof(size_t), sizeof(size_t));
+        const auto& declarations = storage->file->schema()->declarations();
+        if (declaration_index >= declarations.size()) {
+            throw ifcopenshell::exception("Invalid enumeration type encountered");
+        }
+        auto decl = declarations[declaration_index]->as_enumeration_type();
+        if (decl == nullptr || item_index >= decl->enumeration_items().size()) {
+            throw ifcopenshell::exception("Invalid enumeration value encountered");
+        }
+        return enumeration_reference(decl, item_index);
+    }
+#endif
 
     template<argument_type A>
     inline size_t aggregate_size_(attribute_value::pointer_type array_, uint8_t storage_model_, size_t instance_name_, const ifcopenshell::declaration* entity_or_type, uint8_t index_)
@@ -174,11 +202,7 @@ attribute_value::operator std::string() const
             const bool is_header = entity_or_type_->schema() == &Header_section_schema::get_schema();
             array_.db_ptr->db->Get(rocksdb::ReadOptions{},
                 (is_header ? rocksdb_key::header_attribute(entity_or_type_->name(), index_) : rocksdb_key::attribute(entity_or_type_->as_entity() != nullptr, instance_name_, index_)), &str);
-            size_t v;
-            memcpy(&v, str.data() + 1, sizeof(size_t));
-            auto decl = array_.db_ptr->file->schema()->declarations()[v]->as_enumeration_type();
-            memcpy(&v, str.data() + 1 + sizeof(size_t), sizeof(size_t));
-            return decl->lookup_enum_value(v);
+            return read_enumeration_(array_.db_ptr, str).value();
         }
 #endif
     }
@@ -196,11 +220,7 @@ attribute_value::operator enumeration_reference() const
         const bool is_header = entity_or_type_->schema() == &Header_section_schema::get_schema();
         array_.db_ptr->db->Get(rocksdb::ReadOptions{},
             (is_header ? rocksdb_key::header_attribute(entity_or_type_->name(), index_) : rocksdb_key::attribute(entity_or_type_->as_entity() != nullptr, instance_name_, index_)), &str);
-        size_t v;
-        memcpy(&v, str.data() + 1, sizeof(size_t));
-        auto decl = array_.db_ptr->file->schema()->declarations()[v]->as_enumeration_type();
-        memcpy(&v, str.data() + 1 + sizeof(size_t), sizeof(size_t));
-        return enumeration_reference(decl, v);
+        return read_enumeration_(array_.db_ptr, str);
     }
 #endif
     throw std::logic_error("RocksDB storage is unavailable");
@@ -222,12 +242,15 @@ attribute_value::operator express::base () const
         const bool is_header = entity_or_type_->schema() == &Header_section_schema::get_schema();
         array_.db_ptr->db->Get(rocksdb::ReadOptions{},
             (is_header ? rocksdb_key::header_attribute(entity_or_type_->name(), index_) : rocksdb_key::attribute(entity_or_type_->as_entity() != nullptr, instance_name_, index_)), &str);
+        if (str.size() != 2 + sizeof(size_t) || str[0] != type_encoder::encode_type<express::base>()) {
+            throw std::runtime_error("Invalid data encountered");
+        }
         size_t v;
         memcpy(&v, str.data() + 2, sizeof(size_t));
-        if (str.size() > 1 && str[1] == 'i') {
+        if (str[1] == 'i') {
             // entity reference, by #Name
             return array_.db_ptr->assert_existance(v, ifcopenshell::impl::rocks_db_file_storage::entityinstance_ref);
-        } else if (str.size() > 1 && str[1] == 't') {
+        } else if (str[1] == 't') {
             // type reference by Identity
             return array_.db_ptr->assert_existance(v, ifcopenshell::impl::rocks_db_file_storage::typedecl_ref);
         } else {
@@ -447,8 +470,23 @@ bool ::impl::serialize(std::string& val, const boost::dynamic_bitset<>& t)
     return true;
 }
 
+bool ::impl::serialize(std::string& val, const std::vector<boost::dynamic_bitset<>>& t)
+{
+    // Each bitset as its length followed by its '0'/'1' characters
+    val = std::string(1, type_encoder::encode_type<std::vector<boost::dynamic_bitset<>>>());
+    for (auto& bits : t) {
+        std::string tmp;
+        boost::to_string(bits, tmp);
+        std::string size_str(sizeof(size_t), '\0');
+        size_t sz = tmp.size();
+        memcpy(size_str.data(), &sz, sizeof(size_t));
+        val += size_str + tmp;
+    }
+    return true;
+}
+
 bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage*, const std::string& val, boost::logic::tribool& t) {
-    if (val[0] != type_encoder::encode_type<boost::logic::tribool>()) {
+    if (val.size() != 2 || val[0] != type_encoder::encode_type<boost::logic::tribool>()) {
         return false;
     }
     if (val[1] == 0) {
@@ -464,16 +502,42 @@ bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage*, const std::
 }
 
 bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage*, const std::string& val, boost::dynamic_bitset<>& t) {
-    if (val[0] != type_encoder::encode_type<boost::dynamic_bitset<>>()) {
+    if (val.empty() || val[0] != type_encoder::encode_type<boost::dynamic_bitset<>>()) {
         return false;
     }
     t = boost::dynamic_bitset<>(val.substr(1));
     return true;
 }
 
+bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage*, const std::string& val, std::vector<boost::dynamic_bitset<>>& t) {
+    if (val.empty() || val[0] != type_encoder::encode_type<std::vector<boost::dynamic_bitset<>>>()) {
+        return false;
+    }
+    char const* ptr = val.data() + 1;
+    char const* const end = val.data() + val.size();
+    t.clear();
+    while (ptr < end) {
+        size_t sz;
+        if ((size_t)(end - ptr) < sizeof(size_t)) {
+            return false;
+        }
+        memcpy(&sz, ptr, sizeof(size_t));
+        ptr += sizeof(size_t);
+        if (sz > (size_t)(end - ptr)) {
+            return false;
+        }
+        t.emplace_back(std::string(ptr, sz));
+        ptr += sz;
+    }
+    return true;
+}
+
 bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& val, std::vector<express::base>& t) {
+    if (val.empty() || (val.size() - 1) % (sizeof(size_t) + 1) != 0) {
+        return false;
+    }
     auto n = (val.size() - 1) / (sizeof(size_t) + 1);
-    for (int i = 0; i < n; ++i) {
+    for (size_t i = 0; i < n; ++i) {
         auto ptr = val.data() + 1 + (sizeof(size_t) + 1) * i;
         auto tt = *ptr;
         ptr++;
@@ -491,25 +555,34 @@ bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, con
 }
 
 bool ::impl::deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& val, std::vector<std::vector<express::base>>& t) {
+    if (val.empty()) {
+        return false;
+    }
 	char const* ptr = val.data() + 1;
+    char const* const end = val.data() + val.size();
 
 	// size_t outer_size;
 	// memcpy(&outer_size, ptr, sizeof(size_t));
 	// ptr += sizeof(size_t);
 
-    while (ptr < val.data() + val.size()) {
+    while (ptr < end) {
+        if ((size_t)(end - ptr) < sizeof(size_t)) {
+            return false;
+        }
+		// byte size of the inner aggregate, as written by serialize()
 		size_t inner_size;
 		memcpy(&inner_size, ptr, sizeof(size_t));
 		ptr += sizeof(size_t);
 
-        if (ptr + inner_size * (sizeof(size_t) + 1) > val.data() + val.size()) {
+        if (inner_size % (sizeof(size_t) + 1) != 0 || inner_size > (size_t)(end - ptr)) {
 			return false;
 		}
+        const size_t inner_count = inner_size / (sizeof(size_t) + 1);
 
         auto& inner = t.emplace_back();
-		inner.reserve(inner_size);
+		inner.reserve(inner_count);
 
-        for (size_t i = 0; i < inner_size; ++i) {
+        for (size_t i = 0; i < inner_count; ++i) {
             auto tt = *ptr;
             ptr++;
             size_t v;

@@ -278,7 +278,8 @@ namespace impl {
     template <typename CharT, typename Traits, typename Alloc>
     struct is_contiguous_container<std::basic_string<CharT, Traits, Alloc>> : std::true_type {};
 
-    template <typename T, typename std::enable_if<is_contiguous_container<T>::value && !is_contiguous_container<typename T::value_type>::value, int>::type = 0>
+    // Elements are copied as raw bytes, so only trivially copyable ones qualify.
+    template <typename T, typename std::enable_if<is_contiguous_container<T>::value && !is_contiguous_container<typename T::value_type>::value && std::is_trivially_copyable_v<typename T::value_type>, int>::type = 0>
     bool serialize(std::string& buffer, const T& value) {
         auto byte_count = sizeof(typename T::value_type) * value.size();
         buffer.resize(byte_count + 1);
@@ -321,6 +322,8 @@ namespace impl {
 
     bool serialize(std::string& buffer, const boost::dynamic_bitset<>& value);
 
+    bool serialize(std::string& buffer, const std::vector<boost::dynamic_bitset<>>& value);
+
     bool serialize(std::string& buffer, const express::base& value);
 
     bool serialize(std::string& buffer, const ifcopenshell::enumeration_reference& value);
@@ -329,35 +332,49 @@ namespace impl {
 
     bool serialize(std::string& buffer, const std::vector<std::vector<express::base>>& value);
 
-    template <typename T, typename std::enable_if<is_contiguous_container<T>::value && !is_contiguous_container<typename T::value_type>::value, int>::type = 0>
+    template <typename T, typename std::enable_if<is_contiguous_container<T>::value && !is_contiguous_container<typename T::value_type>::value && std::is_trivially_copyable_v<typename T::value_type>, int>::type = 0>
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, T& value, bool has_type_prefix = true) {
         static_cast<void>(storage);
-        if (has_type_prefix && buffer[0] != ifcopenshell::type_encoder::encode_type<T>()) {
+        if (has_type_prefix && (buffer.empty() || buffer[0] != ifcopenshell::type_encoder::encode_type<T>())) {
             return false;
         }
-        auto element_count = (buffer.size() - (has_type_prefix ? 1 : 0)) / sizeof(typename T::value_type);
+        const size_t payload_size = buffer.size() - (has_type_prefix ? 1 : 0);
+        if (payload_size % sizeof(typename T::value_type) != 0) {
+            return false;
+        }
+        auto element_count = payload_size / sizeof(typename T::value_type);
         value.resize(element_count);
-        memcpy(value.data(), buffer.data() + (has_type_prefix ? 1 : 0), element_count * sizeof(typename T::value_type));
+        if (element_count) {
+            memcpy(value.data(), buffer.data() + (has_type_prefix ? 1 : 0), payload_size);
+        }
         return true;
     }
 
     template <typename T, typename std::enable_if<is_contiguous_container<T>::value && is_contiguous_container<typename T::value_type>::value, int>::type = 0>
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, T& value) {
         // @todo
-        auto ptr = buffer.data();
-        if (*ptr != ifcopenshell::type_encoder::encode_type<T>()) {
+        if (buffer.empty() || buffer[0] != ifcopenshell::type_encoder::encode_type<T>()) {
             return false;
         }
-        ptr++;
+        auto ptr = buffer.data() + 1;
+        const auto end = buffer.data() + buffer.size();
         value.clear();
-        while (ptr < buffer.data() + buffer.size()) {
+        while (ptr < end) {
             size_t payload_size;
+            if ((size_t)(end - ptr) < sizeof(size_t)) {
+                return false;
+            }
             memcpy(&payload_size, ptr, sizeof(size_t));
             // @todo view
             ptr += sizeof(size_t);
+            if (payload_size > (size_t)(end - ptr)) {
+                return false;
+            }
             std::string part(ptr, payload_size);
             value.emplace_back();
-            deserialize(storage, part, value.back(), false);
+            if (!deserialize(storage, part, value.back(), false)) {
+                return false;
+            }
             ptr += payload_size;
         }
         return true;
@@ -366,7 +383,7 @@ namespace impl {
     template <typename T, typename std::enable_if<std::is_integral_v<T> || std::is_floating_point_v<T>, int>::type = 0>
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, T& value) {
         static_cast<void>(storage);
-        if (buffer[0] != ifcopenshell::type_encoder::encode_type<T>()) {
+        if (buffer.size() != sizeof(T) + 1 || buffer[0] != ifcopenshell::type_encoder::encode_type<T>()) {
             return false;
         }
         memcpy(&value, buffer.data() + 1, sizeof(T));
@@ -376,6 +393,8 @@ namespace impl {
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, boost::logic::tribool& value);
 
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, boost::dynamic_bitset<>& value);
+
+    bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, std::vector<boost::dynamic_bitset<>>& value);
 
     bool deserialize(ifcopenshell::impl::rocks_db_file_storage* storage, const std::string& buffer, std::vector<express::base>& value);
 

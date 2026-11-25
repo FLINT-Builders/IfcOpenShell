@@ -755,7 +755,7 @@ namespace ifcopenshell {
             // @todo merge iterators (template?)
             class IFC_PARSE_API rocksdb_types_iterator {
             private:
-                rocksdb::Iterator* state_;
+                std::shared_ptr<rocksdb::Iterator> state_;
                 const rocks_db_file_storage* storage_;
 
                 static constexpr char prefix_[] = "t|";
@@ -792,11 +792,10 @@ namespace ifcopenshell {
                     : storage_(storage)
                 {
 #ifdef IFOPSH_WITH_ROCKSDB
-                    state_ = storage->db->NewIterator(rocksdb::ReadOptions());
+                    state_.reset(storage->db->NewIterator(rocksdb::ReadOptions()));
                     state_->Seek(prefix_);
                     if (!state_->Valid() || !state_->key().starts_with(prefix_)) {
-                        delete state_;
-                        state_ = nullptr;
+                        state_.reset();
                     }
 #endif
                 }
@@ -811,8 +810,7 @@ namespace ifcopenshell {
                         state_->Next();
                         // Stop if we've left the prefix range.
                         if (!state_->Valid() || !state_->key().starts_with(prefix_)) {
-                            delete state_;
-                            state_ = nullptr;
+                            state_.reset();
                             break;
                         }
                         if (read_id_() != last_id) {
@@ -830,8 +828,8 @@ namespace ifcopenshell {
                 }
 
                 bool operator==(const rocksdb_types_iterator& other) const {
-                    if (state_ == nullptr && other.state_ == nullptr) {
-                        return true;
+                    if (state_ == nullptr || other.state_ == nullptr) {
+                        return state_ == other.state_;
                     } else {
                         return read_id_() == other.read_id_();
                     }
