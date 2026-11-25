@@ -113,6 +113,7 @@ class Usecase:
         }
         self.g = nx.DiGraph()
         self.edges = []
+        self.visited_tasks = set()
         self.g.add_node("start", duration=0, duration_type="ELAPSEDTIME", calendar=None)
         self.g.add_node("finish", duration=0, duration_type="ELAPSEDTIME", calendar=None)
         for rel in self.work_schedule.Controls:
@@ -123,6 +124,10 @@ class Usecase:
         self.g.add_edges_from(self.edges)
 
     def add_node(self, task: ifcopenshell.entity_instance) -> None:
+        if task in self.visited_tasks:
+            return
+        self.visited_tasks.add(task)
+
         if task.IsNestedBy:
             for rel in task.IsNestedBy:
                 [self.add_node(o) for o in rel.RelatedObjects]
