@@ -50,6 +50,7 @@
 #include <QListView>
 #include <QMessageBox>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QThread>
 #include <QTreeView>
@@ -97,11 +98,33 @@ QString rdbviewCacheRoot() {
         .filePath("ifcviewer-rdbview");
 }
 
+// Only the names exportGeometryDatabase writes are accepted: `model.ifcview`
+// and RocksDB files under `model.rdb/`. Every segment must be a plain file
+// name, so no entry can resolve outside the extraction directory on any
+// platform (no `..`, `\`, drive letters, empty segments, or trailing dots).
+bool isRdbviewEntryName(const QString& name) {
+    if (name == QLatin1String("model.ifcview") || name == QLatin1String("model.rdb")) {
+        return true;
+    }
+    const QLatin1String prefix("model.rdb/");
+    if (!name.startsWith(prefix)) {
+        return false;
+    }
+    static const QRegularExpression segment(QStringLiteral("^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"));
+    for (const QString& part : name.mid(prefix.size()).split('/')) {
+        if (!segment.match(part).hasMatch()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // A .rdbview is a zip of `model.rdb/` (the data DB) + `model.ifcview` (geometry
 // sidecar). Unzip it into a per-source subdir (hashed from path + mtime + size,
 // so a re-open reuses an existing extraction) and return the extracted
 // `model.rdb` path — from there it loads exactly like any pure .rdb (geometry
-// from the co-extracted sibling .ifcview). Returns empty on failure.
+// from the co-extracted sibling .ifcview). Returns empty on failure, including
+// when any entry has a name outside the bundle layout.
 QString extractRdbview(const QString& rdbview_path) {
     const QFileInfo info(rdbview_path);
     const QString key = rdbview_path + '|'
@@ -116,8 +139,14 @@ QString extractRdbview(const QString& rdbview_path) {
 
     QZipReader reader(rdbview_path);
     if (reader.status() != QZipReader::NoError) return {};
+    const QList<QZipReader::FileInfo> entries = reader.fileInfoList();
+    for (const QZipReader::FileInfo& entry : entries) {
+        if (entry.isFile && !isRdbviewEntryName(entry.filePath)) {
+            return {};
+        }
+    }
     QDir().mkpath(dir);
-    for (const QZipReader::FileInfo& entry : reader.fileInfoList()) {
+    for (const QZipReader::FileInfo& entry : entries) {
         if (!entry.isFile) continue;                 // dirs recreated below as needed
         const QString out = QDir(dir).filePath(entry.filePath);
         QDir().mkpath(QFileInfo(out).absolutePath());
