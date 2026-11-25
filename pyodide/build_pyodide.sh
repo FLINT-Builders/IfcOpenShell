@@ -7,8 +7,11 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Script is assuming that it will be possible to execute it multiple times
 # therefore we're clearing venv each time and ignoring existing 'emsdk' folder.
 
-# Install uv.
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# uv must already be installed (CI uses the pinned astral-sh/setup-uv action).
+if ! command -v uv > /dev/null; then
+    echo "uv is required but was not found in PATH, see https://docs.astral.sh/uv/getting-started/installation/" >&2
+    exit 1
+fi
 uv venv --python 3.13 --clear
 source .venv/bin/activate
 
