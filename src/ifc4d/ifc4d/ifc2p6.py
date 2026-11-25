@@ -190,8 +190,21 @@ class Ifc2P6:
         planned_start_date.text = start_date
 
     def create_wbs(self, tasks, work_schedule, parent=None):
-        self.project_tasks.extend(tasks)
-        for task in tasks:
+        visited = set()
+
+        def add_unvisited(tasks):
+            tasks = [task for task in tasks if task.id() not in visited]
+            visited.update(task.id() for task in tasks)
+            self.project_tasks.extend(tasks)
+            return iter(tasks)
+
+        stack = [(add_unvisited(tasks), parent)]
+        while stack:
+            siblings, parent = stack[-1]
+            task = next(siblings, None)
+            if task is None:
+                stack.pop()
+                continue
             subtasks = self.get_subtasks(task)
             if not subtasks and task.TaskTime:
                 self.activities.append({"task": task, "work_schedule": work_schedule, "parent": parent})
@@ -204,7 +217,7 @@ class Ifc2P6:
             if parent:
                 parent_object_id.text = self.id_map[parent]
             ET.SubElement(wbs, "ProjectObjectId").text = self.id_map[work_schedule]
-            self.create_wbs(subtasks, work_schedule, parent=task)
+            stack.append((add_unvisited(subtasks), task))
 
     def create_activities(self):
         for activity in self.activities:

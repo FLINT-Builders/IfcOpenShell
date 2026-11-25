@@ -192,8 +192,15 @@ class Ifc2Msp:
 
     def create_tasks(self):
         self.tasks = ET.SubElement(self.root, "Tasks")
-        for task in self.get_subtasks(self.work_schedule):
-            self.create_task(task)
+        visited = set()
+        stack = [(task, 0) for task in reversed(self.get_subtasks(self.work_schedule))]
+        while stack:
+            task, level = stack.pop()
+            if task.id() in visited:
+                continue
+            visited.add(task.id())
+            self.create_task(task, level=level)
+            stack.extend((subtask, level + 1) for subtask in reversed(self.get_subtasks(task)))
 
     def create_task(self, task, level=0):
         el = ET.SubElement(self.tasks, "Task")
@@ -250,9 +257,6 @@ class Ifc2Msp:
                 "USERDEFINED": "1",
                 None: "1",
             }[rel.SequenceType]
-
-        for subtask in self.get_subtasks(task):
-            self.create_task(subtask, level=level + 1)
 
     def get_subtasks(self, element):
         tasks = []
