@@ -65,10 +65,45 @@ def calculate_applied_value(
     cost_value: ifcopenshell.entity_instance,
     category_filter: Optional[str] = None,
 ) -> float:
+    return _evaluate(_calculate_applied_value(root_element, cost_value, category_filter, frozenset()))
+
+
+def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category_filter: Optional[str] = None) -> float:
+    return _evaluate(_sum_child_root_elements(root_element, category_filter, frozenset()))
+
+
+def _evaluate(evaluation: Generator[Generator, float, float]) -> float:
+    # Each pending evaluation yields the nested evaluation it needs and is resumed with its result, so the depth of
+    # nested cost items and cost value components is bounded by memory rather than by the Python call stack.
+    stack = [evaluation]
+    result = None
+    while stack:
+        try:
+            stack.append(stack[-1].send(result))
+            result = None
+        except StopIteration as stop:
+            stack.pop()
+            result = stop.value
+    return result
+
+
+def _calculate_applied_value(
+    root_element: ifcopenshell.entity_instance,
+    cost_value: ifcopenshell.entity_instance,
+    category_filter: Optional[str],
+    path: frozenset[int],
+) -> Generator[Generator, float, float]:
+    """``path`` holds the ids of the cost items and cost values being evaluated, so a cyclic one is skipped."""
     if cost_value.ArithmeticOperator and cost_value.Components:
+        path = path | {cost_value.id()}
         component_values = []
         for component in cost_value.Components:
-            component_values.append(calculate_applied_value(root_element, component, category_filter))
+            if component.id() not in path:
+                component_values.append(
+                    (yield _calculate_applied_value(root_element, component, category_filter, path))
+                )
+        if not component_values:
+            return 0.0
         if cost_value.ArithmeticOperator == "ADD":
             return sum(component_values)
         result = component_values.pop(0)
@@ -89,25 +124,32 @@ def calculate_applied_value(
         return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category == "*":
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element)
+            return (yield _sum_child_root_elements(root_element, None, path))
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     elif cost_value.Category:
         if root_element.IsNestedBy:
-            return sum_child_root_elements(root_element, category_filter=cost_value.Category)
+            return (yield _sum_child_root_elements(root_element, cost_value.Category, path))
         else:
             return get_primitive_applied_value(cost_value.AppliedValue)
     return 0.0
 
 
-def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category_filter: Optional[str] = None) -> float:
+def _sum_child_root_elements(
+    root_element: ifcopenshell.entity_instance, category_filter: Optional[str], path: frozenset[int]
+) -> Generator[Generator, float, float]:
+    path = path | {root_element.id()}
     result = 0.0
     for rel in root_element.IsNestedBy:
         for child_root_element in rel.RelatedObjects:
+            if child_root_element.id() in path:
+                continue
             if get_assigned_rate_cost_item(child_root_element):
                 new_child_root_element = get_assigned_rate_cost_item(child_root_element)
             else:
                 new_child_root_element = child_root_element
+            if new_child_root_element.id() in path:
+                continue
             if root_element.is_a("IfcCostItem"):
                 values = new_child_root_element.CostValues
             elif root_element.is_a("IfcConstructionResource"):
@@ -117,7 +159,9 @@ def sum_child_root_elements(root_element: ifcopenshell.entity_instance, category
             for child_cost_value in values or []:
                 if category_filter and child_cost_value.Category != category_filter:
                     continue
-                child_applied_value = calculate_applied_value(new_child_root_element, child_cost_value)
+                child_applied_value = yield _calculate_applied_value(
+                    new_child_root_element, child_cost_value, None, path
+                )
                 child_quantity = get_total_quantity(child_root_element)
                 child_quantity = 1.0 if child_quantity is None else child_quantity
                 if child_cost_value.UnitBasis:
