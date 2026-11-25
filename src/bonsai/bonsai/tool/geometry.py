@@ -2162,7 +2162,9 @@ class Geometry(bonsai.core.tool.Geometry):
                 items.extend(item.MappingSource.MappedRepresentation.Items)
             if item.is_a("IfcBooleanResult"):
                 operand = item.FirstOperand
-                while True:
+                visited = {item.id()}
+                while operand.id() not in visited:
+                    visited.add(operand.id())
                     items.append(operand)
                     if operand.is_a("IfcBooleanResult"):
                         operand = operand.FirstOperand

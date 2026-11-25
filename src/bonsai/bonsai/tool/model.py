@@ -370,7 +370,9 @@ class Model(bonsai.core.tool.Model):
         if not representation.Items:
             return None
         item = representation.Items[0]
-        while True:
+        visited = set()
+        while item.id() not in visited:
+            visited.add(item.id())
             if item.is_a("IfcExtrudedAreaSolid"):
                 return item
             elif item.is_a("IfcBooleanResult"):
@@ -875,10 +877,12 @@ class Model(bonsai.core.tool.Model):
             if not representation:
                 return []
         booleans = []
+        visited = set()
         items = list(representation.Items)
         while items:
             item = items.pop()
-            if item.is_a("IfcBooleanResult"):
+            if item.is_a("IfcBooleanResult") and item.id() not in visited:
+                visited.add(item.id())
                 booleans.append(item)
                 items.append(item.FirstOperand)
         return booleans

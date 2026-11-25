@@ -758,6 +758,21 @@ taxonomy::ptr mapping::map(const express::base& inst) {
             return it->second;
         }
     }
+
+    // Instances being mapped on this thread. A reference cycle in the file (e.g. a boolean
+    // result that is its own operand) would otherwise recurse until the stack overflows.
+    thread_local std::set<std::pair<const void*, uint32_t>> in_progress;
+    const auto in_progress_key = std::make_pair(static_cast<const void*>(this), iden);
+    if (!in_progress.insert(in_progress_key).second) {
+        logger_.message(ifcopenshell::logger::LOG_ERROR, "GEO", 328, "Cyclic reference encountered while converting:", inst);
+        return nullptr;
+    }
+    struct in_progress_guard {
+        std::set<std::pair<const void*, uint32_t>>& set;
+        std::pair<const void*, uint32_t> key;
+        ~in_progress_guard() { set.erase(key); }
+    } guard{in_progress, in_progress_key};
+
     taxonomy::ptr item = nullptr;
 
     // @todo we should check whether there is a notice performance impact on the large sequence
