@@ -102,6 +102,7 @@ SETTING = Literal[
     "layerset-first",
     "length-unit",
     "make-volume",
+    "max-conversion-items",
     "max-offset-deviation",
     "max-offset",
     "max-voids-per-element",

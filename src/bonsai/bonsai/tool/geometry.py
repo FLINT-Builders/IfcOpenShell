@@ -1438,7 +1438,10 @@ class Geometry(bonsai.core.tool.Geometry):
 
     @classmethod
     def is_text_literal(cls, representation: ifcopenshell.entity_instance) -> bool:
-        items = ifcopenshell.util.representation.resolve_items(representation)
+        try:
+            items = ifcopenshell.util.representation.resolve_items(representation)
+        except ValueError:
+            return False
         return bool([i for i in items if i["item"].is_a("IfcTextLiteral")])
 
     @classmethod
@@ -1728,8 +1731,12 @@ class Geometry(bonsai.core.tool.Geometry):
             if not representation.is_a("IfcShapeModel"):
                 return
             queue = list(representation.Items)
+            seen = set()
             while queue:
                 item = queue.pop()
+                if item in seen:
+                    continue
+                seen.add(item)
                 if item.is_a("IfcMappedItem"):
                     queue.extend(item.MappingSource.MappedRepresentation.Items)
                 else:

@@ -322,20 +322,43 @@ class ResolvedItemDict(TypedDict):
     item: ifcopenshell.entity_instance
 
 
+MAX_RESOLVED_ITEMS = 100000
+
+
 def resolve_items(
     representation: ifcopenshell.entity_instance, matrix: Optional[npt.NDArray[np.float64]] = None
 ) -> list[ResolvedItemDict]:
-    if matrix is None:
-        matrix = np.eye(4)
+    """Resolve representation items, expanding mapped items once for every mapping that reaches them.
+
+    :raises ValueError: If more than ``MAX_RESOLVED_ITEMS`` items would be visited, which nested
+        mapped items sharing the same mapped representation can cause with only a few items.
+    """
+    counts: dict[ifcopenshell.entity_instance, int] = {}
+
+    def count(representation: ifcopenshell.entity_instance) -> int:
+        if representation not in counts:
+            counts[representation] = sum(
+                1 + count(item.MappingSource.MappedRepresentation) if item.is_a("IfcMappedItem") else 1
+                for item in representation.Items or []
+            )
+        return counts[representation]
+
+    if count(representation) > MAX_RESOLVED_ITEMS:
+        raise ValueError(f"Representation resolves to more than {MAX_RESOLVED_ITEMS} items")
+
     results: list[ResolvedItemDict] = []
-    for item in representation.Items or []:  # Be forgiving of invalid IFCs because Revit :(
-        if item.is_a("IfcMappedItem"):
-            rep_matrix = ifcopenshell.util.placement.get_mappeditem_transformation(item)
-            if not np.allclose(rep_matrix, np.eye(4)):
-                rep_matrix = rep_matrix @ matrix.copy()
-            results.extend(resolve_items(item.MappingSource.MappedRepresentation, rep_matrix))
-        else:
-            results.append(ResolvedItemDict(matrix=matrix.copy(), item=item))
+
+    def resolve(representation: ifcopenshell.entity_instance, matrix: npt.NDArray[np.float64]) -> None:
+        for item in representation.Items or []:  # Be forgiving of invalid IFCs because Revit :(
+            if item.is_a("IfcMappedItem"):
+                rep_matrix = ifcopenshell.util.placement.get_mappeditem_transformation(item)
+                if not np.allclose(rep_matrix, np.eye(4)):
+                    rep_matrix = rep_matrix @ matrix.copy()
+                resolve(item.MappingSource.MappedRepresentation, rep_matrix)
+            else:
+                results.append(ResolvedItemDict(matrix=matrix.copy(), item=item))
+
+    resolve(representation, np.eye(4) if matrix is None else matrix)
     return results
 
 
@@ -344,10 +367,14 @@ def resolve_base_items(
 ) -> Generator[ifcopenshell.entity_instance]:
     """Resolve representation to it's base items resolving mapped items and boolean results to it's operands."""
     queue: list[ifcopenshell.entity_instance] = list(representation.Items)
+    seen: set[ifcopenshell.entity_instance] = set()
     while queue:
         item = queue.pop()
+        if item in seen:
+            continue
+        seen.add(item)
         if item.is_a("IfcMappedItem"):
-            yield from resolve_base_items(item.MappingSource.MappedRepresentation)
+            queue.extend(item.MappingSource.MappedRepresentation.Items)
         elif item.is_a("IfcBooleanResult"):
             queue.append(item.FirstOperand)
             queue.append(item.SecondOperand)
