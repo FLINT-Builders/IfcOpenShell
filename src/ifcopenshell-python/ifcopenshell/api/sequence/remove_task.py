@@ -54,6 +54,18 @@ def remove_task(file: ifcopenshell.file, task: ifcopenshell.entity_instance) -> 
         # just fix it on site.
         ifcopenshell.api.sequence.remove_task(model, task=design)
     """
+    removed = set()
+    pending = [task]
+    while pending:
+        task = pending.pop()
+        if task.id() not in removed:
+            removed.add(task.id())
+            _remove_task(file, task, pending)
+
+
+def _remove_task(
+    file: ifcopenshell.file, task: ifcopenshell.entity_instance, pending: list[ifcopenshell.entity_instance]
+) -> None:
     # TODO: do a deep purge
     ifcopenshell.api.project.unassign_declaration(
         file,
@@ -70,8 +82,7 @@ def remove_task(file: ifcopenshell.file, task: ifcopenshell.entity_instance) -> 
         subtasks = rels[0].RelatedObjects
         # Use batching for optimization.
         ifcopenshell.api.nest.unassign_object(file, subtasks)
-        for task_ in subtasks:
-            ifcopenshell.api.sequence.remove_task(file, task=task_)
+        pending.extend(reversed(subtasks))
     if task.Nests:
         ifcopenshell.api.nest.unassign_object(file, [task])
 

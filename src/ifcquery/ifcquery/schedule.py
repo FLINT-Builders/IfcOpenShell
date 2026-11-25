@@ -23,7 +23,7 @@ def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, dep
         child_count = len(seq.get_nested_tasks(task))
         subtasks = {"truncated": True, "count": child_count} if child_count else []
     else:
-        subtasks = [_task_to_dict(sub, max_depth, depth + 1) for sub in seq.get_nested_tasks(task)]
+        subtasks = []
 
     return {
         "id": task.id(),
@@ -34,6 +34,23 @@ def _task_to_dict(task: ifcopenshell.entity_instance, max_depth: int | None, dep
         "outputs": outputs,
         "subtasks": subtasks,
     }
+
+
+def _tasks_to_dicts(tasks: list[ifcopenshell.entity_instance], max_depth: int | None) -> list[dict[str, Any]]:
+    """Build task trees depth first. Each task appears once, so nesting cycles are not followed."""
+    result = []
+    visited = set()
+    stack = [(task, 1, result) for task in reversed(tasks)]
+    while stack:
+        task, depth, siblings = stack.pop()
+        if task.id() in visited:
+            continue
+        visited.add(task.id())
+        node = _task_to_dict(task, max_depth, depth)
+        siblings.append(node)
+        if max_depth is None or depth < max_depth:
+            stack.extend((sub, depth + 1, node["subtasks"]) for sub in reversed(seq.get_nested_tasks(task)))
+    return result
 
 
 def schedule(model: ifcopenshell.file, max_depth: int | None = None) -> list[dict[str, Any]]:
@@ -54,7 +71,7 @@ def schedule(model: ifcopenshell.file, max_depth: int | None = None) -> list[dic
     """
     result = []
     for work_schedule in model.by_type("IfcWorkSchedule"):
-        tasks = [_task_to_dict(t, max_depth, depth=1) for t in seq.get_root_tasks(work_schedule)]
+        tasks = _tasks_to_dicts(seq.get_root_tasks(work_schedule), max_depth)
         result.append(
             {
                 "id": work_schedule.id(),
