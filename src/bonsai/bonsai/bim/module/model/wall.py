@@ -1854,7 +1854,9 @@ class DumbWallJoiner:
     def get_extrusion_data(self, representation):
         results = {"item": None, "height": 3.0, "x_angle": 0, "is_sloped": False, "direction": Vector((0, 0, 1))}
         item = representation.Items[0]
-        while True:
+        visited = set()
+        while item.id() not in visited:
+            visited.add(item.id())
             if item.is_a("IfcExtrudedAreaSolid"):
                 results["item"] = item
                 x, y, z = item.ExtrudedDirection.DirectionRatios

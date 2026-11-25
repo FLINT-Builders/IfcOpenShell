@@ -3218,13 +3218,20 @@ class SelectRepresentationItem(bpy.types.Operator):
 
     def get_nested_item_ids(self, item):
         results = set()
-        if item.is_a("IfcBooleanResult"):
-            results.update(self.get_nested_item_ids(item.FirstOperand))
-            results.update(self.get_nested_item_ids(item.SecondOperand))
-        elif item.is_a("IfcCsgSolid"):
-            results.update(self.get_nested_item_ids(item.TreeRootExpression))
-        else:
-            results.add(item.id())
+        visited = set()
+        queue = [item]
+        while queue:
+            item = queue.pop()
+            if item.id() in visited:
+                continue
+            visited.add(item.id())
+            if item.is_a("IfcBooleanResult"):
+                queue.append(item.FirstOperand)
+                queue.append(item.SecondOperand)
+            elif item.is_a("IfcCsgSolid"):
+                queue.append(item.TreeRootExpression)
+            else:
+                results.add(item.id())
         return results
 
 
@@ -3568,6 +3575,7 @@ class ImportRepresentationItems(bpy.types.Operator, tool.Ifc.Operator):
             item_id = queue.pop()
             if item_id in processed_ids:
                 continue  # In theory, an item can be used multiple times (e.g. in a boolean stack).
+            processed_ids.add(item_id)
             item = tool.Ifc.get().by_id(item_id)
             if item.is_a("IfcBooleanResult"):
                 queue.append(item.FirstOperand.id())
@@ -3591,7 +3599,6 @@ class ImportRepresentationItems(bpy.types.Operator, tool.Ifc.Operator):
 
             item_obj.select_set(True)  # so you can quickly hit tab again, for edit mode
             context.view_layer.objects.active = item_obj
-            processed_ids.add(item_id)
 
         tool.Root.reload_item_decorator()
 
