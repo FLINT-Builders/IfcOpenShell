@@ -17,8 +17,9 @@
 # along with IfcOpenShell.  If not, see <http://www.gnu.org/licenses/>.
 
 import re
+import sys
 from collections.abc import Iterable
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from types import EllipsisType
 from typing import Any, Optional, Union
 
@@ -327,10 +328,14 @@ class FormatTransformer(lark.Transformer):
             # return it unchanged instead of crashing the whole expression.
             return args[0]
         nearest = Decimal(args[1])
-        result = round(value / nearest) * nearest
-        if nearest % 1 == 0:
-            return str(int(result))
-        return str(result)
+        with localcontext() as context:
+            # Converting a Decimal with a huge exponent to int takes seconds,
+            # so values beyond float range raise Overflow instead.
+            context.Emax = sys.float_info.max_10_exp
+            result = round(value / nearest) * nearest
+            if nearest % 1 == 0:
+                return str(int(result))
+            return str(result)
 
     def number(self, args):
         arg_val = args[0]
