@@ -34,23 +34,29 @@ def get_basis_curve(alignment: entity_instance) -> entity_instance:
         alignment = model.by_type("IfcAlignment")[0]
         composite_curve = ifcopenshell.api.alignment.get_basis_curve(alignment)
     """
-    axis = None
+    visited = set()
 
-    representations = ifcopenshell.util.representation.get_representations_iter(alignment)
-    for representation in representations:
-        if (
-            (representation.RepresentationIdentifier == "Axis" and representation.RepresentationType == "Curve2D")
-            or (
-                representation.RepresentationIdentifier == "FootPrint"
-                and representation.RepresentationType == "Curve2D"
-            )
-            or (representation.RepresentationIdentifier == "Axis" and representation.RepresentationType == "Curve3D")
-        ):  # in the case of IfcPolyline or IfcIndexedPolyCurve with 3D points
-            axis = representation
-            return None if axis.Items == None or len(axis.Items) == 0 else axis.Items[0]
+    while alignment.id() not in visited:
+        visited.add(alignment.id())
 
-    if axis == None and 0 < len(alignment.Decomposes):
-        parent_alignment = alignment.Decomposes[0].RelatingObject
-        return get_basis_curve(parent_alignment)
+        representations = ifcopenshell.util.representation.get_representations_iter(alignment)
+        for representation in representations:
+            if (
+                (representation.RepresentationIdentifier == "Axis" and representation.RepresentationType == "Curve2D")
+                or (
+                    representation.RepresentationIdentifier == "FootPrint"
+                    and representation.RepresentationType == "Curve2D"
+                )
+                or (
+                    representation.RepresentationIdentifier == "Axis" and representation.RepresentationType == "Curve3D"
+                )
+            ):  # in the case of IfcPolyline or IfcIndexedPolyCurve with 3D points
+                axis = representation
+                return None if axis.Items == None or len(axis.Items) == 0 else axis.Items[0]
 
+        if len(alignment.Decomposes) == 0:
+            return None
+        alignment = alignment.Decomposes[0].RelatingObject
+
+    # The aggregation chain is cyclic
     return None
