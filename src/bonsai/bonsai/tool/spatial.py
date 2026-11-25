@@ -78,13 +78,12 @@ class Spatial(bonsai.core.tool.Spatial):
 
     @classmethod
     def get_root_element(cls, element: ifcopenshell.entity_instance) -> ifcopenshell.entity_instance:
-        while True:
-            if parent := (
-                ifcopenshell.util.element.get_aggregate(element) or ifcopenshell.util.element.get_nest(element)
-            ):
-                element = parent
-            else:
-                break
+        seen = {element}
+        while (
+            parent := ifcopenshell.util.element.get_aggregate(element) or ifcopenshell.util.element.get_nest(element)
+        ) and parent not in seen:
+            seen.add(parent)
+            element = parent
         return element
 
     @classmethod
@@ -335,6 +334,8 @@ class Spatial(bonsai.core.tool.Spatial):
             elements = set()
             while queue:
                 item = queue.pop()
+                if item in elements:
+                    continue
                 elements.add(item)
                 queue.extend(ifcopenshell.util.element.get_decomposition(item))
         for element in elements:
@@ -559,25 +560,29 @@ class Spatial(bonsai.core.tool.Spatial):
     @classmethod
     def create_orientation_slot(cls, container: ifcopenshell.entity_instance) -> None:
         active_slot = bpy.context.scene.transform_orientation_slots[0]
-        placement = container.ObjectPlacement
-        combined_matrix = ifcopenshell.util.placement.get_local_placement(placement)[:3, :3]
+        seen = {container}
+        while True:
+            placement = container.ObjectPlacement
+            combined_matrix = ifcopenshell.util.placement.get_local_placement(placement)[:3, :3]
 
-        if np.allclose(combined_matrix, np.eye(3), atol=1e-6):
-            # this spatial element has global orientation
-            active_slot.type = "GLOBAL"
-            return
-        elif (
-            hasattr(container, "Decomposes")
-            and container.Decomposes
-            and hasattr(container.Decomposes[0].RelatingObject, "ObjectPlacement")
-        ):
-            # this spatial element is part of a decomposition
-            parent_placement = container.Decomposes[0].RelatingObject.ObjectPlacement
-            parent_matrix = ifcopenshell.util.placement.get_local_placement(parent_placement)[:3, :3]
-            if np.allclose(combined_matrix, parent_matrix, atol=1e-6):
-                # this spatial element has the same orientation as its parent
-                cls.create_orientation_slot(container=container.Decomposes[0].RelatingObject)
+            if np.allclose(combined_matrix, np.eye(3), atol=1e-6):
+                # this spatial element has global orientation
+                active_slot.type = "GLOBAL"
                 return
+            elif (
+                hasattr(container, "Decomposes")
+                and container.Decomposes
+                and hasattr(parent := container.Decomposes[0].RelatingObject, "ObjectPlacement")
+                and parent not in seen
+            ):
+                # this spatial element is part of a decomposition
+                parent_matrix = ifcopenshell.util.placement.get_local_placement(parent.ObjectPlacement)[:3, :3]
+                if np.allclose(combined_matrix, parent_matrix, atol=1e-6):
+                    # this spatial element has the same orientation as its parent
+                    seen.add(parent)
+                    container = parent
+                    continue
+            break
 
         # this spatial element has a unique orientation
         orientation_name = container.is_a() + "/" + container.Name
@@ -617,8 +622,12 @@ class Spatial(bonsai.core.tool.Spatial):
         props = cls.get_spatial_props()
         contracted_containers = set(json.loads(props.contracted_containers))
         queue = [container]
+        seen = set()
         while queue:
             item = queue.pop()
+            if item in seen:
+                continue
+            seen.add(item)
             if is_recursive and (children := ifcopenshell.util.element.get_parts(item)):
                 queue.extend(children)
             contracted_containers.add(item.id())
@@ -629,8 +638,12 @@ class Spatial(bonsai.core.tool.Spatial):
         props = cls.get_spatial_props()
         contracted_containers = set(json.loads(props.contracted_containers))
         queue = [container]
+        seen = set()
         while queue:
             item = queue.pop()
+            if item in seen:
+                continue
+            seen.add(item)
             if is_recursive and (children := ifcopenshell.util.element.get_parts(item)):
                 queue.extend(children)
             contracted_containers.discard(item.id())
@@ -711,8 +724,12 @@ class Spatial(bonsai.core.tool.Spatial):
 
         if is_recursive:
             queue = [tool.Ifc.get().by_id(ifc_definition_id)]
+            seen = set()
             while queue:
                 element = queue.pop()
+                if element in seen:
+                    continue
+                seen.add(element)
                 children = [
                     e
                     for e in ifcopenshell.util.element.get_decomposition(element, is_recursive=False)
@@ -1364,6 +1381,8 @@ class Spatial(bonsai.core.tool.Spatial):
                 elements = set()
                 while queue:
                     item = queue.pop()
+                    if item in elements:
+                        continue
                     elements.add(item)
                     queue.extend(ifcopenshell.util.element.get_decomposition(item))
             if not element_filter:

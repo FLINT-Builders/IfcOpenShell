@@ -1090,16 +1090,23 @@ def get_container(
                 return container
             if container.is_a(ifc_class):
                 return container
-    elif contained_in_structure := getattr(element, "ContainedInStructure", None):
-        container = contained_in_structure[0].RelatingStructure
-        if not ifc_class:
-            return container
-        while container:
-            if container.is_a(ifc_class):
+        return None
+    seen = set()
+    while element and element not in seen:
+        seen.add(element)
+        if contained_in_structure := getattr(element, "ContainedInStructure", None):
+            container = contained_in_structure[0].RelatingStructure
+            if not ifc_class:
                 return container
-            container = get_aggregate(container)
-    elif parent := get_parent(element):
-        return get_container(parent, should_get_direct, ifc_class)
+            seen_containers = set()
+            while container and container not in seen_containers:
+                if container.is_a(ifc_class):
+                    return container
+                seen_containers.add(container)
+                container = get_aggregate(container)
+            return None
+        element = get_parent(element)
+    return None
 
 
 def get_referenced_structures(element: ifcopenshell.entity_instance) -> list[ifcopenshell.entity_instance]:
@@ -1160,8 +1167,12 @@ def get_decomposition(element: ifcopenshell.entity_instance, is_recursive=True) 
     """
     queue = [element]
     results = set()
+    visited = set()
     while queue:
         element = queue.pop()
+        if element in visited:
+            continue
+        visited.add(element)
         for rel in getattr(element, "ContainsElements", []):
             related = rel.RelatedElements
             queue.extend(related)
@@ -1303,9 +1314,11 @@ def get_parent(
     if not ifc_class:
         return parent
 
-    while parent:
+    seen = {element}
+    while parent and parent not in seen:
         if parent.is_a(ifc_class):
             return parent
+        seen.add(parent)
         parent = get_parent(parent)
 
     return None
