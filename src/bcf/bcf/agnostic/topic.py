@@ -95,6 +95,10 @@ def extract_file(
             filename = Path(reference).name
 
     if not outfile:
+        # Filenames come from the BCF file and must not escape the temporary directory.
+        filename = Path(filename).name
+        if filename in ("", ".", ".."):
+            raise ValueError(f"Invalid filename '{filename}' in BCF file.")
         outfile = Path(tempfile.mkdtemp()) / filename
 
     with open(outfile, "wb") as f:
