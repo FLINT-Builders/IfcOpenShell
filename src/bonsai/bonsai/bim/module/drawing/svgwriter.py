@@ -16,14 +16,16 @@
 # You should have received a copy of the GNU General Public License
 # along with Bonsai.  If not, see <http://www.gnu.org/licenses/>.
 
+import copy
 import math
 import os
+import re
 import shutil
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from math import acos, atan, ceil, degrees, pi
 from pathlib import Path
-from typing import Optional, Self, Union
+from typing import IO, Optional, Self, Union
 
 import bmesh
 import bpy
@@ -58,6 +60,121 @@ class External(svgwrite.container.Group):
 
     def get_xml(self):
         return self.xml
+
+
+SVG_NS = "{http://www.w3.org/2000/svg}"
+XLINK_NS = "{http://www.w3.org/1999/xlink}"
+XML_NS = "{http://www.w3.org/XML/1998/namespace}"
+
+# Graphic elements allowed in symbol, marker and pattern libraries. Anything else (script, foreignObject, animation,
+# links, images, nested documents, elements from other namespaces) is dropped together with its children.
+# Names are matched case-sensitively, as browsers parsing SVG inside HTML lowercase them.
+RESOURCE_SVG_ELEMENTS = frozenset(
+    (
+        "symbol",
+        "marker",
+        "pattern",
+        "g",
+        "defs",
+        "use",
+        "title",
+        "desc",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "textPath",
+        "clipPath",
+        "mask",
+        "linearGradient",
+        "radialGradient",
+        "stop",
+        "filter",
+        "feBlend",
+        "feColorMatrix",
+        "feComponentTransfer",
+        "feComposite",
+        "feConvolveMatrix",
+        "feDiffuseLighting",
+        "feDisplacementMap",
+        "feDistantLight",
+        "feDropShadow",
+        "feFlood",
+        "feFuncA",
+        "feFuncB",
+        "feFuncG",
+        "feFuncR",
+        "feGaussianBlur",
+        "feMerge",
+        "feMergeNode",
+        "feMorphology",
+        "feOffset",
+        "fePointLight",
+        "feSpecularLighting",
+        "feSpotLight",
+        "feTile",
+        "feTurbulence",
+    )
+)
+CSS_URL_PATTERN = re.compile(r"url\(\s*[\"']?\s*(.?)", re.IGNORECASE)
+
+
+def is_svg_resource_element(tag: str) -> bool:
+    if not isinstance(tag, str):
+        return False
+    if tag.startswith(SVG_NS):
+        tag = tag[len(SVG_NS) :]
+    elif tag.startswith("{"):
+        return False
+    return tag in RESOURCE_SVG_ELEMENTS
+
+
+def is_svg_resource_attribute(name: str, value: str) -> bool:
+    if name.startswith(XLINK_NS):
+        local_name = name[len(XLINK_NS) :]
+        if local_name != "href":
+            return False
+    elif name.startswith(XML_NS):
+        return True
+    elif name.startswith("{"):
+        return False
+    else:
+        local_name = name
+    local_name = local_name.lower()
+    if local_name.startswith("on"):
+        return False
+    if local_name == "href":
+        return value.strip().startswith("#")
+    if "(" in value and "\\" in value:
+        # CSS escapes could spell out url( and hide the reference from the check below.
+        return False
+    return all(target == "#" for target in CSS_URL_PATTERN.findall(value))
+
+
+def sanitize_svg_resource(element: ET.Element) -> Optional[ET.Element]:
+    """Strip active content and external references from an SVG resource element in place.
+
+    :return: The element, or ``None`` if the element itself is not allowed.
+    """
+    if not is_svg_resource_element(element.tag):
+        return None
+    queue = [element]
+    while queue:
+        current = queue.pop()
+        for name, value in list(current.attrib.items()):
+            if not is_svg_resource_attribute(name, value):
+                del current.attrib[name]
+        for child in list(current):
+            if is_svg_resource_element(child.tag):
+                queue.append(child)
+            else:
+                current.remove(child)
+    return element
 
 
 def parse_markdown_it(text: str) -> list[dict[str, Union[str, None]]]:
@@ -200,6 +317,8 @@ class SvgWriter:
     metadata: list[str]
     # Resources in MULTI_PATH_RESOURCES are stored as a list of paths, other resources as a single path.
     resource_paths: dict[tool.Drawing.ResourceType, Union[str, list[str], None]]
+    # Sanitized root elements of SVG resources, loaded once per drawing.
+    svg_resources: dict[tool.Drawing.ResourceType, Optional[ET.Element]]
     # Resources that support multiple comma-separated paths.
     MULTI_PATH_RESOURCES = ("Stylesheet",)
 
@@ -222,6 +341,7 @@ class SvgWriter:
         self.camera_height = camera_height
         self.camera_projection = camera_projection
         self.resource_paths = {}
+        self.svg_resources = {}
         self.calculate_scale()
 
     def create_blank_svg(self, output_path: str) -> Self:
@@ -246,6 +366,7 @@ class SvgWriter:
 
     def setup_drawing_resource_paths(self, element: ifcopenshell.entity_instance) -> None:
         pset = ifcopenshell.util.element.get_pset(element, "EPset_Drawing")
+        self.svg_resources = {}
         for resource in tool.Drawing.RESOURCE_TYPES:
             resource_path = pset.get(resource)
             if not resource_path:
@@ -254,15 +375,44 @@ class SvgWriter:
             if resource in self.MULTI_PATH_RESOURCES:
                 # Paths need to be split before they're resolved,
                 # otherwise the entire string is resolved as a single path.
-                self.resource_paths[resource] = [
-                    self.prepare_resource_path(resource, p) for p in resource_path.split(",") if p.strip()
-                ]
+                paths = [self.prepare_resource_path(resource, p) for p in resource_path.split(",") if p.strip()]
+                self.resource_paths[resource] = [p for p in paths if p]
                 continue
             self.resource_paths[resource] = self.prepare_resource_path(resource, resource_path)
 
-    def prepare_resource_path(self, resource: tool.Drawing.ResourceType, resource_path: str) -> str:
-        """Resolve resource path relative to the IFC file, copying the OOTB resource, if it's missing."""
+    def is_project_path(self, path: str) -> bool:
+        """Check whether ``path``, with symlinks resolved, is inside the directory of the IFC file."""
+        project_dir = os.path.normcase(os.path.realpath(tool.Ifc.resolve_uri(".")))
+        path = os.path.normcase(os.path.realpath(path))
+        try:
+            return os.path.commonpath([project_dir, path]) == project_dir
+        except ValueError:
+            return False
+
+    def open_project_file(self, path: str, mode: str = "rb") -> Optional[IO]:
+        """Open a file only if the opened file is located inside the directory of the IFC file."""
+        try:
+            f = open(path, mode)
+        except OSError:
+            return None
+        try:
+            real_path = os.path.realpath(path)
+            if self.is_project_path(real_path) and os.path.samestat(os.fstat(f.fileno()), os.lstat(real_path)):
+                return f
+        except OSError:
+            pass
+        f.close()
+        return None
+
+    def prepare_resource_path(self, resource: tool.Drawing.ResourceType, resource_path: str) -> Optional[str]:
+        """Resolve resource path relative to the IFC file, copying the OOTB resource, if it's missing.
+
+        :return: Resolved path or ``None`` if the path is outside the directory of the IFC file.
+        """
         resource_path = tool.Ifc.resolve_uri(resource_path.strip())
+        if not self.is_project_path(resource_path):
+            print(f"WARNING. {resource} for the drawing is outside of the project directory, ignoring: {resource_path}")
+            return None
         os.makedirs(os.path.dirname(resource_path), exist_ok=True)
         if not os.path.exists(resource_path):
             resource_basename = os.path.basename(resource_path)
@@ -301,53 +451,66 @@ class SvgWriter:
             if not os.path.exists(path):
                 print(f"WARNING. Couldn't find stylesheet for the drawing by the path: {path}")
                 continue
-            with open(path, "r") as stylesheet:
-                css.append(stylesheet.read())
+            stylesheet = self.open_project_file(path, "r")
+            if stylesheet is None:
+                print(f"WARNING. Stylesheet for the drawing is outside of the project directory, ignoring: {path}")
+                continue
+            with stylesheet:
+                content = stylesheet.read()
+            # The stylesheet is embedded in a CDATA section, which "]]>" would close.
+            if "]]>" in content:
+                print(f"WARNING. Stylesheet for the drawing contains ']]>', ignoring: {path}")
+                continue
+            css.append(content)
         if css:
             self.svg.defs.add(self.svg.style("\n".join(css)))
 
-    def add_markers(self):
-        path = self.resource_paths["Markers"]
+    def get_svg_resource(self, resource: tool.Drawing.ResourceType) -> Optional[ET.Element]:
+        """Get the sanitized root element of an SVG resource, with only graphic elements left."""
+        if resource in self.svg_resources:
+            return self.svg_resources[resource]
+        self.svg_resources[resource] = None
+        path = self.resource_paths.get(resource)
         if not path:
-            return
+            return None
+        assert isinstance(path, str)
         if not os.path.exists(path):
-            print(f"WARNING. Couldn't find markers for the drawing by the path: {path}")
+            print(f"WARNING. Couldn't find {resource} for the drawing by the path: {path}")
+            return None
+        f = self.open_project_file(path)
+        if f is None:
+            print(f"WARNING. {resource} for the drawing is outside of the project directory, ignoring: {path}")
+            return None
+        with f:
+            root = ET.parse(f).getroot()
+        for child in list(root):
+            if sanitize_svg_resource(child) is None:
+                root.remove(child)
+        self.svg_resources[resource] = root
+        return root
+
+    def add_svg_resource(self, resource: tool.Drawing.ResourceType) -> None:
+        root = self.get_svg_resource(resource)
+        if root is None:
             return
-        tree = ET.parse(path)
-        root = tree.getroot()
         for child in root:
-            self.svg.defs.add(External(child))
+            self.svg.defs.add(External(copy.deepcopy(child)))
+
+    def add_markers(self):
+        self.add_svg_resource("Markers")
 
     def add_symbols(self):
-        path = self.resource_paths["Symbols"]
-        if not path:
-            return
-        if not os.path.exists(path):
-            print(f"WARNING. Couldn't find symbols for the drawing by the path: {path}")
-            return
-        tree = ET.parse(path)
-        root = tree.getroot()
-        for child in root:
-            self.svg.defs.add(External(child))
+        self.add_svg_resource("Symbols")
 
     def find_xml_symbol_by_id(self, id):
-        tree = ET.parse(self.resource_paths["Symbols"])
-        xml_symbol = tree.find(f'.//*[@id="{id}"]')
-        return External(xml_symbol) if xml_symbol is not None else None
+        root = self.get_svg_resource("Symbols")
+        if root is None:
+            return None
+        xml_symbol = root.find(f'.//*[@id="{id}"]')
+        return External(copy.deepcopy(xml_symbol)) if xml_symbol is not None else None
 
     def add_patterns(self):
-        path = self.resource_paths["Patterns"]
-        if not path:
-            return
-        if not os.path.exists(path):
-            print(f"WARNING. Couldn't find patterns for the drawing by the path: {path}")
-            return
-        if not path or not os.path.exists(path):
-            return
-        tree = ET.parse(path)
-        root = tree.getroot()
-        for child in root:
-            self.svg.defs.add(External(child))
+        self.add_svg_resource("Patterns")
 
     def draw_annotations(
         self,
