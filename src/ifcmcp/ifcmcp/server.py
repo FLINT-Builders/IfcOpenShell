@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import inspect
 from typing import Any
 
@@ -15,8 +16,54 @@ except ImportError:  # pragma: no cover
     ImageContent = None  # type: ignore
 
 
-def build_server() -> Any:
-    """Create the FastMCP server if the dependency is available."""
+def has_bearer_token(request: Any, token: str) -> bool:
+    """Return True if the HTTP request carries ``Authorization: Bearer <token>``."""
+    if request is None:
+        return False
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    return scheme.lower() == "bearer" and hmac.compare_digest(value.strip().encode(), token.encode())
+
+
+if FastMCP is not None:
+
+    class TokenProtectedFastMCP(FastMCP):
+        """FastMCP that runs no tool, resource or prompt without the bearer token.
+
+        The token is checked on each MCP request rather than on the HTTP
+        connection, so every request that can touch the session or the
+        filesystem is refused, whichever transport delivered it.
+        """
+
+        def __init__(self, *args: Any, auth_token: str, **kwargs: Any):
+            if not auth_token:
+                raise ValueError("auth_token must not be empty")
+            self._auth_token = auth_token
+            super().__init__(*args, **kwargs)
+
+        def _require_token(self) -> None:
+            if not has_bearer_token(self.get_context().request_context.request, self._auth_token):
+                raise PermissionError("Unauthorized: missing or invalid bearer token")
+
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+            self._require_token()
+            return await super().call_tool(name, arguments)
+
+        async def read_resource(self, uri: Any) -> Any:
+            self._require_token()
+            return await super().read_resource(uri)
+
+        async def get_prompt(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+            self._require_token()
+            return await super().get_prompt(name, arguments)
+
+
+def build_server(auth_token: str | None = None) -> Any:
+    """Create the FastMCP server if the dependency is available.
+
+    :param auth_token: If given, every tool, resource and prompt request must
+        carry ``Authorization: Bearer <auth_token>``. Required for the HTTP
+        transports; stdio requests carry no headers and would all be refused.
+    """
     if FastMCP is None:
         raise ImportError(
             "FastMCP is not installed. Install with: pip install ifcmcp[mcp] (or add 'mcp' to your environment)."
@@ -29,14 +76,18 @@ def build_server() -> Any:
         IfcSession method rather than duplicating it here."""
         return server.tool(description=inspect.getdoc(getattr(IfcSession, fn.__name__)))(fn)
 
-    server = FastMCP(
-        name="ifc-mcp",
-        instructions=(
+    server_kwargs: dict[str, Any] = {
+        "name": "ifc-mcp",
+        "instructions": (
             "MCP server for querying and editing IFC building models. "
             "Load a file first with ifc_load, then use query/edit tools. "
             "Save changes with ifc_save."
         ),
-    )
+    }
+    if auth_token is None:
+        server = FastMCP(**server_kwargs)
+    else:
+        server = TokenProtectedFastMCP(auth_token=auth_token, **server_kwargs)
 
     # ---- Lifecycle ----
     @_tool

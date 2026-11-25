@@ -22,6 +22,12 @@ ifcmcp
 This starts the server on stdio transport, suitable for use with Claude Code
 or any MCP client.
 
+`ifcmcp --transport streamable-http` (or `sse`) serves MCP over HTTP on
+`127.0.0.1:8000` instead. Every tool call must then send the header
+`Authorization: Bearer <token>`. The token is read from the
+`IFCMCP_AUTH_TOKEN` environment variable, or generated and printed to stderr
+at startup if that is unset.
+
 ### Claude Code configuration
 
 Use the `claude mcp add` command:
