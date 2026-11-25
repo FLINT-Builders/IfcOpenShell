@@ -96,7 +96,14 @@ class Usecase:
                 if nested_tasks:
                     new_tasks = []
                     for t in nested_tasks:
-                        new_task = self.duplicate_task(t)
+                        # A nesting cycle may lead back to a task that was already
+                        # duplicated, or to one of the new copies.
+                        if t in self.duplicate:
+                            continue
+                        if t in self.current:
+                            new_task = self.duplicate[self.current.index(t)]
+                        else:
+                            new_task = self.duplicate_task(t)
                         new_tasks.append(new_task)
                     inverse = ifcopenshell.util.element.copy(self.file, inverse)
                     inverse.RelatingObject = to_element
