@@ -431,6 +431,7 @@ class IfcImporter:
         representation_id = None
 
         rep = representation
+        seen = {rep}
         while True:
             # Tekla 2023 has missing items, though it's invalid IFC.
             if rep.Items and len(rep.Items) == 1 and rep.Items[0].is_a("IfcMappedItem"):
@@ -440,8 +441,9 @@ class IfcImporter:
                     if representation_id is None:
                         representation_id = rep.id()
                 rep = rep.Items[0].MappingSource.MappedRepresentation
-                if not rep:  # Accommodate invalid files
+                if not rep or rep in seen:  # Accommodate invalid files
                     return False
+                seen.add(rep)
             else:
                 if representation_id is None:
                     representation_id = rep.id()
